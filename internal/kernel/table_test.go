@@ -64,3 +64,25 @@ func TestValidate_LiveABNeedsExperiment(t *testing.T) {
 		t.Errorf("errors = %q, want %q", got, want)
 	}
 }
+
+func TestValidate_DecisionFormatIsChecked(t *testing.T) {
+	cases := []struct {
+		kind     Kind
+		decision string
+		want     []string
+	}{
+		{Policy, "d", []string{`p: Decision must be "<YYYY-MM-DD> <owner>", got "d"`}},
+		{Policy, "2026-09-01 owner", nil},
+		{Policy, "2026-13-01 owner", []string{`p: Decision must be "<YYYY-MM-DD> <owner>", got "2026-13-01 owner"`}},
+		{Policy, "2026-09-01 ", []string{`p: Decision must be "<YYYY-MM-DD> <owner>", got "2026-09-01 "`}},
+		{Policy, "2026-09-01 two owners", []string{`p: Decision must be "<YYYY-MM-DD> <owner>", got "2026-09-01 two owners"`}},
+		{Check, "d", []string{`p: Decision must be "<YYYY-MM-DD> <owner>", got "d"`}},
+		{Check, "2026-09-01 owner", nil},
+	}
+	for _, c := range cases {
+		got := errStrings(Validate([]Row{{ID: "p", Kind: c.kind, Level: Block, Decision: c.decision}}))
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("kind %d decision %q: errors = %q, want %q", c.kind, c.decision, got, c.want)
+		}
+	}
+}

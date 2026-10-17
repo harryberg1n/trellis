@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -101,9 +102,23 @@ func Validate(rows []Row) []error {
 		if r.Level == Block && r.Kind != Policy && r.Decision == "" {
 			errs = append(errs, fmt.Errorf("%s: block needs a may-block decision and an owner pin", r.ID))
 		}
+		if r.Decision != "" && !decisionOK(r.Decision) {
+			errs = append(errs, fmt.Errorf("%s: Decision must be \"<YYYY-MM-DD> <owner>\", got %q", r.ID, r.Decision))
+		}
 		if r.State == LiveAB && r.Experiment == "" {
 			errs = append(errs, fmt.Errorf("%s: live-ab row needs Experiment", r.ID))
 		}
 	}
 	return errs
+}
+
+// decisionOK reports whether d has the form "<YYYY-MM-DD> <owner>": a date
+// parsable with 2006-01-02, one space, and an owner with no spaces.
+func decisionOK(d string) bool {
+	date, owner, ok := strings.Cut(d, " ")
+	if !ok || owner == "" || strings.ContainsAny(owner, " \t\r\n") {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", date)
+	return err == nil
 }
