@@ -100,12 +100,24 @@ func TestLog_SecondHandleContinuesTheSequence(t *testing.T) {
 	}
 }
 
-// patient never reaches the lock deadline and polls fast, so a contended lock
-// is waited for: the test is about exclusion, not about the timeout.
-type patient struct{}
+// spinClock polls without waiting: After is already fired, and every Now call
+// moves time on by a fixed step, so the 2 s lock deadline is reachable. A lock
+// that never frees ends in a parked event and a failed test, not a hang. It
+// belongs to one Store, which calls it under its mutex.
+type spinClock struct{ now time.Time }
 
-func (patient) Now() time.Time                       { return t0 }
-func (patient) After(time.Duration) <-chan time.Time { return time.After(time.Millisecond) }
+const spinStep = 10 * time.Microsecond
+
+func (c *spinClock) Now() time.Time {
+	c.now = c.now.Add(spinStep)
+	return c.now
+}
+
+func (c *spinClock) After(time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	ch <- c.now
+	return ch
+}
 
 func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 	s, dir, _ := open(t)
@@ -113,7 +125,7 @@ func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 	stores := make([]*Store, 8)
 	for g := range stores {
 		var err error
-		if stores[g], err = Open(dir, patient{}); err != nil {
+		if stores[g], err = Open(dir, &spinClock{now: t0}); err != nil {
 			t.Fatal(err)
 		}
 	}
