@@ -17,6 +17,8 @@ const (
 	EvPolicyDenied      = "policy.denied"
 	EvExperimentStarted = "experiment.started"
 	EvExperimentEnded   = "experiment.ended"
+	// EvInternalError records a failure inside a hook. The hook still exits 0.
+	EvInternalError = "internal.error"
 )
 
 // Event is one fact in the append-only log. At is supplied by the caller.
