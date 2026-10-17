@@ -14,8 +14,14 @@ import (
 )
 
 func TestCeilingList_NamesEachDirOnceAndSkipsEmpty(t *testing.T) {
-	a := t.TempDir()
-	b := t.TempDir()
+	// Resolved once: on a runner whose TEMP is an 8.3 short path, CeilingList
+	// rightly names the long spelling too, which is not what this test is about.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(base, "a")
+	b := filepath.Join(base, "b")
 	sep := string(os.PathListSeparator)
 
 	if got, want := CeilingList(a, "", b), a+sep+b; got != want {
