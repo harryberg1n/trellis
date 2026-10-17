@@ -14,8 +14,8 @@ import (
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
-// git runs git in dir and returns trimmed stdout.
-func git(t testing.TB, dir string, args ...string) string {
+// gitT runs git in dir and returns trimmed stdout.
+func gitT(t testing.TB, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -84,13 +84,13 @@ func checkBlobs(t *testing.T, repo string, cases []blobCase) {
 			if err := os.Remove(filepath.Join(gitDir, "objects", id[:2], id[2:])); err != nil {
 				t.Fatal(err)
 			}
-			if gid := git(t, repo, "hash-object", "-w", c.name); gid != id {
+			if gid := gitT(t, repo, "hash-object", "-w", c.name); gid != id {
 				t.Fatalf("git hash-object id = %s, WriteBlob id = %s", gid, id)
 			}
 			if !bytes.Equal(inflated(t, gitDir, id), ours) {
 				t.Fatal("object bytes differ from git's")
 			}
-			git(t, repo, "fsck", "--no-dangling")
+			gitT(t, repo, "fsck", "--no-dangling")
 		})
 	}
 }
@@ -109,7 +109,7 @@ func TestWriteBlob_MatchesGitHashObjectSha256(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	git(t, repo, "init", "-q", "--object-format=sha256")
+	gitT(t, repo, "init", "-q", "--object-format=sha256")
 	if f, err := Format(filepath.Join(repo, ".git")); err != nil || f != "sha256" {
 		t.Fatalf("Format = %q, %v; want sha256", f, err)
 	}
