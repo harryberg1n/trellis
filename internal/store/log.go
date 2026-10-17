@@ -45,6 +45,8 @@ type Store struct {
 	dir       string
 	clock     clock.Clock
 	bytesRead atomic.Int64
+	skipMu    sync.Mutex
+	skipped   map[int64]bool
 	mu        sync.Mutex // in-process; the file lock covers other processes
 	rename    func(oldpath, newpath string) error
 }
@@ -56,7 +58,7 @@ func Open(repoDir string, c clock.Clock) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{dir: repoDir, clock: c, rename: os.Rename}, nil
+	return &Store{dir: repoDir, clock: c, rename: os.Rename, skipped: map[int64]bool{}}, nil
 }
 
 func (s *Store) logPath() string    { return filepath.Join(s.dir, "events.jsonl") }
@@ -286,40 +288,72 @@ func (s *Store) BytesRead() int64 { return s.bytesRead.Load() }
 // the end of the log so its cost follows the events returned, not the log
 // size. Seq is increasing, so the scan stops at the first line below from.
 func (s *Store) Read(from uint64) ([]kernel.Event, error) {
-	evs, _, err := s.scanTail(from)
+	evs, _, err := s.scanTail(from, false)
 	return evs, err
 }
 
 // lastSeq reads the end of the log for the highest Seq; 0 for no log.
 func (s *Store) lastSeq() (uint64, error) {
-	_, last, err := s.scanTail(math.MaxUint64)
+	_, last, err := s.scanTail(math.MaxUint64, true)
 	return last, err
 }
 
+// Skipped is how many unparsable log lines this Store has set aside in
+// events.quarantine since Open.
+func (s *Store) Skipped() int {
+	s.skipMu.Lock()
+	defer s.skipMu.Unlock()
+	return len(s.skipped)
+}
+
+// skip appends a line that does not parse to events.quarantine, once per
+// offset per Store. Failing to write it must not fail the read.
+func (s *Store) skip(l logLine) {
+	s.skipMu.Lock()
+	defer s.skipMu.Unlock()
+	if s.skipped[l.off] {
+		return
+	}
+	s.skipped[l.off] = true
+	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	f.Write(append(append([]byte(nil), l.raw...), newline))
+	f.Close()
+}
+
 type logLine struct {
-	raw []byte
-	ev  kernel.Event
-	ok  bool
+	off        int64 // offset of the line in the log
+	terminated bool
+	raw        []byte
+	ev         kernel.Event
+	ok         bool
 }
 
 // splitLines cuts buf into lines. A line counts if it parses, newline or not:
 // an unterminated tail that parses is a complete event missing its newline,
 // and one that does not is a torn append.
-func splitLines(buf []byte) []logLine {
+func splitLines(buf []byte, base int64) []logLine {
 	var out []logLine
+	pos := base
 	for len(buf) > 0 {
 		i := bytes.IndexByte(buf, newline)
 		terminated := i >= 0
 		raw := buf
+		adv := int64(len(buf))
 		if terminated {
 			raw, buf = buf[:i], buf[i+1:]
+			adv = int64(i) + 1
 		} else {
 			buf = nil
 		}
+		off := pos
+		pos += adv
 		if len(raw) == 0 {
 			continue
 		}
-		l := logLine{raw: raw}
+		l := logLine{raw: raw, off: off, terminated: terminated}
 		l.ok = json.Unmarshal(raw, &l.ev) == nil
 		out = append(out, l)
 	}
@@ -328,7 +362,7 @@ func splitLines(buf []byte) []logLine {
 
 // scanTail reads the log backwards in doubling chunks until a line with
 // Seq < from, and returns the events with Seq >= from and the highest Seq seen.
-func (s *Store) scanTail(from uint64) ([]kernel.Event, uint64, error) {
+func (s *Store) scanTail(from uint64, locked bool) ([]kernel.Event, uint64, error) {
 	f, err := os.Open(s.logPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
@@ -352,7 +386,7 @@ func (s *Store) scanTail(from uint64) ([]kernel.Event, uint64, error) {
 		s.bytesRead.Add(n)
 		start -= n
 		buf = append(piece, buf...)
-		lines := splitLines(buf)
+		lines := splitLines(buf, start)
 		if start > 0 && len(lines) > 0 {
 			lines = lines[1:] // the first line may be cut by the chunk start
 		}
@@ -370,6 +404,11 @@ func (s *Store) scanTail(from uint64) ([]kernel.Event, uint64, error) {
 		var last uint64
 		for i, l := range lines {
 			if !l.ok {
+				// An unterminated fragment may be a write in flight unless we
+				// hold the lock; anything else unparsable is junk to keep.
+				if i > cut && (l.terminated || locked) {
+					s.skip(l)
+				}
 				continue
 			}
 			last = l.ev.Seq
