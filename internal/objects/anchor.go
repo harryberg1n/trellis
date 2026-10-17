@@ -92,7 +92,11 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 		}
 	}
 
-	if tree, err = buildTree(r, repo, "HEAD", changes); err != nil {
+	root := "HEAD"
+	if headUnborn(common, gitDir) {
+		root = "" // no commit yet: start from the empty tree
+	}
+	if tree, err = buildTree(r, repo, root, changes); err != nil {
 		return "", "", err
 	}
 
@@ -139,6 +143,10 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 	})
 	// Load top down, so a directory is listed only if its parent has it.
 	for _, d := range order {
+		if root == "" {
+			dirs[d] = map[string]entry{}
+			continue
+		}
 		spec := root
 		if d != "" {
 			parent := dirs[parentOf(d)]
@@ -319,4 +327,23 @@ func readRef(common, ref string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// headUnborn reports whether HEAD names a branch with no commit yet, judged
+// from the files. A reftable repo keeps its refs elsewhere, so it is taken as
+// born and git is left to say otherwise.
+func headUnborn(common, gitDir string) bool {
+	raw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return false
+	}
+	target, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "ref:")
+	if !ok {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(common, "reftable")); err == nil {
+		return false
+	}
+	_, found := readRef(common, strings.TrimSpace(target))
+	return !found
 }

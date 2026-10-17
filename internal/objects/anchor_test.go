@@ -270,3 +270,20 @@ func TestAnchorTurn_FollowsHeadAfterCommit(t *testing.T) {
 		t.Fatalf("one.txt: %q", got)
 	}
 }
+
+func TestAnchorTurn_UnbornHeadStartsFromEmptyTree(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "fresh")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "init", "-q")
+	write(t, filepath.Join(repo, "only", "file.txt"), "hello\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "100644 blob " + idHello + "\tonly/file.txt"
+	if got := gitT(t, repo, "ls-tree", "-r", commit); got != want {
+		t.Fatalf("tree lists %q, want %q", got, want)
+	}
+}
