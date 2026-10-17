@@ -37,3 +37,15 @@ func TestLane_AnyFirstEventOpensTheLane(t *testing.T) {
 		t.Errorf("state = %v, want open", s)
 	}
 }
+
+// Abandonment is set by lane 7's history fold, never by Advance. A lane that
+// was abandoned and later merged is merged; lane 7 relies on this.
+func TestLane_MergedAfterAbandonedBecomesMerged(t *testing.T) {
+	s, ev := Advance(LaneAbandoned, Event{Kind: EvLaneMerged, Lane: "lane/x"})
+	if s != LaneMerged {
+		t.Errorf("state = %v, want merged", s)
+	}
+	if _, ok := ev.Detail["after"]; ok {
+		t.Errorf("lane.merged was flagged: %v", ev.Detail)
+	}
+}
