@@ -18,7 +18,7 @@ Every package with tests has `func TestMain(m *testing.M) { testiso.Main(m) }`. 
 
 ## Layering
 
-Dependencies point down only. `internal/kernel` and `internal/measure` import the standard library and kernel types only: no `os`, no `os/exec`, no clock call (`time.Now`, `Since`, `Until`, `Sleep`, `After`, `Tick`, `NewTimer`, `NewTicker`). The `time.Duration` type is allowed. Effects come back as events. `internal/layering` enforces this over `go/parser` ASTs; CI runs it as the `layering` job.
+Dependencies point down only. `internal/kernel` and `internal/measure` import the standard library and kernel types only: no `os`, no `os/exec`, no clock call (`time.Now`, `Since`, `Until`, `Sleep`, `After`, `Tick`, `NewTimer`, `NewTicker`). The `time.Duration` type is allowed. Effects come back as events. `internal/layering` enforces this over `go/parser` ASTs; its tests run with the suite on every CI job.
 
 ## Release
 
