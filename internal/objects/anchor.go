@@ -63,6 +63,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 	if err != nil {
 		return "", "", err
 	}
+	filemode := coreFilemode(gitDir)
 	changes := map[string]change{}
 	for p, id := range blobs {
 		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
@@ -96,9 +97,12 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 			if err != nil {
 				return "", "", err
 			}
-			mode := modeFile
-			if info.Mode()&0o111 != 0 {
-				mode = modeExec
+			mode := "" // filemode off: the entry already in the tree keeps its mode
+			if filemode {
+				mode = modeFile
+				if info.Mode()&0o111 != 0 {
+					mode = modeExec
+				}
 			}
 			changes[p] = change{id: id, mode: mode}
 		}

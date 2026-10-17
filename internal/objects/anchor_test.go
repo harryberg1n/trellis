@@ -320,6 +320,7 @@ func TestAnchorTurn_SymlinkIsRecordedAs120000(t *testing.T) {
 
 func TestAnchorTurn_SymlinkReplacedByFileIsRegular(t *testing.T) {
 	repo := testiso.Repo(t)
+	gitT(t, repo, "config", "core.filemode", "true") // a replacing file is taken as it is on disk
 	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
 		t.Skipf("symlinks are not available here: %v", err)
 	}
@@ -441,4 +442,71 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func commitAll(t *testing.T, repo, msg string) {
+	t.Helper()
+	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", msg)
+}
+
+func TestAnchorTurn_NoFilemodeKeepsExistingMode(t *testing.T) {
+	repo := testiso.Repo(t)
+	gitT(t, repo, "config", "core.filemode", "false")
+	write(t, filepath.Join(repo, "run.sh"), "a\n")
+	gitT(t, repo, "add", "run.sh")
+	gitT(t, repo, "update-index", "--chmod=+x", "run.sh")
+	commitAll(t, repo, "script")
+	if got := gitT(t, repo, "ls-tree", "HEAD", "run.sh"); got != "100755 blob "+idA+"\trun.sh" {
+		t.Fatalf("setup: %q", got)
+	}
+	write(t, filepath.Join(repo, "run.sh"), "hello\n")
+	write(t, filepath.Join(repo, "fresh.sh"), "a\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "run.sh"); got != "100755 blob "+idHello+"\trun.sh" {
+		t.Fatalf("run.sh: %q", got)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "fresh.sh"); got != "100644 blob "+idA+"\tfresh.sh" {
+		t.Fatalf("a new file must be 100644: %q", got)
+	}
+}
+
+func TestAnchorTurn_NoFilemodeKeepsSymlinkEntryAsCheckedOutFile(t *testing.T) {
+	repo := testiso.Repo(t)
+	gitT(t, repo, "config", "core.filemode", "false")
+	gitT(t, repo, "update-index", "--add", "--cacheinfo", "120000,"+idTarget+",link")
+	write(t, filepath.Join(repo, "link"), "target.txt") // a core.symlinks=false checkout
+	commitAll(t, repo, "link")
+	write(t, filepath.Join(repo, "link"), "hello\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idHello+"\tlink" {
+		t.Fatalf("link: %q", got)
+	}
+}
+
+func TestAnchorTurn_FilemodeTrueUsesLstat(t *testing.T) {
+	skipNoExecBit(t)
+	repo := testiso.Repo(t)
+	gitT(t, repo, "config", "core.filemode", "true")
+	write(t, filepath.Join(repo, "run.sh"), "a\n")
+	if err := os.Chmod(filepath.Join(repo, "run.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", "run.sh")
+	commitAll(t, repo, "script")
+	if err := os.Chmod(filepath.Join(repo, "run.sh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "run.sh"); got != "100644 blob "+idA+"\trun.sh" {
+		t.Fatalf("run.sh: %q", got)
+	}
 }
