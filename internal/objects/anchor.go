@@ -1,0 +1,321 @@
+package objects
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/harryberg1n/trellis/internal/run"
+)
+
+// gitTimeout bounds each git child an anchor starts.
+const gitTimeout = 30 * time.Second
+
+const (
+	modeFile = "100644"
+	modeExec = "100755"
+	modeTree = "040000"
+)
+
+// RefFor is the replay ref of a lane: its branch name with every "/" turned
+// into "--". The ref is under refs/trellis/, which no default refspec pushes.
+func RefFor(lane string) string {
+	return "refs/trellis/replay/" + strings.ReplaceAll(lane, "/", "--")
+}
+
+type entry struct{ mode, typ, id string }
+
+type change struct {
+	id   string // "" with del set
+	del  bool
+	mode string // "" = keep the old entry's mode, else a plain file
+}
+
+// AnchorTurn snapshots the working tree as a tree object and chains a commit
+// for it onto the lane's replay ref, leaving the index, the branches and the
+// working tree alone.
+//
+// The paths Bash changed come from git status; they are hashed with WriteBlob.
+// blobs is path -> blob id for files already hashed (by the edit hook); a path
+// status also names takes the file on disk. The new tree is prevTree (HEAD's
+// tree when empty) with those blobs replaced, built with mktree from the
+// deepest directory up, one process per directory level. The commit's parent
+// is the lane's previous anchor, read from the ref without a process.
+//
+// Git kinds used: status, ls-tree, mktree, commit-tree, update-ref.
+func AnchorTurn(r run.Runner, repo, lane, prevTree string, blobs map[string]string) (tree, commit string, err error) {
+	common, gitDir, err := gitDirs(repo)
+	if err != nil {
+		return "", "", err
+	}
+	changes := map[string]change{}
+	for p, id := range blobs {
+		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
+	}
+	st, err := git(r, repo, nil, "status", "-z", "--untracked-files=all")
+	if err != nil {
+		return "", "", err
+	}
+	for _, p := range statusPaths(st) {
+		full := filepath.Join(repo, filepath.FromSlash(p))
+		info, err := os.Lstat(full)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			changes[p] = change{del: true}
+		case err != nil:
+			return "", "", err
+		case info.IsDir() || info.Mode()&os.ModeSymlink != 0:
+			// A nested repository or a link: not a blob this anchor makes.
+		default:
+			id, err := WriteBlob(gitDir, full)
+			if err != nil {
+				return "", "", err
+			}
+			mode := modeFile
+			if info.Mode()&0o111 != 0 {
+				mode = modeExec
+			}
+			changes[p] = change{id: id, mode: mode}
+		}
+	}
+
+	root := prevTree
+	if root == "" {
+		root = "HEAD"
+	}
+	if tree, err = buildTree(r, repo, root, changes); err != nil {
+		return "", "", err
+	}
+
+	ref := RefFor(lane)
+	prev, hasPrev := readRef(common, ref)
+	args := []string{"-c", "user.name=trellis", "-c", "user.email=trellis@localhost", "-c", "commit.gpgsign=false", "commit-tree", tree}
+	if hasPrev {
+		args = append(args, "-p", prev)
+	}
+	args = append(args, "-m", "trellis anchor "+lane)
+	out, err := git(r, repo, nil, args...)
+	if err != nil {
+		return "", "", err
+	}
+	commit = strings.TrimSpace(string(out))
+	upd := []string{"update-ref", ref, commit}
+	if hasPrev {
+		upd = append(upd, prev)
+	}
+	if _, err := git(r, repo, nil, upd...); err != nil {
+		return "", "", err
+	}
+	return tree, commit, nil
+}
+
+// buildTree applies changes to the tree named by root (a tree id or HEAD) and
+// returns the new root tree's id.
+func buildTree(r run.Runner, repo, root string, changes map[string]change) (string, error) {
+	dirs := map[string]map[string]entry{"": nil}
+	for p := range changes {
+		for d := path.Dir(p); d != "."; d = path.Dir(d) {
+			dirs[d] = nil
+		}
+	}
+	order := make([]string, 0, len(dirs))
+	for d := range dirs {
+		order = append(order, d)
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if di, dj := depth(order[i]), depth(order[j]); di != dj {
+			return di < dj
+		}
+		return order[i] < order[j]
+	})
+	// Load top down, so a directory is listed only if its parent has it.
+	for _, d := range order {
+		spec := root
+		if d != "" {
+			parent := dirs[parentOf(d)]
+			if e, ok := parent[path.Base(d)]; !ok || e.typ != "tree" {
+				dirs[d] = map[string]entry{}
+				continue
+			}
+			spec = root + ":" + d
+		}
+		out, err := git(r, repo, nil, "ls-tree", "-z", spec)
+		if err != nil {
+			return "", err
+		}
+		list, err := parseLsTree(out)
+		if err != nil {
+			return "", err
+		}
+		dirs[d] = list
+	}
+	for p, c := range changes {
+		list := dirs[parentOf(p)]
+		name := path.Base(p)
+		switch {
+		case c.del:
+			delete(list, name)
+		default:
+			mode := c.mode
+			if old, ok := list[name]; ok && old.typ == "blob" {
+				mode = old.mode
+			} else if mode == "" {
+				mode = modeFile
+			}
+			list[name] = entry{mode, "blob", c.id}
+		}
+	}
+	// Bottom up: one mktree process per level, every directory of the level in
+	// it; an emptied directory leaves its parent.
+	for i := len(order) - 1; i >= 0; {
+		lvl := depth(order[i])
+		j := i
+		for j >= 0 && depth(order[j]) == lvl {
+			j--
+		}
+		level := order[j+1 : i+1]
+		i = j
+		var batch []string
+		var in bytes.Buffer
+		for _, d := range level {
+			list := dirs[d]
+			if len(list) == 0 && d != "" {
+				delete(dirs[parentOf(d)], path.Base(d))
+				continue
+			}
+			if len(batch) > 0 {
+				in.WriteByte(0) // an empty record ends a tree
+			}
+			names := make([]string, 0, len(list))
+			for n := range list {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				e := list[n]
+				fmt.Fprintf(&in, "%s %s %s\t%s\x00", e.mode, e.typ, e.id, n)
+			}
+			batch = append(batch, d)
+		}
+		if len(batch) == 0 {
+			continue
+		}
+		args := []string{"mktree", "-z", "--missing"}
+		if len(batch) > 1 {
+			args = append(args, "--batch")
+		}
+		out, err := git(r, repo, append([]byte{}, in.Bytes()...), args...)
+		if err != nil {
+			return "", err
+		}
+		ids := strings.Fields(string(out))
+		if len(ids) != len(batch) {
+			return "", fmt.Errorf("objects: mktree answered %d ids for %d trees", len(ids), len(batch))
+		}
+		for k, d := range batch {
+			if d == "" {
+				return ids[k], nil
+			}
+			dirs[parentOf(d)][path.Base(d)] = entry{modeTree, "tree", ids[k]}
+		}
+	}
+	return "", errors.New("objects: the root tree was never built")
+}
+
+func depth(d string) int {
+	if d == "" {
+		return 0
+	}
+	return strings.Count(d, "/") + 1
+}
+
+// parentOf is the directory holding p, "" for the root.
+func parentOf(p string) string {
+	if d := path.Dir(p); d != "." {
+		return d
+	}
+	return ""
+}
+
+// parseLsTree reads `git ls-tree -z` output: "mode type id\tname\0".
+func parseLsTree(out []byte) (map[string]entry, error) {
+	list := map[string]entry{}
+	for _, rec := range bytes.Split(out, []byte{0}) {
+		if len(rec) == 0 {
+			continue
+		}
+		meta, name, ok := strings.Cut(string(rec), "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 3 {
+			return nil, fmt.Errorf("objects: unreadable ls-tree record %q", rec)
+		}
+		list[name] = entry{f[0], f[1], f[2]}
+	}
+	return list, nil
+}
+
+// git runs one git child through r and returns its stdout.
+func git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
+	res, err := r.Light(run.Spec{Name: "git", Args: args, Dir: repo, Timeout: gitTimeout, Stdin: stdin})
+	if err != nil {
+		return nil, fmt.Errorf("objects: git %s: %w", run.Kind(run.Spec{Name: "git", Args: args}), err)
+	}
+	return res.Stdout, nil
+}
+
+// gitDirs is the repo's own git dir and the common one that holds objects and
+// refs (the same, except in a linked worktree).
+func gitDirs(repo string) (common, gitDir string, err error) {
+	dot := filepath.Join(repo, ".git")
+	info, err := os.Stat(dot)
+	if err != nil {
+		return "", "", err
+	}
+	gitDir = dot
+	if !info.IsDir() {
+		raw, err := os.ReadFile(dot)
+		if err != nil {
+			return "", "", err
+		}
+		p, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir:")
+		if !ok {
+			return "", "", fmt.Errorf("objects: %s is not a gitdir file", dot)
+		}
+		gitDir = strings.TrimSpace(p)
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(repo, gitDir)
+		}
+	}
+	return commonDir(gitDir), gitDir, nil
+}
+
+// readRef reads a ref from its loose file, else from packed-refs, without
+// starting git.
+func readRef(common, ref string) (string, bool) {
+	if raw, err := os.ReadFile(filepath.Join(common, filepath.FromSlash(ref))); err == nil {
+		if id := strings.TrimSpace(string(raw)); id != "" && !strings.HasPrefix(id, "ref:") {
+			return id, true
+		}
+	}
+	f, err := os.Open(filepath.Join(common, "packed-refs"))
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		id, name, ok := strings.Cut(sc.Text(), " ")
+		if ok && name == ref && !strings.HasPrefix(id, "#") {
+			return id, true
+		}
+	}
+	return "", false
+}
