@@ -56,7 +56,8 @@ type change struct {
 // longer names (a file reverted to HEAD, or HEAD moving between turns). Every
 // turn is HEAD plus the full status set.
 //
-// Git kinds used: status, ls-tree, mktree, commit-tree, update-ref.
+// Git kinds used: status, ls-tree, mktree, commit-tree, update-ref; rev-parse
+// only when the replay ref is not a plain ref file (symbolic, reftable).
 func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tree, commit string, err error) {
 	common, gitDir, err := gitDirs(repo)
 	if err != nil {
@@ -112,7 +113,12 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 	}
 
 	ref := RefFor(lane)
-	prev, hasPrev := readRef(common, ref)
+	prev, hasPrev, viaGit := readRef(common, ref)
+	if viaGit {
+		if prev, hasPrev, err = resolveRef(r, repo, ref); err != nil {
+			return "", "", err
+		}
+	}
 	args := []string{"-c", "user.name=trellis", "-c", "user.email=trellis@localhost", "-c", "commit.gpgsign=false", "commit-tree", tree}
 	if hasPrev {
 		args = append(args, "-p", prev)
@@ -123,8 +129,8 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 		return "", "", err
 	}
 	commit = strings.TrimSpace(string(out))
-	upd := []string{"update-ref", ref, commit}
-	if hasPrev {
+	upd := []string{"update-ref", "--no-deref", ref, commit}
+	if hasPrev && !viaGit {
 		upd = append(upd, prev)
 	}
 	if _, err := git(r, repo, nil, upd...); err != nil {
@@ -323,26 +329,37 @@ func gitDirs(repo string) (common, gitDir string, err error) {
 }
 
 // readRef reads a ref from its loose file, else from packed-refs, without
-// starting git.
-func readRef(common, ref string) (string, bool) {
-	if raw, err := os.ReadFile(filepath.Join(common, filepath.FromSlash(ref))); err == nil {
-		if id := strings.TrimSpace(string(raw)); id != "" && !strings.HasPrefix(id, "ref:") {
-			return id, true
+// starting git. fallback is set when the files cannot answer: the ref file
+// cannot be read for a reason other than not existing, it is a symbolic ref, or
+// the repo keeps its refs in reftable. The caller then asks git.
+func readRef(common, ref string) (id string, found, fallback bool) {
+	if _, err := os.Stat(filepath.Join(common, "reftable")); err == nil {
+		return "", false, true
+	}
+	raw, err := os.ReadFile(filepath.Join(common, filepath.FromSlash(ref)))
+	switch {
+	case err == nil:
+		s := strings.TrimSpace(string(raw))
+		if s == "" || strings.HasPrefix(s, "ref:") {
+			return "", false, true
 		}
+		return s, true, false
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", false, true
 	}
 	f, err := os.Open(filepath.Join(common, "packed-refs"))
 	if err != nil {
-		return "", false
+		return "", false, !errors.Is(err, fs.ErrNotExist)
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		id, name, ok := strings.Cut(sc.Text(), " ")
 		if ok && name == ref && !strings.HasPrefix(id, "#") {
-			return id, true
+			return id, true, false
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 // headUnborn reports whether HEAD names a branch with no commit yet, judged
@@ -360,6 +377,20 @@ func headUnborn(common, gitDir string) bool {
 	if _, err := os.Stat(filepath.Join(common, "reftable")); err == nil {
 		return false
 	}
-	_, found := readRef(common, strings.TrimSpace(target))
-	return !found
+	_, found, fallback := readRef(common, strings.TrimSpace(target))
+	return !found && !fallback
+}
+
+// resolveRef asks git for a ref the files could not answer. It runs only then
+// (a symbolic ref, reftable), so the usual turn spawns no rev-parse. A ref that
+// does not exist answers exit 1 and is no parent.
+func resolveRef(r run.Runner, repo, ref string) (string, bool, error) {
+	res, err := r.Light(run.Spec{Name: "git", Args: []string{"rev-parse", "--verify", "--quiet", ref}, Dir: repo, Timeout: gitTimeout})
+	if err != nil {
+		if res.ExitCode == 1 {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("objects: git rev-parse %s: %w", ref, err)
+	}
+	return strings.TrimSpace(string(res.Stdout)), true, nil
 }

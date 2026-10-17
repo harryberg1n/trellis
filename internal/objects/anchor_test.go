@@ -406,3 +406,39 @@ func TestAnchorTurn_RenameAndSpaces(t *testing.T) {
 		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestAnchorTurn_SymbolicReplayRefFallsBackToGit(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := recorder()
+	write(t, filepath.Join(repo, "a.txt"), "a\n")
+	_, c0, err := AnchorTurn(r, repo, "other", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// main's replay ref is a symbolic ref to other's: not a plain ref file.
+	gitT(t, repo, "symbolic-ref", "refs/trellis/replay/main", "refs/trellis/replay/other")
+	r2 := recorder()
+	_, c1, err := AnchorTurn(r2, repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "rev-parse", c1+"^"); got != c0 {
+		t.Fatalf("parent = %s, want the commit the symbolic ref resolves to, %s", got, c0)
+	}
+	if k := r2.Kinds(); !contains(k, "rev-parse") {
+		t.Fatalf("kinds = %v, want a rev-parse fallback", k)
+	}
+	// Other's ref must not have moved through the symref.
+	if got := gitT(t, repo, "rev-parse", "refs/trellis/replay/other"); got != c0 {
+		t.Fatalf("other moved to %s", got)
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
