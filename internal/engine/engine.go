@@ -35,9 +35,11 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		// A save can fail after its append, so the log may be ahead of the
 		// checkpoint. Catch up before deciding; replayed events keep their
 		// logged arms.
-		missed, err := s.Read(cp.LastSeq + 1)
-		if err != nil {
-			return err
+		var missed []kernel.Event
+		if cp.LastSeq != tx.Tail() { // equal: nothing to read
+			if missed, err = s.Read(cp.LastSeq + 1); err != nil {
+				return err
+			}
 		}
 		for _, e := range missed {
 			cp.Lanes[e.Lane], _ = kernel.Advance(cp.Lanes[e.Lane], e)

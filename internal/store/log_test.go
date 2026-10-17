@@ -289,3 +289,37 @@ func TestFold_ParkedEventIsNeverDuplicated(t *testing.T) {
 		t.Fatalf("%d pending files left", len(left))
 	}
 }
+
+func TestLog_ReadFromTouchesOnlyTheTail(t *testing.T) {
+	s, dir, fc := open(t)
+	batch := make([]kernel.Event, 10000)
+	for i := range batch {
+		batch[i] = ev("edit", "lane/big")
+	}
+	if _, err := s.Append(batch...); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := Open(dir, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := fresh.Read(9998)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Seq != 9998 || got[1].Seq != 9999 || got[2].Seq != 10000 {
+		t.Fatalf("Read(9998) = %+v; want Seq 9998, 9999, 10000", got)
+	}
+	if n := fresh.BytesRead(); n <= 0 || n >= 64<<10 {
+		t.Fatalf("read %d bytes of a log of 10000 lines; want under 65536", n)
+	}
+}
+
+func TestLog_ReadFromPastTheEndIsEmpty(t *testing.T) {
+	s, _, _ := open(t)
+	s.Append(ev("edit", "l"), ev("edit", "l"))
+	got, err := s.Read(3)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("Read(3) = %+v, %v; want none", got, err)
+	}
+}
