@@ -99,16 +99,31 @@ func TestLog_SecondHandleContinuesTheSequence(t *testing.T) {
 	}
 }
 
+// patient never reaches the lock deadline and polls fast, so a contended lock
+// is waited for: the test is about exclusion, not about the timeout.
+type patient struct{}
+
+func (patient) Now() time.Time                       { return t0 }
+func (patient) After(time.Duration) <-chan time.Time { return time.After(time.Millisecond) }
+
 func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 	s, dir, _ := open(t)
+	// One Store per goroutine, so only the file lock keeps them apart.
+	stores := make([]*Store, 8)
+	for g := range stores {
+		var err error
+		if stores[g], err = Open(dir, patient{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
-	for g := 0; g < 8; g++ {
+	for _, gs := range stores {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
-				if _, err := s.Append(ev("edit", "lane/c")); err != nil {
+				if _, err := gs.Append(ev("edit", "lane/c")); err != nil {
 					errs <- err
 					return
 				}
@@ -121,7 +136,7 @@ func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
-	if n := bytes.Count(raw, []byte("\n")); n != 800 {
+	if n := bytes.Count(raw, []byte{newline}); n != 800 {
 		t.Fatalf("%d lines, want 800", n)
 	}
 	got, err := s.Read(1)
