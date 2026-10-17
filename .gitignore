@@ -1,2 +1,5 @@
 # Spec-driven development trees stay local.
 docs/sdd/
+/trellis
+/trellis.exe
+/dist/
