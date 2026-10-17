@@ -7,6 +7,9 @@ const (
 	LaneNone LaneState = iota
 	LaneOpen
 	LaneMerged
+	// LaneAbandoned is set by the report's history fold (lane 7: a branch
+	// deleted without a merge), never by a hook and never by Advance, as with
+	// lane.merged. Advance turns an abandoned lane into merged on lane.merged.
 	LaneAbandoned
 )
 
