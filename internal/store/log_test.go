@@ -323,3 +323,32 @@ func TestLog_ReadFromPastTheEndIsEmpty(t *testing.T) {
 		t.Fatalf("Read(3) = %+v, %v; want none", got, err)
 	}
 }
+
+func TestLog_UnterminatedCompleteTailKeepsItsSeq(t *testing.T) {
+	s, dir, _ := open(t)
+	if _, err := s.Append(ev("edit", "l"), ev("edit", "l")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"seq":3,"kind":"merge","lane":"l","session":"s1","at":"2026-10-18T12:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	out, err := s.Append(ev("commit", "l"))
+	if err != nil || len(out) != 1 || out[0].Seq != 4 {
+		t.Fatalf("Append = %+v, %v; want Seq 4", out, err)
+	}
+	got, err := s.Read(0)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("Read(0) = %+v, %v; want 4 events", got, err)
+	}
+	for i, k := range []string{"edit", "edit", "merge", "commit"} {
+		if got[i].Seq != uint64(i+1) || got[i].Kind != k {
+			t.Errorf("event %d = Seq %d %s, want Seq %d %s", i, got[i].Seq, got[i].Kind, i+1, k)
+		}
+	}
+}
