@@ -1,0 +1,82 @@
+// Copied from aphrollo-tools internal/gitenv/sealed.go at 12b3724e.
+// Incident #1043: tests wrote into the real repository and the global git config.
+
+package testiso
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+// CeilingList is the GIT_CEILING_DIRECTORIES value naming each of dirs, in the
+// spelling given and, where a symlink makes it differ, the resolved one: git
+// compares the ceiling against the path it walks, which may be either. An
+// empty dir names nothing.
+func CeilingList(dirs ...string) string {
+	var list []string
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		list = append(list, d)
+		if real, err := filepath.EvalSymlinks(d); err == nil && real != d {
+			list = append(list, real)
+		}
+	}
+	return strings.Join(list, string(os.PathListSeparator))
+}
+
+// sealedConfig is the name of the global git config Sealed leaves in the area it
+// seals a process to, and sealedConfigText what it holds: a fixed neutral
+// identity and the default branch, so a fixture that commits without setting an
+// identity behaves as on an ordinary box without reaching the operator's config.
+const (
+	sealedConfig     = "gitconfig"
+	sealedConfigText = "[user]\n\tname = trellis-test\n\temail = test@trellis.invalid\n[init]\n\tdefaultBranch = main\n"
+)
+
+// ciVariable reports whether the "name=value" entry kv is one only a CI runner
+// sets: CI itself and the GITHUB_, RUNNER_ and ACTIONS_ families. A test that
+// reads one passes in CI and fails on a box that has none (#1121), so a sealed
+// process sees neither. Names compare in upper case, as a Windows environment
+// does not keep their case.
+func ciVariable(kv string) bool {
+	name, _, _ := strings.Cut(kv, "=")
+	name = strings.ToUpper(name)
+	return name == "CI" || strings.HasPrefix(name, "GITHUB_") || strings.HasPrefix(name, "RUNNER_") || strings.HasPrefix(name, "ACTIONS_")
+}
+
+// Sealed returns env cut off from the git world of the box: every GIT_*
+// variable dropped, so a hook's GIT_DIR, GIT_INDEX_FILE or GIT_WORK_TREE cannot
+// redirect a test's git at the repository the hook runs for; GIT_CEILING_DIRECTORIES
+// set to area, so no directory under it, which is where the process's temp dirs
+// are, can find a repository by walking up; the global git config a file in area
+// holding a neutral identity and the default branch, and the system config off, so `git config --global` writes nothing of
+// the operator's; every variable only a CI runner sets dropped; and auto maintenance off. It is what a process the gate starts
+// to run somebody's tests gets, whatever those tests do themselves. The
+// directory and the file are made when they are not there.
+func Sealed(env []string, area string) []string {
+	out := make([]string, 0, len(env)+8)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "GIT_") && !ciVariable(kv) {
+			out = append(out, kv)
+		}
+	}
+	config := filepath.Join(area, sealedConfig)
+	if err := os.MkdirAll(area, 0o755); err == nil {
+		// Written only when it differs, so concurrent runs sharing the area
+		// never truncate a file another is reading.
+		if have, _ := os.ReadFile(config); string(have) != sealedConfigText {
+			_ = os.WriteFile(config, []byte(sealedConfigText), 0o644)
+		}
+	}
+	out = append(out, "GIT_CEILING_DIRECTORIES="+CeilingList(area), "GIT_CONFIG_GLOBAL="+config, "GIT_CONFIG_NOSYSTEM=1")
+	DisableMaintenanceAndHooks(filepath.Join(area, "nohooks"), func(k, v string) { out = append(out, k+"="+v) })
+	// The gate's state dir is found through this before the home, and a record
+	// written there by a test would be the operator's.
+	out = slices.DeleteFunc(out, func(kv string) bool { return strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") })
+	out = append(out, "CLAUDE_CONFIG_DIR="+filepath.Join(area, "claude"))
+	return out
+}
