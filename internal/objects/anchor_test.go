@@ -223,3 +223,50 @@ func TestCorpus_NoContentInRecords(t *testing.T) {
 		t.Fatalf("the sentinel appears %d times in the record files", hits)
 	}
 }
+
+const idTemplate = "3236cba6d6ebe89a13ca485fe17c890548d23da5" // "template\n", README.md at HEAD
+
+func TestAnchorTurn_RevertToHeadDropsTheStaleBlob(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := recorder()
+	write(t, filepath.Join(repo, "README.md"), "hello\n")
+	tree1, _, err := AnchorTurn(r, repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", tree1, "README.md"); got != "100644 blob "+idHello+"\tREADME.md" {
+		t.Fatalf("turn 1: %q", got)
+	}
+	write(t, filepath.Join(repo, "README.md"), "template\n") // back to HEAD's content
+	tree2, _, err := AnchorTurn(r, repo, "main", tree1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", tree2, "README.md"); got != "100644 blob "+idTemplate+"\tREADME.md" {
+		t.Fatalf("turn 2 kept the stale blob: %q", got)
+	}
+}
+
+func TestAnchorTurn_FollowsHeadAfterCommit(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := recorder()
+	write(t, filepath.Join(repo, "one.txt"), "hello\n")
+	tree1, _, err := AnchorTurn(r, repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", "one.txt")
+	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "one")
+	write(t, filepath.Join(repo, "two.txt"), "a\n")
+	_, commit, err := AnchorTurn(r, repo, "main", tree1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "README.md\none.txt\ntwo.txt"
+	if got := gitT(t, repo, "ls-tree", "-r", "--name-only", commit); got != want {
+		t.Fatalf("tree lists %q, want %q", got, want)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "one.txt"); got != "100644 blob "+idHello+"\tone.txt" {
+		t.Fatalf("one.txt: %q", got)
+	}
+}
