@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
 func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
@@ -128,5 +131,29 @@ func TestLight_PassesStdin(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(res.Stdout)); got != "ce013625030ba8dba906f756967f9e9ca394464a" {
 		t.Fatalf("id %q", got)
+	}
+}
+
+func TestLight_ScrubsGitEnv(t *testing.T) {
+	repo := testiso.Repo(t)
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "no-such-dir"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "no-such-index"))
+	t.Setenv("GIT_WORK_TREE", filepath.Join(t.TempDir(), "no-such-tree"))
+	fc := clock.Fake(time.Unix(1000, 0))
+	res, err := Light(fc, Spec{Name: "git", Args: []string{"rev-parse", "--git-dir"}, Dir: repo, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(res.Stdout)); got != ".git" {
+		t.Fatalf("git-dir = %q, want .git", got)
+	}
+}
+
+func TestScrubGitEnv(t *testing.T) {
+	in := []string{"PATH=/bin", "GIT_DIR=x", "GIT_WORK_TREE=y", "GIT_INDEX_FILE=z", "GIT_OBJECT_DIRECTORY=o",
+		"GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h"}
+	want := []string{"PATH=/bin", "GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h"}
+	if got := scrubGitEnv(in); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }

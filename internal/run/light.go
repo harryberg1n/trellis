@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
@@ -68,7 +70,11 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 	}
 	cmd := exec.Command(spec.Name, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(os.Environ(), noPrompt...)
+	env := os.Environ()
+	if isGit(spec.Name) {
+		env = scrubGitEnv(env)
+	}
+	cmd.Env = append(env, noPrompt...)
 	if spec.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}
@@ -109,4 +115,38 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 		return res, fmt.Errorf("%s: %w: %s", spec.Name, waitErr, bytes.TrimSpace(errb.Bytes()))
 	}
 	return res, nil
+}
+
+func isGit(name string) bool {
+	base := strings.ToLower(filepath.Base(name))
+	return base == "git" || base == "git.exe"
+}
+
+// gitKeep are the GIT_* variables a git child keeps: configuration and safety
+// (the sandbox and the user's own), tracing and prompting. Every other GIT_*
+// variable, GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE above all, would point
+// the child at a repository other than its Dir.
+var gitKeep = []string{"GIT_CONFIG", "GIT_CEILING_DIRECTORIES", "GIT_EXEC_PATH", "GIT_TERMINAL_PROMPT",
+	"GIT_ASKPASS", "GIT_SSH", "GIT_TRACE", "GIT_TEMPLATE_DIR", "GIT_ATTR_NOSYSTEM"}
+
+// scrubGitEnv is env without the GIT_* variables a git child must not inherit.
+func scrubGitEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(strings.ToUpper(kv), "GIT_") && !keepsGit(kv) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+func keepsGit(kv string) bool {
+	k, _, _ := strings.Cut(strings.ToUpper(kv), "=")
+	for _, p := range gitKeep {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
 }
