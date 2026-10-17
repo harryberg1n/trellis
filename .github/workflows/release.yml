@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=github.com/harryberg1n/trellis/internal/buildinfo
+          ldflags="-s -w -X ${pkg}.Version=${GITHUB_REF_NAME} -X ${pkg}.Commit=${GITHUB_SHA::7} -X ${pkg}.Time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir dist
+          for target in linux/amd64 linux/arm64 windows/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "$ldflags" -o "dist/trellis-${os}-${arch}${ext}" ./cmd/trellis
+          done
+          (cd dist && sha256sum trellis-* > sha256sums.txt)
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
