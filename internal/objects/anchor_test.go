@@ -306,6 +306,7 @@ func TestAnchorTurn_ExecBitIsRecorded(t *testing.T) {
 
 func TestAnchorTurn_SymlinkIsRecordedAs120000(t *testing.T) {
 	repo := testiso.Repo(t)
+	gitT(t, repo, "config", "core.symlinks", "true")
 	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
 		t.Skipf("symlinks are not available here: %v", err)
 	}
@@ -321,6 +322,7 @@ func TestAnchorTurn_SymlinkIsRecordedAs120000(t *testing.T) {
 func TestAnchorTurn_SymlinkReplacedByFileIsRegular(t *testing.T) {
 	repo := testiso.Repo(t)
 	gitT(t, repo, "config", "core.filemode", "true") // a replacing file is taken as it is on disk
+	gitT(t, repo, "config", "core.symlinks", "true")
 	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
 		t.Skipf("symlinks are not available here: %v", err)
 	}
@@ -476,6 +478,7 @@ func TestAnchorTurn_NoFilemodeKeepsExistingMode(t *testing.T) {
 func TestAnchorTurn_NoFilemodeKeepsSymlinkEntryAsCheckedOutFile(t *testing.T) {
 	repo := testiso.Repo(t)
 	gitT(t, repo, "config", "core.filemode", "false")
+	gitT(t, repo, "config", "core.symlinks", "false") // model a Windows checkout on every OS
 	gitT(t, repo, "update-index", "--add", "--cacheinfo", "120000,"+idTarget+",link")
 	write(t, filepath.Join(repo, "link"), "target.txt") // a core.symlinks=false checkout
 	commitAll(t, repo, "link")
