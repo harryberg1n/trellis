@@ -22,6 +22,7 @@ const gitTimeout = 30 * time.Second
 const (
 	modeFile = "100644"
 	modeExec = "100755"
+	modeLink = "120000"
 	modeTree = "040000"
 )
 
@@ -77,8 +78,18 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 			changes[p] = change{del: true}
 		case err != nil:
 			return "", "", err
-		case info.IsDir() || info.Mode()&os.ModeSymlink != 0:
-			// A nested repository or a link: not a blob this anchor makes.
+		case info.IsDir():
+			// A nested repository: not a blob this anchor makes.
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(full)
+			if err != nil {
+				return "", "", err
+			}
+			id, err := writeBlobContent(gitDir, []byte(target))
+			if err != nil {
+				return "", "", err
+			}
+			changes[p] = change{id: id, mode: modeLink}
 		default:
 			id, err := WriteBlob(gitDir, full)
 			if err != nil {
@@ -174,10 +185,11 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 			delete(list, name)
 		default:
 			mode := c.mode
-			if old, ok := list[name]; ok && old.typ == "blob" {
-				mode = old.mode
-			} else if mode == "" {
+			if mode == "" { // named in blobs alone: the old mode stands
 				mode = modeFile
+				if old, ok := list[name]; ok && old.typ == "blob" {
+					mode = old.mode
+				}
 			}
 			list[name] = entry{mode, "blob", c.id}
 		}
@@ -197,7 +209,11 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 		for _, d := range level {
 			list := dirs[d]
 			if len(list) == 0 && d != "" {
-				delete(dirs[parentOf(d)], path.Base(d))
+				// An emptied directory leaves its parent, unless the name is a
+				// file now (a directory replaced by a file).
+				if e, ok := dirs[parentOf(d)][path.Base(d)]; ok && e.typ == "tree" {
+					delete(dirs[parentOf(d)], path.Base(d))
+				}
 				continue
 			}
 			if len(batch) > 0 {

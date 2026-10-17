@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	idHello = "ce013625030ba8dba906f756967f9e9ca394464a" // "hello\n"
-	idA     = "78981922613b2afb6025042ff6bd878ac1994e85" // "a\n"
-	idEmpty = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+	idHello  = "ce013625030ba8dba906f756967f9e9ca394464a" // "hello\n"
+	idA      = "78981922613b2afb6025042ff6bd878ac1994e85" // "a\n"
+	idEmpty  = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+	idTarget = "4cbb553f3f4ac2ee7b01ff6c951d6bf583c39c15" // "target.txt", a symlink target
 )
 
 func recorder() *run.Recorder {
@@ -285,5 +286,73 @@ func TestAnchorTurn_UnbornHeadStartsFromEmptyTree(t *testing.T) {
 	want := "100644 blob " + idHello + "\tonly/file.txt"
 	if got := gitT(t, repo, "ls-tree", "-r", commit); got != want {
 		t.Fatalf("tree lists %q, want %q", got, want)
+	}
+}
+
+func TestAnchorTurn_ExecBitIsRecorded(t *testing.T) {
+	skipNoExecBit(t)
+	repo := testiso.Repo(t)
+	if err := os.Chmod(filepath.Join(repo, "README.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "README.md"); got != "100755 blob "+idTemplate+"\tREADME.md" {
+		t.Fatalf("README.md: %q", got)
+	}
+}
+
+func TestAnchorTurn_SymlinkIsRecordedAs120000(t *testing.T) {
+	repo := testiso.Repo(t)
+	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idTarget+"\tlink" {
+		t.Fatalf("link: %q", got)
+	}
+}
+
+func TestAnchorTurn_SymlinkReplacedByFileIsRegular(t *testing.T) {
+	repo := testiso.Repo(t)
+	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	gitT(t, repo, "add", "link")
+	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "link")
+	if err := os.Remove(filepath.Join(repo, "link")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "link"), "hello\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "100644 blob "+idHello+"\tlink" {
+		t.Fatalf("link: %q", got)
+	}
+}
+
+func TestAnchorTurn_DirectoryReplacedByFile(t *testing.T) {
+	repo := testiso.Repo(t)
+	write(t, filepath.Join(repo, "d", "x.txt"), "hello\n")
+	gitT(t, repo, "add", "d")
+	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "dir")
+	if err := os.RemoveAll(filepath.Join(repo, "d")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "d"), "a\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "100644 blob " + idTemplate + "\tREADME.md\n100644 blob " + idA + "\td"
+	if got := gitT(t, repo, "ls-tree", commit); got != want {
+		t.Fatalf("root:\n%s\nwant:\n%s", got, want)
 	}
 }
