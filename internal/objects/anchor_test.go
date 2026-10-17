@@ -356,3 +356,53 @@ func TestAnchorTurn_DirectoryReplacedByFile(t *testing.T) {
 		t.Fatalf("root:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestAnchorTurn_Sha256Repo(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "r256")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "init", "-q", "--object-format=sha256")
+	write(t, filepath.Join(repo, "top.txt"), "hello\n")
+	write(t, filepath.Join(repo, "sub", "deep.txt"), "a\n")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(gitT(t, repo, "ls-tree", "-r", commit), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("tree lists %q", lines)
+	}
+	for _, l := range lines {
+		meta, name, _ := strings.Cut(l, "\t")
+		f := strings.Fields(meta)
+		if len(f) != 3 || len(f[2]) != 64 {
+			t.Fatalf("%q: id is not 64 hex chars", l)
+		}
+		if want := gitT(t, repo, "hash-object", name); f[2] != want {
+			t.Fatalf("%s: tree id %s, git hash-object %s", name, f[2], want)
+		}
+	}
+	if lines[0][strings.Index(lines[0], "\t")+1:] != "sub/deep.txt" {
+		t.Fatalf("unexpected order or paths: %q", lines)
+	}
+}
+
+func TestAnchorTurn_RenameAndSpaces(t *testing.T) {
+	repo := testiso.Repo(t)
+	write(t, filepath.Join(repo, "a.txt"), "hello\n")
+	gitT(t, repo, "add", "a.txt")
+	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "a")
+	if err := os.MkdirAll(filepath.Join(repo, "dir with space"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "mv", "a.txt", "dir with space/b c.txt")
+	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "100644 blob " + idTemplate + "\tREADME.md\n100644 blob " + idHello + "\tdir with space/b c.txt"
+	if got := gitT(t, repo, "ls-tree", "-r", commit); got != want {
+		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
+	}
+}
