@@ -103,3 +103,16 @@ func TestCheck_TestFilesAreNotChecked(t *testing.T) {
 		t.Errorf("%+v, %v; want nothing", got, err)
 	}
 }
+
+// A dot-import brings the clock in under bare names; the call is still a call
+// to time.Now.
+func TestLayering_DotImportedClockCallIsCaught(t *testing.T) {
+	got, err := Check([]string{"testdata/dotimport"}, []string{"os"}, []string{"time.Now"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Finding{{File: "dotimport/d.go", Line: 5, What: "calls time.Now"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("findings = %+v, want %+v", got, want)
+	}
+}
