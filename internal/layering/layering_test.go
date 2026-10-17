@@ -3,6 +3,7 @@ package layering
 import (
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,19 @@ func TestLayering_FixtureWithClockAndOsReportsBoth(t *testing.T) {
 
 func TestLayering_KernelAndMeasureAreClean(t *testing.T) {
 	dirs := []string{"../kernel", "../measure"}
+	entries, err := os.ReadDir("../kernel")
+	if err != nil {
+		t.Fatalf("internal/kernel must exist and be scanned: %v", err)
+	}
+	files := 0
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			files++
+		}
+	}
+	if files == 0 {
+		t.Fatal("internal/kernel has no non-test .go file; the law scanned nothing")
+	}
 	present := 0
 	for _, d := range dirs {
 		if _, err := os.Stat(d); err == nil {
