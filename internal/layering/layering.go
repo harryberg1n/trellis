@@ -89,6 +89,7 @@ func checkFile(file, name string, forbiddenImports, forbiddenCalls []string) ([]
 	}
 	var out []Finding
 	local := map[string]string{} // the name a file knows an import by -> its path
+	var dotted []string          // paths imported with a dot: their names are bare in this file
 	for _, imp := range f.Imports {
 		ipath, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {
@@ -104,6 +105,8 @@ func checkFile(file, name string, forbiddenImports, forbiddenCalls []string) ([]
 			local[path.Base(ipath)] = ipath
 		case imp.Name.Name != "_" && imp.Name.Name != ".":
 			local[imp.Name.Name] = ipath
+		case imp.Name.Name == ".":
+			dotted = append(dotted, ipath)
 		}
 	}
 	banned := map[string]bool{}
@@ -111,6 +114,17 @@ func checkFile(file, name string, forbiddenImports, forbiddenCalls []string) ([]
 		banned[c] = true
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			// A bare call to a name a dot-import brought in.
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				for _, ipath := range dotted {
+					if c := ipath + "." + id.Name; banned[c] {
+						out = append(out, Finding{name, fset.Position(id.Pos()).Line, "calls " + c})
+					}
+				}
+			}
+			return true
+		}
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
