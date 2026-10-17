@@ -45,6 +45,12 @@ func TestLog_AppendIsOneLinePerEvent(t *testing.T) {
 	if n := bytes.Count(raw, []byte("\n")); n != 3 {
 		t.Fatalf("%d lines, want 3:\n%s", n, raw)
 	}
+	if n := s.Skipped(); n != 0 {
+		t.Fatalf("Skipped() = %d on a clean log, want 0", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "events.quarantine")); err == nil {
+		t.Fatal("a clean log made a quarantine file")
+	}
 	got, err := s.Read(1)
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +252,13 @@ func TestLog_TornTailDoesNotWedgeTheStore(t *testing.T) {
 	got, err := s.Read(0)
 	if err != nil || len(got) != 2 || got[0].Kind != "edit" || got[0].Seq != 1 || got[1].Kind != "commit" || got[1].Seq != 2 {
 		t.Fatalf("Read(0) = %+v, %v; want edit 1 and commit 2", got, err)
+	}
+	if n := s.Skipped(); n != 1 {
+		t.Fatalf("Skipped() = %d, want 1", n)
+	}
+	q, err := os.ReadFile(filepath.Join(dir, "events.quarantine"))
+	if err != nil || string(q) != "{\"seq\":2,\"kind\":\"com"+string(rune(10)) {
+		t.Fatalf("events.quarantine = %q, %v; want the fragment and a newline", q, err)
 	}
 }
 
