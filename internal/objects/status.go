@@ -1,6 +1,11 @@
 package objects
 
-import "bytes"
+import (
+	"bytes"
+	"errors"
+	"io/fs"
+	"syscall"
+)
 
 // statusPaths is the paths named by `git status -z --untracked-files=all`
 // output: records of "XY path", where a rename or copy (X or Y is R or C) is
@@ -23,4 +28,11 @@ func statusPaths(out []byte) []string {
 		}
 	}
 	return paths
+}
+
+// pathGone reports whether an Lstat error means the path is not there: not
+// found, or ENOTDIR, which Linux answers when a parent that was a directory is
+// now a file (the path below it is gone with the directory).
+func pathGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
 }

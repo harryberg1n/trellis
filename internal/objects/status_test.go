@@ -1,7 +1,9 @@
 package objects
 
 import (
+	"io/fs"
 	"reflect"
+	"syscall"
 	"testing"
 )
 
@@ -13,5 +15,23 @@ func TestStatusPaths(t *testing.T) {
 	}
 	if got := statusPaths(nil); len(got) != 0 {
 		t.Fatalf("empty status gave %q", got)
+	}
+}
+
+func TestPathGone(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"not exist", &fs.PathError{Op: "lstat", Path: "x", Err: fs.ErrNotExist}, true},
+		{"not a directory", &fs.PathError{Op: "lstat", Path: "d/x.txt", Err: syscall.ENOTDIR}, true},
+		{"permission", &fs.PathError{Op: "lstat", Path: "x", Err: fs.ErrPermission}, false},
+		{"nil", nil, false},
+	}
+	for _, c := range cases {
+		if got := pathGone(c.err); got != c.want {
+			t.Errorf("%s: pathGone = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
