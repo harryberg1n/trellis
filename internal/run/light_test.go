@@ -2,6 +2,7 @@ package run
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -15,15 +16,25 @@ import (
 )
 
 func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
+	// Real time bounds the test so a broken kill fails instead of hanging; the
+	// kill itself is driven by the fake clock.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(roleEnv, "child")
 	t.Setenv(addrEnv, ln.Addr().String())
 
 	fc := clock.Fake(time.Unix(1000, 0))
+	// However the test ends, fire the timeout so no child tree outlives it.
+	t.Cleanup(func() { fc.Advance(time.Hour) })
 	type outcome struct {
 		res Result
 		err error
@@ -37,8 +48,9 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	// The child tells us the grandchild's pid once the tree exists.
 	conn, err := ln.Accept()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the child never reported its grandchild: %v", err)
 	}
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	conn.Close()
 	if err != nil {
@@ -52,14 +64,31 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 		t.Fatalf("grandchild %d is not running before the timeout", pid)
 	}
 
-	fc.BlockUntil(1)
-	fc.Advance(30 * time.Second)
-	got := <-done
-	if !errors.Is(got.err, ErrTimeout) {
-		t.Fatalf("err = %v, want ErrTimeout", got.err)
+	timerSet := make(chan struct{})
+	go func() { fc.BlockUntil(1); close(timerSet) }()
+	select {
+	case <-timerSet:
+	case <-ctx.Done():
+		t.Fatal("Light never waited on the clock")
 	}
-	// Death can trail the kill by a moment; yield rather than sleep.
-	for alive(pid) {
+	fc.Advance(30 * time.Second)
+	select {
+	case got := <-done:
+		if !errors.Is(got.err, ErrTimeout) {
+			t.Fatalf("err = %v, want ErrTimeout", got.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Light did not return after its timeout")
+	}
+	// Death can trail the kill by a moment; yield a fixed number of times
+	// rather than sleep.
+	for i := 0; alive(pid); i++ {
+		if i == 5_000_000 {
+			if p, err := os.FindProcess(pid); err == nil {
+				p.Kill() // do not leave it behind
+			}
+			t.Fatalf("grandchild %d is still alive after the tree kill", pid)
+		}
 		runtime.Gosched()
 	}
 }
