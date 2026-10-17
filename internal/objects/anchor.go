@@ -76,7 +76,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 		full := filepath.Join(repo, filepath.FromSlash(p))
 		info, err := os.Lstat(full)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
+		case pathGone(err):
 			changes[p] = change{del: true}
 		case err != nil:
 			return "", "", err
