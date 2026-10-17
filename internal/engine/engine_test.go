@@ -177,3 +177,18 @@ func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
 		t.Fatalf("log = %+v; second event must carry exp1=control", got)
 	}
 }
+
+func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
+	s, dir, _ := open(t)
+	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	fi, err := os.Stat(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := s.BytesRead()
+	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	// One read for the next Seq; none to catch the checkpoint up.
+	if got := s.BytesRead() - before; got != fi.Size() {
+		t.Fatalf("Step read %d log bytes, want %d (one tail read)", got, fi.Size())
+	}
+}

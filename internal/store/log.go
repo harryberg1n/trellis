@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -21,7 +23,7 @@ import (
 var ErrParked = errors.New("store: event parked in events.pending")
 
 // tailChunk is how much of the log end is read to find the last Seq.
-const tailChunk = 64 << 10
+const tailChunk = 4 << 10
 
 const newline = byte(10)
 
@@ -40,10 +42,11 @@ type Log interface {
 type Store struct {
 	Shares map[string]int
 
-	dir    string
-	clock  clock.Clock
-	mu     sync.Mutex // in-process; the file lock covers other processes
-	rename func(oldpath, newpath string) error
+	dir       string
+	clock     clock.Clock
+	bytesRead atomic.Int64
+	mu        sync.Mutex // in-process; the file lock covers other processes
+	rename    func(oldpath, newpath string) error
 }
 
 var _ Log = (*Store)(nil)
@@ -63,6 +66,7 @@ func (s *Store) pendingDir() string { return filepath.Join(s.dir, "events.pendin
 type Tx struct {
 	s      *Store
 	next   uint64
+	tail   uint64 // the log's last Seq when the lock was taken
 	last   uint64
 	folded bool
 }
@@ -81,7 +85,7 @@ func (s *Store) Locked(fn func(*Tx) error) error {
 	if err != nil {
 		return err
 	}
-	return fn(&Tx{s: s, next: last + 1})
+	return fn(&Tx{s: s, next: last + 1, tail: last})
 }
 
 // Append takes the lock, folds in parked events, then appends evs with fresh
@@ -187,6 +191,9 @@ func (tx *Tx) Append(evs ...kernel.Event) ([]kernel.Event, error) {
 	return tx.appendRaw(evs)
 }
 
+// Tail is the log's last Seq at the moment the lock was taken.
+func (tx *Tx) Tail() uint64 { return tx.tail }
+
 // LastSeq is the highest Seq this Tx has appended, or 0.
 func (tx *Tx) LastSeq() uint64 { return tx.last }
 
@@ -271,79 +278,104 @@ func (s *Store) Park(ev kernel.Event) error {
 	return os.Rename(tmp, final)
 }
 
-// Read returns the events with Seq >= from, in order. A final line with no
-// newline (a write in flight) is ignored.
+// BytesRead is how many log bytes this Store has read, for tests that pin
+// the cost of a read.
+func (s *Store) BytesRead() int64 { return s.bytesRead.Load() }
+
+// Read returns the events with Seq >= from, in order, reading backwards from
+// the end of the log so its cost follows the events returned, not the log
+// size. Seq is increasing, so the scan stops at the first line below from.
 func (s *Store) Read(from uint64) ([]kernel.Event, error) {
-	raw, err := os.ReadFile(s.logPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []kernel.Event
-	for len(raw) > 0 {
-		i := bytes.IndexByte(raw, '\n')
-		if i < 0 {
-			break
-		}
-		line := raw[:i]
-		raw = raw[i+1:]
-		var ev kernel.Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue // junk left by a torn append
-		}
-		if ev.Seq >= from {
-			out = append(out, ev)
-		}
-	}
-	return out, nil
+	evs, _, err := s.scanTail(from)
+	return evs, err
 }
 
-// lastSeq reads the end of the log for the highest Seq; 0 for no log. Only
-// newline-terminated lines count: an unterminated tail is a torn append, and a
-// terminated line that does not parse is junk left by one. Both are skipped.
+// lastSeq reads the end of the log for the highest Seq; 0 for no log.
 func (s *Store) lastSeq() (uint64, error) {
+	_, last, err := s.scanTail(math.MaxUint64)
+	return last, err
+}
+
+type logLine struct {
+	raw []byte
+	ev  kernel.Event
+	ok  bool
+}
+
+// splitLines cuts buf into lines. Only a newline-terminated line counts: an
+// unterminated tail is a torn append.
+func splitLines(buf []byte) []logLine {
+	var out []logLine
+	for len(buf) > 0 {
+		i := bytes.IndexByte(buf, newline)
+		terminated := i >= 0
+		raw := buf
+		if terminated {
+			raw, buf = buf[:i], buf[i+1:]
+		} else {
+			buf = nil
+		}
+		if len(raw) == 0 {
+			continue
+		}
+		l := logLine{raw: raw}
+		l.ok = terminated && json.Unmarshal(raw, &l.ev) == nil
+		out = append(out, l)
+	}
+	return out
+}
+
+// scanTail reads the log backwards in doubling chunks until a line with
+// Seq < from, and returns the events with Seq >= from and the highest Seq seen.
+func (s *Store) scanTail(from uint64) ([]kernel.Event, uint64, error) {
 	f, err := os.Open(s.logPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
+	var buf []byte
+	start := fi.Size()
 	for chunk := int64(tailChunk); ; chunk *= 2 {
-		start := fi.Size() - chunk
-		if start < 0 {
-			start = 0
+		n := min(chunk, start)
+		piece := make([]byte, n)
+		if _, err := f.ReadAt(piece, start-n); err != nil && !errors.Is(err, io.EOF) {
+			return nil, 0, err
 		}
-		buf := make([]byte, fi.Size()-start)
-		if _, err := f.ReadAt(buf, start); err != nil && !errors.Is(err, io.EOF) {
-			return 0, err
-		}
-		end := bytes.LastIndexByte(buf, newline)
-		if end < 0 {
-			if start == 0 {
-				return 0, nil
-			}
-			continue
-		}
-		lines := bytes.Split(buf[:end], []byte{newline})
-		if start > 0 {
+		s.bytesRead.Add(n)
+		start -= n
+		buf = append(piece, buf...)
+		lines := splitLines(buf)
+		if start > 0 && len(lines) > 0 {
 			lines = lines[1:] // the first line may be cut by the chunk start
 		}
+		cut := -1
 		for i := len(lines) - 1; i >= 0; i-- {
-			var ev kernel.Event
-			if json.Unmarshal(lines[i], &ev) == nil {
-				return ev.Seq, nil
+			if lines[i].ok && lines[i].ev.Seq < from {
+				cut = i
+				break
 			}
 		}
-		if start == 0 {
-			return 0, nil
+		if cut < 0 && start > 0 {
+			continue
 		}
+		var evs []kernel.Event
+		var last uint64
+		for i, l := range lines {
+			if !l.ok {
+				continue
+			}
+			last = l.ev.Seq
+			if i > cut && l.ev.Seq >= from {
+				evs = append(evs, l.ev)
+			}
+		}
+		return evs, last, nil
 	}
 }
