@@ -21,11 +21,16 @@ import (
 // objects/xx/rest through a temp file and a rename. An object already there is
 // left alone.
 func WriteBlob(gitDir, path string) (string, error) {
-	format, err := Format(gitDir)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	content, err := os.ReadFile(path)
+	return writeBlobContent(gitDir, content)
+}
+
+// writeBlobContent is WriteBlob for content already in hand.
+func writeBlobContent(gitDir string, content []byte) (string, error) {
+	format, err := Format(gitDir)
 	if err != nil {
 		return "", err
 	}
