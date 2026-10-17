@@ -25,6 +25,9 @@ const tailChunk = 64 << 10
 
 const newline = byte(10)
 
+// parkIDKey is the Detail key that carries a parked event's file id.
+const parkIDKey = "park_id"
+
 // Log is the append-only event log.
 type Log interface {
 	Append(evs ...kernel.Event) ([]kernel.Event, error)
@@ -130,6 +133,29 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		}
 		ps = append(ps, parked{name, ev})
 	}
+	// A fold that crashed after its append left the file behind; its event is
+	// already in the log, so drop the file instead of appending it again.
+	if len(ps) > 0 {
+		logged, err := tx.s.Read(1)
+		if err != nil {
+			return nil, err
+		}
+		have := map[string]bool{}
+		for _, e := range logged {
+			if id := e.Detail[parkIDKey]; id != "" {
+				have[id] = true
+			}
+		}
+		kept := ps[:0]
+		for _, p := range ps {
+			if id := p.ev.Detail[parkIDKey]; id != "" && have[id] {
+				os.Remove(p.name)
+				continue
+			}
+			kept = append(kept, p)
+		}
+		ps = kept
+	}
 	sort.SliceStable(ps, func(i, j int) bool {
 		if !ps[i].ev.At.Equal(ps[j].ev.At) {
 			return ps[i].ev.At.Before(ps[j].ev.At)
@@ -214,13 +240,32 @@ func (s *Store) Park(ev kernel.Event) error {
 	if _, err := rand.Read(id[:]); err != nil {
 		return err
 	}
+	name := hex.EncodeToString(id[:])
+	d := make(map[string]string, len(ev.Detail)+1)
+	for k, v := range ev.Detail {
+		d[k] = v
+	}
+	d[parkIDKey] = name // lets a fold tell a parked event it already appended
+	ev.Detail = d
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(s.pendingDir(), hex.EncodeToString(id[:])+".json")
+	final := filepath.Join(s.pendingDir(), name+".json")
 	tmp := final + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(raw)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, final)

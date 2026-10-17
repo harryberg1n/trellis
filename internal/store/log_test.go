@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -233,5 +234,46 @@ func TestLog_TornTailDoesNotWedgeTheStore(t *testing.T) {
 	got, err := s.Read(0)
 	if err != nil || len(got) != 2 || got[0].Kind != "edit" || got[0].Seq != 1 || got[1].Kind != "commit" || got[1].Seq != 2 {
 		t.Fatalf("Read(0) = %+v, %v; want edit 1 and commit 2", got, err)
+	}
+}
+
+func TestFold_ParkedEventIsNeverDuplicated(t *testing.T) {
+	s, dir, _ := open(t)
+	if err := s.Park(ev("edit", "lane/d")); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("%d pending files, want 1", len(files))
+	}
+	raw, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parked kernel.Event
+	if err := json.Unmarshal(raw, &parked); err != nil {
+		t.Fatal(err)
+	}
+	if parked.Detail["park_id"] == "" {
+		t.Fatalf("parked event has no park_id: %s", raw)
+	}
+	// A fold that crashed after the append, before removing the file.
+	err = s.Locked(func(tx *Tx) error {
+		tx.folded = true
+		_, err := tx.appendRaw([]kernel.Event{parked})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ev("commit", "lane/d")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Read(1)
+	if len(got) != 2 || got[0].Kind != "edit" || got[1].Kind != "commit" || got[1].Seq != 2 {
+		t.Fatalf("log = %+v; want edit once, then commit with Seq 2", got)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json")); len(left) != 0 {
+		t.Fatalf("%d pending files left", len(left))
 	}
 }
