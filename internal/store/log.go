@@ -302,8 +302,9 @@ type logLine struct {
 	ok  bool
 }
 
-// splitLines cuts buf into lines. Only a newline-terminated line counts: an
-// unterminated tail is a torn append.
+// splitLines cuts buf into lines. A line counts if it parses, newline or not:
+// an unterminated tail that parses is a complete event missing its newline,
+// and one that does not is a torn append.
 func splitLines(buf []byte) []logLine {
 	var out []logLine
 	for len(buf) > 0 {
@@ -319,7 +320,7 @@ func splitLines(buf []byte) []logLine {
 			continue
 		}
 		l := logLine{raw: raw}
-		l.ok = terminated && json.Unmarshal(raw, &l.ev) == nil
+		l.ok = json.Unmarshal(raw, &l.ev) == nil
 		out = append(out, l)
 	}
 	return out
