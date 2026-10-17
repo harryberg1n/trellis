@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -141,5 +142,38 @@ func TestLock_TimeoutParksTheEventInsteadOfDropping(t *testing.T) {
 	}
 	if files, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json")); len(files) != 0 {
 		t.Fatalf("%d pending files left", len(files))
+	}
+}
+
+func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
+	s, dir, _ := open(t)
+	first := ev(kernel.EvEdit, "lane/x")
+	first.Arms = map[string]string{"exp1": "control"}
+
+	s.SetRename(func(string, string) error { return errors.New("injected rename failure") })
+	if _, err := Step(s, nil, first, kernel.Context{}); err == nil {
+		t.Fatal("Step succeeded despite the failed save")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state.json")); err == nil {
+		t.Fatal("state.json exists after the failed save")
+	}
+	s.SetRename(os.Rename)
+
+	// Without a replay the lane would be assigned treatment here.
+	s.Shares = map[string]int{"exp1": 100}
+	if _, err := Step(s, nil, ev(kernel.EvCommit, "lane/x"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"last_seq":2,"arms":{"lane/x":{"exp1":"control"}},"lanes":{"lane/x":1}}`
+	if string(raw) != want {
+		t.Fatalf("state.json = %s, want %s", raw, want)
+	}
+	got, _ := s.Read(1)
+	if len(got) != 2 || got[1].Arms["exp1"] != "control" {
+		t.Fatalf("log = %+v; second event must carry exp1=control", got)
 	}
 }

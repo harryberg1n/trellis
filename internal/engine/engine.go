@@ -32,6 +32,19 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		for lane, arms := range cp.Arms {
 			sticky.Observe(kernel.Event{Lane: lane, Arms: arms})
 		}
+		// A save can fail after its append, so the log may be ahead of the
+		// checkpoint. Catch up before deciding; replayed events keep their
+		// logged arms.
+		missed, err := s.Read(cp.LastSeq + 1)
+		if err != nil {
+			return err
+		}
+		for _, e := range missed {
+			cp.Lanes[e.Lane], _ = kernel.Advance(cp.Lanes[e.Lane], e)
+			sticky.Observe(e)
+			cp.Arms[e.Lane] = sticky.Resolve(e.Lane, nil)
+			cp.LastSeq = e.Seq
+		}
 		stamp := func(e kernel.Event) kernel.Event {
 			state, e := kernel.Advance(cp.Lanes[e.Lane], e)
 			cp.Lanes[e.Lane] = state

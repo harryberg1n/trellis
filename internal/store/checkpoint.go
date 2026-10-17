@@ -61,3 +61,7 @@ func (tx *Tx) Save(cp Checkpoint) error {
 	}
 	return err
 }
+
+// SetRename replaces the rename used to publish state.json. A test injects a
+// failure through it; nil is not allowed.
+func (s *Store) SetRename(f func(oldpath, newpath string) error) { s.rename = f }
