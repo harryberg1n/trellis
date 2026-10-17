@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,6 +22,8 @@ var ErrParked = errors.New("store: event parked in events.pending")
 
 // tailChunk is how much of the log end is read to find the last Seq.
 const tailChunk = 64 << 10
+
+const newline = byte(10)
 
 // Log is the append-only event log.
 type Log interface {
@@ -179,9 +180,16 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 		buf.WriteByte('\n')
 		out[i] = ev
 	}
-	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+		last := make([]byte, 1)
+		if _, err := f.ReadAt(last, fi.Size()-1); err == nil && last[0] != newline {
+			// a torn tail: keep it as its own junk line, not fused to ours
+			buf = *bytes.NewBuffer(append([]byte{newline}, buf.Bytes()...))
+		}
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
 		f.Close()
@@ -238,7 +246,7 @@ func (s *Store) Read(from uint64) ([]kernel.Event, error) {
 		raw = raw[i+1:]
 		var ev kernel.Event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return nil, fmt.Errorf("store: bad log line: %w", err)
+			continue // junk left by a torn append
 		}
 		if ev.Seq >= from {
 			out = append(out, ev)
@@ -247,7 +255,9 @@ func (s *Store) Read(from uint64) ([]kernel.Event, error) {
 	return out, nil
 }
 
-// lastSeq reads the end of the log for the highest Seq; 0 for no log.
+// lastSeq reads the end of the log for the highest Seq; 0 for no log. Only
+// newline-terminated lines count: an unterminated tail is a torn append, and a
+// terminated line that does not parse is junk left by one. Both are skipped.
 func (s *Store) lastSeq() (uint64, error) {
 	f, err := os.Open(s.logPath())
 	if errors.Is(err, os.ErrNotExist) {
@@ -270,20 +280,25 @@ func (s *Store) lastSeq() (uint64, error) {
 		if _, err := f.ReadAt(buf, start); err != nil && !errors.Is(err, io.EOF) {
 			return 0, err
 		}
-		buf = bytes.TrimRight(buf, "\n")
-		if len(buf) == 0 {
+		end := bytes.LastIndexByte(buf, newline)
+		if end < 0 {
+			if start == 0 {
+				return 0, nil
+			}
+			continue
+		}
+		lines := bytes.Split(buf[:end], []byte{newline})
+		if start > 0 {
+			lines = lines[1:] // the first line may be cut by the chunk start
+		}
+		for i := len(lines) - 1; i >= 0; i-- {
+			var ev kernel.Event
+			if json.Unmarshal(lines[i], &ev) == nil {
+				return ev.Seq, nil
+			}
+		}
+		if start == 0 {
 			return 0, nil
 		}
-		line := buf
-		if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
-			line = buf[i+1:]
-		} else if start > 0 {
-			continue // the last line is longer than the chunk
-		}
-		var ev kernel.Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			return 0, fmt.Errorf("store: bad last log line: %w", err)
-		}
-		return ev.Seq, nil
 	}
 }

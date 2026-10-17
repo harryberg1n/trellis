@@ -196,3 +196,27 @@ func TestLog_AppendOnTimeoutParksAndReports(t *testing.T) {
 		t.Fatalf("%d pending files left, want 0", len(files))
 	}
 }
+
+func TestLog_TornTailDoesNotWedgeTheStore(t *testing.T) {
+	s, dir, _ := open(t)
+	if _, err := s.Append(ev("edit", "l")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"seq":2,"kind":"com`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	out, err := s.Append(ev("commit", "l"))
+	if err != nil || len(out) != 1 || out[0].Seq != 2 {
+		t.Fatalf("Append after a torn tail = %+v, %v; want Seq 2", out, err)
+	}
+	got, err := s.Read(0)
+	if err != nil || len(got) != 2 || got[0].Kind != "edit" || got[0].Seq != 1 || got[1].Kind != "commit" || got[1].Seq != 2 {
+		t.Fatalf("Read(0) = %+v, %v; want edit 1 and commit 2", got, err)
+	}
+}
