@@ -45,13 +45,18 @@ type change struct {
 //
 // The paths Bash changed come from git status; they are hashed with WriteBlob.
 // blobs is path -> blob id for files already hashed (by the edit hook); a path
-// status also names takes the file on disk. The new tree is prevTree (HEAD's
-// tree when empty) with those blobs replaced, built with mktree from the
+// status also names takes the file on disk. The new tree is HEAD's tree with
+// those blobs replaced, built with mktree from the
 // deepest directory up, one process per directory level. The commit's parent
 // is the lane's previous anchor, read from the ref without a process.
 //
+// prevTree is accepted for the plan's signature and ignored: status is relative
+// to HEAD, so a base other than HEAD's tree would keep a blob that status no
+// longer names (a file reverted to HEAD, or HEAD moving between turns). Every
+// turn is HEAD plus the full status set.
+//
 // Git kinds used: status, ls-tree, mktree, commit-tree, update-ref.
-func AnchorTurn(r run.Runner, repo, lane, prevTree string, blobs map[string]string) (tree, commit string, err error) {
+func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tree, commit string, err error) {
 	common, gitDir, err := gitDirs(repo)
 	if err != nil {
 		return "", "", err
@@ -87,11 +92,7 @@ func AnchorTurn(r run.Runner, repo, lane, prevTree string, blobs map[string]stri
 		}
 	}
 
-	root := prevTree
-	if root == "" {
-		root = "HEAD"
-	}
-	if tree, err = buildTree(r, repo, root, changes); err != nil {
+	if tree, err = buildTree(r, repo, "HEAD", changes); err != nil {
 		return "", "", err
 	}
 
