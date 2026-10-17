@@ -37,11 +37,11 @@ func Root(repoPath string) (string, error) {
 }
 
 // RepoID names a repo: the first 16 hex digits of sha256 of its remote URL,
-// or of its absolute path when it has no remote.
+// or of its cleaned absolute path (case-folded on Windows) when it has no remote.
 func RepoID(remoteURL, absPath string) string {
 	key := remoteURL
 	if key == "" {
-		key = absPath
+		key = normPath(absPath)
 	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])[:16]
