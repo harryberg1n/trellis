@@ -95,3 +95,35 @@ func TestSticky_ObserveKeepsTheVectorOfTheFirstEvent(t *testing.T) {
 		t.Errorf("arms = %v, want exp1=control", got)
 	}
 }
+
+func TestSticky_LateExperimentJoinsAtNextEventAndStays(t *testing.T) {
+	s := NewSticky()
+	s.Observe(Event{Lane: "lane/x", Arms: map[string]string{"a": "control"}})
+	// lane/x is bucket 29 under exp1: share 50 gives treatment, share 20 control.
+	got := s.Resolve("lane/x", map[string]int{"a": 100, "exp1": 50})
+	if got["a"] != "control" || got["exp1"] != "treatment" {
+		t.Fatalf("arms = %v, want a=control exp1=treatment", got)
+	}
+	later := s.Resolve("lane/x", map[string]int{"a": 100, "exp1": 20})
+	if later["exp1"] != "treatment" {
+		t.Errorf("late experiment moved: %v, want exp1=treatment", later)
+	}
+}
+
+func TestSticky_FirstEventWithNoArmsDoesNotFreezeEmpty(t *testing.T) {
+	s := NewSticky()
+	s.Observe(Event{Lane: "lane/x"})
+	if got := s.Resolve("lane/x", map[string]int{"exp1": 50}); got["exp1"] != "treatment" {
+		t.Errorf("arms = %v, want exp1=treatment", got)
+	}
+}
+
+func TestSticky_RecordedArmIsNeverOverwritten(t *testing.T) {
+	s := NewSticky()
+	s.Observe(Event{Lane: "lane/x", Arms: map[string]string{"exp1": "control"}})
+	s.Observe(Event{Lane: "lane/x", Arms: map[string]string{"exp1": "treatment", "b": "treatment"}})
+	got := s.Resolve("lane/x", map[string]int{"exp1": 100})
+	if got["exp1"] != "control" || got["b"] != "treatment" {
+		t.Errorf("arms = %v, want exp1=control b=treatment", got)
+	}
+}
