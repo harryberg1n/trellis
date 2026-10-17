@@ -45,12 +45,3 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
-  layering:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: go test ./internal/layering
