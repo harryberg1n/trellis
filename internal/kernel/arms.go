@@ -38,23 +38,34 @@ func copyArms(m map[string]string) map[string]string {
 	return out
 }
 
-// Observe records ev.Arms as the lane's vector if it is the lane's first.
+// Observe records the arms of ev that the lane has no arm for yet. Arms are
+// sticky per experiment: a recorded arm is never overwritten.
 func (s *Sticky) Observe(ev Event) {
-	if _, ok := s.vec[ev.Lane]; !ok {
-		s.vec[ev.Lane] = copyArms(ev.Arms)
+	v := s.vec[ev.Lane]
+	if v == nil {
+		v = map[string]string{}
+		s.vec[ev.Lane] = v
+	}
+	for exp, arm := range ev.Arms {
+		if _, ok := v[exp]; !ok {
+			v[exp] = arm
+		}
 	}
 }
 
-// Resolve returns the lane's recorded vector, or assigns one from the current
-// shares (experiment -> percent) and records it.
+// Resolve returns the lane's arms. Every recorded arm is kept unchanged; an
+// experiment in shares (experiment -> percent) with no recorded arm is
+// assigned now and recorded, so it is sticky from then on.
 func (s *Sticky) Resolve(lane string, shares map[string]int) map[string]string {
-	if v, ok := s.vec[lane]; ok {
-		return copyArms(v)
+	v := s.vec[lane]
+	if v == nil {
+		v = map[string]string{}
+		s.vec[lane] = v
 	}
-	v := make(map[string]string, len(shares))
 	for exp, pct := range shares {
-		v[exp] = Assign(lane, exp, pct)
+		if _, ok := v[exp]; !ok {
+			v[exp] = Assign(lane, exp, pct)
+		}
 	}
-	s.vec[lane] = v
 	return copyArms(v)
 }
