@@ -40,8 +40,8 @@ func TestAssign_ShareWithinTwoPoints(t *testing.T) {
 			rt.Fatalf("%s: treatment at %d but not at %d", lane, lo, hi)
 		}
 	})
-	if n := treatmentCount("exp", 30, 1000); n < 280 || n > 320 {
-		t.Errorf("treatment = %d of 1000 for lane/<n>, want 280..320", n)
+	if n := treatmentCount("exp", 30, 10000); n < 2800 || n > 3200 {
+		t.Errorf("treatment = %d of 10000 for lane/<n>, want 2800..3200", n)
 	}
 }
 
@@ -50,14 +50,14 @@ func TestAssign_ExperimentsAreIndependent(t *testing.T) {
 	for i := 0; i < len(exps); i++ {
 		for j := i + 1; j < len(exps); j++ {
 			both := 0
-			for n := 0; n < 1000; n++ {
+			for n := 0; n < 10000; n++ {
 				lane := fmt.Sprintf("lane/%d", n)
 				if Assign(lane, exps[i], 50) == "treatment" && Assign(lane, exps[j], 50) == "treatment" {
 					both++
 				}
 			}
-			if both < 230 || both > 270 {
-				t.Errorf("%s&%s co-treatment = %d of 1000, want 230..270", exps[i], exps[j], both)
+			if both < 2300 || both > 2700 {
+				t.Errorf("%s&%s co-treatment = %d of 10000, want 2300..2700", exps[i], exps[j], both)
 			}
 		}
 	}
