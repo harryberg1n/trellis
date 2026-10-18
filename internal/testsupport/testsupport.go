@@ -50,3 +50,15 @@ func Write(t testing.TB, path, content string) {
 func Recorder() *run.Recorder {
 	return &run.Recorder{Inner: run.Exec{Clock: clock.Real()}}
 }
+
+// FakeTool puts a program called name first on PATH for the test. It writes
+// stderr to its standard error and exits with code. Use it for a tool the test
+// machine may not have (gitleaks) or must not run for real.
+func FakeTool(t testing.TB, name string, code int, stderr string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name+toolExt), []byte(toolScript(code, stderr)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}

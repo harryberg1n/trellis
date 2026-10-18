@@ -3,6 +3,7 @@ package hook
 import (
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,5 +171,30 @@ func TestParse_NotOursRecordsNothing(t *testing.T) {
 				t.Errorf("Parse = kind %q, %v; want no kind and no error", ev.Kind, err)
 			}
 		})
+	}
+}
+
+func TestParse_PreToolUseWithoutASessionIsAPerson(t *testing.T) {
+	e := newEnv(t)
+	body := `{"cwd":` + strconv.Quote(e.repo) + `,"tool_name":"Bash","tool_input":{"command":"git status"}}`
+	ev, ctx, err := Parse("PreToolUse", []byte(body))
+	if err != nil {
+		t.Fatalf("Parse: %v, want a PreToolUse with no session_id accepted (a person at a git hook)", err)
+	}
+	want := kernel.Context{Tool: "Bash", Args: map[string]string{"command": "git status", "cwd": e.repo, "repo": e.repo, "person": "1"}}
+	if ev.Kind != "" || ev.Session != "" || !reflect.DeepEqual(ctx, want) {
+		t.Errorf("event %+v, context %+v; want no kind, no session, context %+v", ev, ctx, want)
+	}
+	if _, _, err := Parse("PostToolUse", []byte(body)); err == nil || !strings.Contains(err.Error(), "session_id") {
+		t.Errorf("PostToolUse without a session: %v, want the session_id error", err)
+	}
+}
+
+func TestParse_PowerShellCommandIsInTheContext(t *testing.T) {
+	e := newEnv(t)
+	body := `{"session_id":"s","cwd":` + strconv.Quote(e.repo) + `,"tool_name":"PowerShell","tool_input":{"command":"git status"}}`
+	_, ctx, err := Parse("PreToolUse", []byte(body))
+	if err != nil || ctx.Args["command"] != "git status" || ctx.Tool != "PowerShell" {
+		t.Errorf("context %+v, %v; want tool PowerShell with its command", ctx, err)
 	}
 }

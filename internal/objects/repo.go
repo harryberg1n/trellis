@@ -64,3 +64,32 @@ func Branch(gitDir string) (string, error) {
 	}
 	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), nil
 }
+
+// DefaultBranch is the repo's default branch: the one refs/remotes/origin/HEAD
+// names in the common git dir, else "main". Nothing is spawned.
+func DefaultBranch(common string) string {
+	raw, err := os.ReadFile(filepath.Join(common, "refs", "remotes", "origin", "HEAD"))
+	if err != nil {
+		return "main"
+	}
+	ref, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "ref:")
+	if !ok {
+		return "main"
+	}
+	name, ok := strings.CutPrefix(strings.TrimSpace(ref), "refs/remotes/origin/")
+	if !ok || name == "" {
+		return "main"
+	}
+	return name
+}
+
+// IsPrimary reports whether the working tree at repo is the repo's main
+// working tree: its git dir is the common dir, as opposed to a linked worktree
+// whose git dir is a subdirectory of it.
+func IsPrimary(repo string) (bool, error) {
+	common, gitDir, err := GitDirs(repo)
+	if err != nil {
+		return false, err
+	}
+	return filepath.Clean(common) == filepath.Clean(gitDir), nil
+}
