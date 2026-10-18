@@ -3,7 +3,6 @@ package install
 import (
 	"errors"
 	"fmt"
-	"github.com/harryberg1n/trellis/internal/clock"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/harryberg1n/trellis/internal/clock"
 
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"

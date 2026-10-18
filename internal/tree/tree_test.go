@@ -1609,8 +1609,10 @@ func TestMerge_InterruptWithAStaleIndexLockStillLeavesThePrimaryClean(t *testing
 	defer cancel()
 	env := f.env(path)
 	env.Ctx = ctx
-	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel,
-		After: func() { testiso.Write(t, lock, "") }} // what a killed git leaves behind
+	env.Runner = &cancelAfter{
+		Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel,
+		After: func() { testiso.Write(t, lock, "") },
+	} // what a killed git leaves behind
 
 	err := Merge(env, "")
 
