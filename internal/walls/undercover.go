@@ -1,36 +1,13 @@
 package walls
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
 // maxMessageFile bounds a message file the wall reads.
 const maxMessageFile = 1 << 20
-
-// Tells: what a commit message or PR body must not carry (2026-09 owner).
-var (
-	trailerTell = regexp.MustCompile(`(?im)^[ \t]*(co-authored-by|claude-session|generated-by|assisted-by)[ \t]*:`)
-	footerTell  = regexp.MustCompile(`(?i)generated with|🤖|claude\.ai/code`)
-	nameTell    = regexp.MustCompile(`(?i)\b(claude|anthropic|sonnet|opus|haiku|chatgpt|openai|copilot|codex|gemini)\b`)
-)
-
-// tell is the reason text must not be committed, or "".
-func tell(text string) string {
-	if m := trailerTell.FindStringSubmatch(text); m != nil {
-		return fmt.Sprintf("an attribution trailer (%s)", m[1])
-	}
-	if m := footerTell.FindString(text); m != "" {
-		return fmt.Sprintf("an attribution footer (%q)", m)
-	}
-	if m := nameTell.FindString(text); m != "" {
-		return fmt.Sprintf("a tool or model name (%q)", m)
-	}
-	return ""
-}
 
 // undercover is the undercover policy (2026-09 owner): a commit message or PR
 // body with an attribution trailer or footer, or the tool or model name. It is
