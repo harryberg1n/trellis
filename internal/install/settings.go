@@ -1,5 +1,6 @@
-// Package install adds trellis's hook entries to a repo's harness settings,
-// removes exactly those, and checks the result.
+// Package install wires trellis's hook entries into the user-level harness
+// settings once per user, turns a repository on by its committed trellis.toml,
+// removes exactly its own entries, and checks the result.
 //
 // Settings are edited as text. The file is scanned for byte offsets and only
 // trellis's own hooks are spliced in or out, so every other byte (key order,

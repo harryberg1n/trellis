@@ -86,38 +86,6 @@ func addLine(root, name, line string, opts ...RecordOption) error {
 	}, opts...)
 }
 
-// recordInstall records the repository an install just wrote hooks into, and
-// returns a note when it recorded nothing. A linked worktree is recorded as its
-// primary checkout, but only when the primary holds trellis hooks of its own:
-// update re-installs what it records, and must not write hooks into a checkout
-// the user never installed in. Otherwise the primary is recorded as referenced
-// only, which the sweep of pins reads and update never re-installs. A tree that `trellis tree rm` later removes
-// leaves no record that is not found.
-func recordInstall(root, repo string) (note string, err error) {
-	canon, err := canonicalRepo(repo)
-	if err != nil {
-		return "", err
-	}
-	r, oerr := objects.Open(canon)
-	if oerr != nil || r.Primary || filepath.Base(r.Common) != ".git" {
-		return "", RecordRepo(root, canon)
-	}
-	primary := filepath.Dir(r.Common)
-	refs, err := ReferencedVersions(root, primary)
-	if err != nil {
-		return "", err
-	}
-	if len(refs) == 0 {
-		// Referenced only: the sweep reads the primary's worktrees, so this
-		// tree's pin is kept; update never re-installs the primary.
-		if err := RecordReferenced(root, primary); err != nil {
-			return "", err
-		}
-		return "not re-installed by update (primary checkout not installed; its pins are kept): run trellis install in " + primary + " to include this repository", nil
-	}
-	return "", RecordRepo(root, primary)
-}
-
 // ForgetRepo removes repo from the record; one not there is not an error.
 func ForgetRepo(root, repo string) error {
 	canon, err := canonicalRepo(repo)
@@ -147,16 +115,18 @@ func RecordCreatedPin(root, version string, opts ...RecordOption) error {
 	return addLine(root, pinsFile, version, opts...)
 }
 
-// ReferencedVersions is the versions the trellis hooks in repo's settings point
-// at, each once, in the order they appear. No settings file is none.
-func ReferencedVersions(root, repo string) ([]string, error) {
-	doc, err := readSettings(repo)
+// ReferencedVersions is the versions the trellis hooks in the user-level
+// settings of configDir point at, each once, in the order they appear. No
+// settings file is none.
+func ReferencedVersions(root, configDir string) ([]string, error) {
+	file := SettingsFile(configDir)
+	doc, err := readSettings(file)
 	if err != nil {
 		return nil, err
 	}
 	found, err := walkEntries(doc)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", SettingsPath(repo), err)
+		return nil, fmt.Errorf("%s: %w", file, err)
 	}
 	var out []string
 	for _, l := range found {
@@ -167,42 +137,6 @@ func ReferencedVersions(root, repo string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// referencedFile is the record of primary checkouts that hold no trellis hooks
-// themselves but have a linked worktree that does. The sweep of pinned
-// versions reads them, update never re-installs them.
-const referencedFile = "referenced.txt"
-
-// ReferencedRepos is the primary checkouts recorded as referenced only.
-func ReferencedRepos(root string) ([]string, error) { return readLines(root, referencedFile) }
-
-// RecordReferenced adds repo to the referenced-only record, once.
-func RecordReferenced(root, repo string) error {
-	canon, err := canonicalRepo(repo)
-	if err != nil {
-		return err
-	}
-	return addLine(root, referencedFile, canon)
-}
-
-// ForgetReferenced removes repo from the referenced-only record.
-func ForgetReferenced(root, repo string) error {
-	canon, err := canonicalRepo(repo)
-	if err != nil {
-		return err
-	}
-	return lockRecords(root, func() error {
-		repos, err := ReferencedRepos(root)
-		if err != nil {
-			return err
-		}
-		kept := slices.DeleteFunc(slices.Clone(repos), func(r string) bool { return r == canon })
-		if len(kept) == len(repos) {
-			return nil
-		}
-		return writeLines(root, referencedFile, kept)
-	})
 }
 
 // LinkedWorktrees is the linked worktrees of the repository around repo, read
@@ -236,32 +170,6 @@ func LinkedWorktrees(repo string) ([]string, error) {
 			return nil, fmt.Errorf("linked worktree %s is not found (deleted or unmounted?): git worktree prune forgets it, and trellis update continues once it is pruned", filepath.Dir(dotGit))
 		}
 		out = append(out, store.Canonical(filepath.Dir(dotGit)))
-	}
-	return out, nil
-}
-
-// SweepReferences is the versions the trellis hooks in repo and in each of its
-// linked worktrees point at, each once. A worktree installed before its
-// primary points at a pin the primary's own settings never name.
-func SweepReferences(root, repo string) ([]string, error) {
-	out, err := ReferencedVersions(root, repo)
-	if err != nil {
-		return nil, err
-	}
-	trees, err := LinkedWorktrees(repo)
-	if err != nil {
-		return nil, err
-	}
-	for _, t := range trees {
-		refs, err := ReferencedVersions(root, t)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range refs {
-			if !slices.Contains(out, v) {
-				out = append(out, v)
-			}
-		}
 	}
 	return out, nil
 }

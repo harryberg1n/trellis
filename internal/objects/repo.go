@@ -166,3 +166,23 @@ func HistoryRef(common string) string {
 	}
 	return "HEAD"
 }
+
+// PrimaryRoot is the main working tree of the repository: Root for the primary
+// checkout, the checkout that owns the common git dir for a linked worktree.
+// The state a repository keeps is keyed by this path, never by a worktree's.
+func (r Repo) PrimaryRoot() string {
+	if r.Primary || filepath.Base(r.Common) != ".git" {
+		return r.Root
+	}
+	return filepath.Dir(r.Common)
+}
+
+// MarkerFile is the file whose presence at a repository's root turns trellis on
+// in that repository. It is the repository's own, committed.
+const MarkerFile = "trellis.toml"
+
+// HasMarker reports whether the working tree at root holds the marker file.
+func HasMarker(root string) bool {
+	_, err := os.Stat(filepath.Join(root, MarkerFile))
+	return err == nil
+}

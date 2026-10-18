@@ -16,8 +16,8 @@ import (
 // the next deny of that row in this repository. The hook consumes it and logs
 // wall.overridden. Rows with no override (secrets, undercover, own-git-state)
 // are refused. The token lasts store.AllowTTL (10 minutes) and is keyed by the
-// repo id: a repo with no origin remote is keyed by its worktree path, so a
-// token minted in the primary checkout is not seen from a tree.
+// repo id, the primary checkout's: a token minted in a tree is seen from the
+// primary and the other way round.
 func allowVerb(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 		_, _ = io.WriteString(stderr, "usage: trellis allow <row-id>\n")
@@ -75,5 +75,5 @@ func storeOf(repo objects.Repo, clk clock.Clock) (*store.Store, error) {
 // storeIn opens repo's store under the given state root. Hook, allow and
 // report all arrive here, so they open the same directory.
 func storeIn(stateRoot string, repo objects.Repo, clk clock.Clock) (*store.Store, error) {
-	return store.Open(store.RepoDir(stateRoot, store.RepoID(repo.Remote, repo.Root)), clk)
+	return store.Open(store.RepoDir(stateRoot, store.RepoID(repo.Remote, repo.PrimaryRoot())), clk)
 }

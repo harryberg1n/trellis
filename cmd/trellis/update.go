@@ -9,6 +9,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/buildinfo"
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/install"
 	"github.com/harryberg1n/trellis/internal/objects"
 	runner "github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
@@ -34,19 +35,24 @@ func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return 2
 	}
 	root, exe, err := updatePaths()
+	var configDir string
+	if err == nil {
+		configDir, err = install.ConfigDir("")
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)
 		return 1
 	}
 	env := update.Env{
-		Runner:  runner.Exec{Clock: clock.Real()},
-		Ctx:     ctx,
-		Out:     stdout,
-		Root:    root,
-		Exe:     exe,
-		Version: buildinfo.Version,
-		GOOS:    runtime.GOOS,
-		GOARCH:  runtime.GOARCH,
+		Runner:    runner.Exec{Clock: clock.Real()},
+		Ctx:       ctx,
+		Out:       stdout,
+		Root:      root,
+		ConfigDir: configDir,
+		Exe:       exe,
+		Version:   buildinfo.Version,
+		GOOS:      runtime.GOOS,
+		GOARCH:    runtime.GOARCH,
 	}
 	if err := update.Run(env, update.Options{To: *to, Dry: *dry, AllowDev: *allowDev, ForgetMissing: *forget}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)

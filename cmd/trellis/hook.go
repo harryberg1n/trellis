@@ -37,6 +37,11 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	if err != nil {
 		raw = nil // Run records the empty payload as an internal.error
 	}
+	// Before anything else: no store is opened and nothing is written where
+	// the repository has not opted in.
+	if hook.Off(raw, os.Getenv("TRELLIS_OFF"), os.Getwd) {
+		return 0
+	}
 	clk := clock.Real()
 	deps := hook.Deps{
 		Start:  start,
@@ -53,7 +58,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	if cerr == nil {
 		id := "unscoped"
 		if err == nil {
-			id = store.RepoID(repo.Remote, repo.Root)
+			id = store.RepoID(repo.Remote, repo.PrimaryRoot())
 		}
 		deps.Fallback = filepath.Join(cache, "trellis-fallback", id)
 	}

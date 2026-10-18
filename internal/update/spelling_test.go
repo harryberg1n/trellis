@@ -3,6 +3,7 @@ package update
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/install"
@@ -32,7 +33,7 @@ func TestUpdate_SweepSeesReferencesThroughAnotherSpellingOfTheRoot(t *testing.T)
 	w := newWorld(t)
 	w.updatePins("v0.0.1", "v0.0.2")
 	w.oldPins("v0.0.5")
-	w.alsoReference(w.repos[1], "v0.0.1")
+	w.alsoReference("v0.0.1")
 	env := w.env()
 	env.Root = testiso.AltSpelling(t, w.root)
 
@@ -43,8 +44,8 @@ func TestUpdate_SweepSeesReferencesThroughAnotherSpellingOfTheRoot(t *testing.T)
 	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("pins = %v, want %v (v0.0.1 is referenced)", got, want)
 	}
-	// Re-installed through the other spelling, the hook was replaced, not added.
-	if got := w.referenced(w.repos[0]); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
-		t.Errorf("%s hooks point at %v, want [v0.0.4] and no second entry", w.repos[0], got)
+	// Rewired through the other spelling, the hooks were replaced, not added.
+	if n := strings.Count(read(t, install.SettingsFile(w.config)), "/bin/v0.0.4/trellis' hook "); n != 6 {
+		t.Errorf("%d hooks at v0.0.4 in the user-level file, want 6 and no second entry", n)
 	}
 }

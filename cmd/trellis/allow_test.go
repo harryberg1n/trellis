@@ -12,7 +12,7 @@ import (
 
 func TestAllow_WaivesTheNextDenyOnce(t *testing.T) {
 	bin := build(t)
-	repo := testiso.Repo(t)
+	repo := markedRepo(t)
 	state := filepath.Join(t.TempDir(), "state")
 	payload := string(testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolBash, repo,
 		map[string]string{"command": "git push origin main"}, testiso.WithSession("s-1")))

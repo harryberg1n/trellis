@@ -1,6 +1,7 @@
 // Package update is `trellis update`: fetch a release of trellis, verify it,
-// pin it under the state root, point every recorded repo's hooks at it, replace
-// the binary on PATH, and sweep the pins no one needs.
+// pin it under the state root, point the user-level hooks at it, remove the
+// project-local entries older installs left in every recorded repo and its
+// trees, replace the binary on PATH, and sweep the pins no one needs.
 package update
 
 import (
@@ -12,7 +13,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -34,14 +34,17 @@ const smokeTimeout = 10 * time.Second
 
 // Env is what update takes from the process.
 type Env struct {
-	Runner  run.Runner      // runs gh and the staged binary
-	Ctx     context.Context // cancelling it ends the running child; nil is never cancelled
-	Out     io.Writer
-	Root    string // the state root
-	Exe     string // the running binary, the one on PATH
-	Version string // buildinfo.Version of that binary
-	GOOS    string
-	GOARCH  string
+	Runner run.Runner      // runs gh and the staged binary
+	Ctx    context.Context // cancelling it ends the running child; nil is never cancelled
+	Out    io.Writer
+	Root   string // the state root
+	// ConfigDir is the Claude config directory whose settings.json holds the
+	// hooks update points at the new pin.
+	ConfigDir string
+	Exe       string // the running binary, the one on PATH
+	Version   string // buildinfo.Version of that binary
+	GOOS      string
+	GOARCH    string
 }
 
 // Options are the flags of the verb.
@@ -77,12 +80,15 @@ func Run(env Env, o Options) error {
 	if err != nil {
 		return flat(err)
 	}
-	alive, missing, tried, failed, err := u.reinstall(tag, bin, o.ForgetMissing, false)
+	if err := u.rewire(tag, bin, false); err != nil {
+		return flat(err)
+	}
+	missing, tried, failed, err := u.prune(o.ForgetMissing)
 	if err != nil {
 		return flat(err)
 	}
 	pathErr := u.replaceOnPath(bin)
-	u.sweep(tag, sweepFacts{alive: alive, missing: missing, forget: o.ForgetMissing})
+	u.sweep(tag, sweepFacts{missing: missing, failed: failed})
 	u.step("update: %s -> %s", env.Version, tag)
 	if pathErr != nil {
 		u.say("the binary on PATH was not replaced: %s", oneLine(pathErr))
@@ -257,14 +263,18 @@ func (u updater) smoke(staged, tag string) error {
 }
 
 // refresh is the work of an update that finds itself at the target version:
-// every recorded repo whose hooks do not all point at the running version is
-// re-installed, so a repo that failed last time is not left behind.
+// the user-level hooks are pointed at the running version if they are not
+// already, and every recorded repo is pruned of what an older install left, so
+// a step that failed last time is not left behind.
 func (u updater) refresh(forget bool) error {
 	bin := install.BinPath(u.Root, u.Version, filepath.Ext(u.Exe))
 	if _, err := os.Stat(bin); err != nil {
-		bin = u.Exe // Install pins the running binary when its pin is gone
+		bin = u.Exe // Wire pins the running binary when its pin is gone
 	}
-	_, _, tried, failed, err := u.reinstall(u.Version, bin, forget, true)
+	if err := u.rewire(u.Version, bin, true); err != nil {
+		return flat(err)
+	}
+	_, tried, failed, err := u.prune(forget)
 	if err != nil {
 		return flat(err)
 	}
@@ -288,31 +298,39 @@ func repoProblem(repo string) string {
 	return ""
 }
 
-// staleRefs says what the hooks of repo point at when they are not all the
-// running version, "" when they are.
-func staleRefs(root, repo, version string) string {
-	refs, err := install.ReferencedVersions(root, repo)
-	switch {
-	case err != nil:
-		return "unreadable settings"
-	case len(refs) == 1 && refs[0] == version:
-		return ""
-	case len(refs) == 0:
-		return "no hooks"
+// rewire points the six user-level hook entries at the pinned binary of tag.
+// A quiet rewire that changes nothing says nothing.
+func (u updater) rewire(tag, bin string, quiet bool) error {
+	file := install.SettingsFile(u.ConfigDir)
+	if u.dry {
+		u.step("rewire %s to %s", file, tag)
+		return nil
 	}
-	return strings.Join(refs, ", ")
+	opts := install.Options{ConfigDir: u.ConfigDir, Root: u.Root, Exe: bin, Version: tag}
+	actions, err := install.Wire(opts)
+	if err != nil {
+		return err
+	}
+	n := hooksChanged(actions)
+	if n > 0 || !quiet {
+		u.say("rewire %s: %d hooks updated", file, n)
+	}
+	for _, problem := range install.Doctor(opts) {
+		u.say("doctor %s: %s", file, problem)
+	}
+	return nil
 }
 
-// reinstall points every recorded repo's hooks at the pinned binary of tag.
-// It returns the repos it found, the ones it did not, how many it tried and how
-// many of those failed. A repo that is not found stays in the record unless
-// forget says to drop it: an unmounted drive or a moved checkout still has
-// hooks that point at a pin. With staleOnly a repo whose hooks already point
-// at tag alone is left as it is.
-func (u updater) reinstall(tag, bin string, forget, staleOnly bool) (alive, missing []string, tried, failed int, err error) {
+// prune removes trellis's entries from the project-local settings of every
+// recorded repo and its linked worktrees: the user-level file wires the hooks
+// now, and an entry left there fires every event twice. It returns the repos it
+// did not find, how many it tried and how many of those failed. A repo that is
+// not found stays in the record unless forget says to drop it: an unmounted
+// drive or a moved checkout may still hold entries that point at a pin.
+func (u updater) prune(forget bool) (missing []string, tried, failed int, err error) {
 	repos, err := install.Repos(u.Root)
 	if err != nil {
-		return nil, nil, 0, 0, err
+		return nil, 0, 0, err
 	}
 	for _, repo := range repos {
 		if why := repoProblem(repo); why != "" {
@@ -324,37 +342,23 @@ func (u updater) reinstall(tag, bin string, forget, staleOnly bool) (alive, miss
 			u.step("forget %s: %s", repo, why)
 			if !u.dry {
 				if err := install.ForgetRepo(u.Root, repo); err != nil {
-					return nil, nil, 0, 0, err
+					return nil, 0, 0, err
 				}
 			}
 			continue
 		}
-		alive = append(alive, repo)
-		if staleOnly {
-			stale := staleRefs(u.Root, repo, tag)
-			if stale == "" {
-				continue
-			}
-			u.step("reinstall %s: hooks point at %s, running %s", repo, stale, tag)
-		}
 		tried++
-		if u.dry {
-			u.step("install %s", repo)
-			continue
-		}
-		opts := install.Options{Repo: repo, Root: u.Root, Exe: bin, Version: tag}
-		actions, err := install.Install(opts)
+		actions, err := install.Prune(install.Options{Repo: repo, Root: u.Root, Dry: u.dry})
 		if err != nil {
-			u.say("install %s: %s", repo, oneLine(err))
+			u.say("prune %s: %s", repo, oneLine(err))
 			failed++
 			continue
 		}
-		u.say("install %s: %d hooks updated", repo, hooksChanged(actions))
-		for _, problem := range install.Doctor(opts) {
-			u.say("doctor %s: %s", repo, problem)
+		for _, a := range actions {
+			u.say("%s", a)
 		}
 	}
-	return alive, missing, tried, failed, nil
+	return missing, tried, failed, nil
 }
 
 // hooksChanged counts the actions that added or rewrote a hook; a hook that
@@ -404,13 +408,13 @@ func (u updater) replaceOnPath(bin string) error {
 
 // sweepFacts is what the sweep knows about the recorded repos.
 type sweepFacts struct {
-	alive, missing []string
-	forget         bool // --forget-missing: drop what is not found
+	missing []string // recorded repos that were not found
+	failed  int      // repos whose project-local settings could not be pruned
 }
 
-// sweep removes the pinned versions beyond the newest three that no live repo's
-// hooks point at. A repo whose settings cannot be read stops the sweep: its
-// hooks might point at anything.
+// sweep removes the pinned versions beyond the newest three that the user-level
+// hooks do not point at. A repo that is not found, or whose settings could not
+// be pruned, may still hold entries that point at any pin: the sweep stops.
 func (u updater) sweep(tag string, facts sweepFacts) {
 	keep := map[string]bool{tag: true, u.Version: true}
 	pins := append(pinned(u.Root), tag)
@@ -433,41 +437,18 @@ func (u updater) sweep(tag string, facts sweepFacts) {
 		u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", facts.missing[0])
 		return
 	}
-	// Primary checkouts recorded as referenced only: update never installs into
-	// them, but a linked worktree of theirs may point at a pin.
-	readable := facts.alive
-	only, err := install.ReferencedRepos(u.Root)
+	if facts.failed > 0 {
+		u.say("sweep skipped: %d repos could not be pruned, their hooks may point at any pin", facts.failed)
+		return
+	}
+	// The file is only read, so a dry run reads it too.
+	refs, err := install.ReferencedVersions(u.Root, u.ConfigDir)
 	if err != nil {
 		u.say("sweep: %s", oneLine(err))
 		return
 	}
-	for _, repo := range only {
-		if slices.Contains(readable, repo) {
-			continue
-		}
-		if why := repoProblem(repo); why != "" {
-			if facts.forget {
-				u.step("forget %s: %s", repo, why)
-				if !u.dry {
-					_ = install.ForgetReferenced(u.Root, repo) // a record left is read again next time
-				}
-				continue
-			}
-			u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", repo)
-			return
-		}
-		readable = append(readable, repo)
-	}
-	// ReferencedVersions only reads, so a dry run reads it too.
-	for _, repo := range readable {
-		refs, err := install.SweepReferences(u.Root, repo)
-		if err != nil {
-			u.say("sweep: %s: %s", repo, oneLine(err))
-			return
-		}
-		for _, r := range refs {
-			keep[r] = true
-		}
+	for _, r := range refs {
+		keep[r] = true
 	}
 	for _, v := range sweepPlan(pins, keep, created) {
 		if u.dry {
