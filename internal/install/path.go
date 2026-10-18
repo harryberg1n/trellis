@@ -16,8 +16,13 @@ func BinPath(root, version, ext string) string {
 }
 
 // Command is the hook command for one event: the pinned binary's absolute
-// path in double quotes, forward slashes so no shell eats a backslash, then
-// `hook <event>`.
+// path in double quotes, then `hook <event>`.
+//
+// Claude Code runs a hook command through its default shell: bash, which on
+// Windows is Git Bash. The command is therefore bash syntax. The double quotes
+// keep a path with spaces in one word, and the path is written with forward
+// slashes because bash would read a backslash as an escape; Windows accepts
+// forward slashes in a path.
 func Command(bin, event string) string {
 	return `"` + filepath.ToSlash(bin) + `" hook ` + event
 }
