@@ -3,30 +3,18 @@ package objects
 import (
 	"bytes"
 	"compress/zlib"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
 // gitT runs git in dir and returns trimmed stdout.
-func gitT(t testing.TB, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("git %v: %v: %s", args, err, errb.String())
-	}
-	return strings.TrimSpace(out.String())
-}
-
 func binary1MB() []byte {
 	b := make([]byte, 1<<20)
 	for i := range b {
@@ -84,13 +72,13 @@ func checkBlobs(t *testing.T, repo string, cases []blobCase) {
 			if err := os.Remove(filepath.Join(gitDir, "objects", id[:2], id[2:])); err != nil {
 				t.Fatal(err)
 			}
-			if gid := gitT(t, repo, "hash-object", "-w", c.name); gid != id {
+			if gid := testsupport.Git(t, repo, "hash-object", "-w", c.name); gid != id {
 				t.Fatalf("git hash-object id = %s, WriteBlob id = %s", gid, id)
 			}
 			if !bytes.Equal(inflated(t, gitDir, id), ours) {
 				t.Fatal("object bytes differ from git's")
 			}
-			gitT(t, repo, "fsck", "--no-dangling")
+			testsupport.Git(t, repo, "fsck", "--no-dangling")
 		})
 	}
 }
@@ -109,7 +97,7 @@ func TestWriteBlob_MatchesGitHashObjectSha256(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "init", "-q", "--object-format=sha256")
+	testsupport.Git(t, repo, "init", "-q", "--object-format=sha256")
 	if f, err := Format(filepath.Join(repo, ".git")); err != nil || f != "sha256" {
 		t.Fatalf("Format = %q, %v; want sha256", f, err)
 	}

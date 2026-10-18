@@ -1,20 +1,10 @@
 package objects
 
 import (
-	"os"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"path/filepath"
 	"testing"
 )
-
-func write(t testing.TB, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestFormat(t *testing.T) {
 	cases := []struct {
@@ -33,7 +23,7 @@ func TestFormat(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			if c.config != "" {
-				write(t, filepath.Join(dir, "config"), c.config)
+				testsupport.Write(t, filepath.Join(dir, "config"), c.config)
 			}
 			got, err := Format(dir)
 			if (err != nil) != c.wantErr || got != c.want {
@@ -46,9 +36,9 @@ func TestFormat(t *testing.T) {
 func TestFormat_WorktreeReadsCommonDirConfig(t *testing.T) {
 	root := t.TempDir()
 	common := filepath.Join(root, "main", ".git")
-	write(t, filepath.Join(common, "config"), "[extensions]\n\tobjectformat = sha256\n")
+	testsupport.Write(t, filepath.Join(common, "config"), "[extensions]\n\tobjectformat = sha256\n")
 	wt := filepath.Join(common, "worktrees", "w")
-	write(t, filepath.Join(wt, "commondir"), "../..\n")
+	testsupport.Write(t, filepath.Join(wt, "commondir"), "../..\n")
 	got, err := Format(wt)
 	if err != nil || got != "sha256" {
 		t.Fatalf("Format(worktree) = %q, %v; want sha256", got, err)

@@ -1,6 +1,7 @@
 package objects
 
 import (
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
-	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
@@ -21,10 +21,6 @@ const (
 	idEmpty  = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 	idTarget = "4cbb553f3f4ac2ee7b01ff6c951d6bf583c39c15" // "target.txt", a symlink target
 )
-
-func recorder() *run.Recorder {
-	return &run.Recorder{Inner: run.Exec{Clock: clock.Real()}}
-}
 
 func TestRefFor(t *testing.T) {
 	cases := map[string]string{
@@ -42,34 +38,34 @@ func TestRefFor(t *testing.T) {
 
 func TestAnchorTurn_SurvivesGcPrune(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "one.txt"), "hello\n")
-	write(t, filepath.Join(repo, "dir", "two.txt"), "a\n")
+	testsupport.Write(t, filepath.Join(repo, "one.txt"), "hello\n")
+	testsupport.Write(t, filepath.Join(repo, "dir", "two.txt"), "a\n")
 	// one.txt was hashed by the edit hook; two.txt is found by status.
 	id1, err := WriteBlob(filepath.Join(repo, ".git"), filepath.Join(repo, "one.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tree, commit, err := AnchorTurn(recorder(), repo, "feature/gc", "", map[string]string{"one.txt": id1})
+	tree, commit, err := AnchorTurn(testsupport.Recorder(), repo, "feature/gc", "", map[string]string{"one.txt": id1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "gc", "--prune=now")
+	testsupport.Git(t, repo, "gc", "--prune=now")
 	for _, id := range []string{idHello, idA, tree, commit} {
-		gitT(t, repo, "cat-file", "-e", id)
+		testsupport.Git(t, repo, "cat-file", "-e", id)
 	}
 }
 
 func TestAnchorTurn_BashEditsCaptured(t *testing.T) {
 	repo := testiso.Repo(t)
 	// Written the way Bash would: no hook saw them.
-	write(t, filepath.Join(repo, "new.txt"), "hello\n")
-	write(t, filepath.Join(repo, "deep", "er", "still.txt"), "a\n")
-	write(t, filepath.Join(repo, "README.md"), "") // a tracked file, emptied
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Write(t, filepath.Join(repo, "new.txt"), "hello\n")
+	testsupport.Write(t, filepath.Join(repo, "deep", "er", "still.txt"), "a\n")
+	testsupport.Write(t, filepath.Join(repo, "README.md"), "") // a tracked file, emptied
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := gitT(t, repo, "ls-tree", "-r", commit)
+	got := testsupport.Git(t, repo, "ls-tree", "-r", commit)
 	want := strings.Join([]string{
 		"100644 blob " + idEmpty + "\tREADME.md",
 		"100644 blob " + idA + "\tdeep/er/still.txt",
@@ -82,21 +78,21 @@ func TestAnchorTurn_BashEditsCaptured(t *testing.T) {
 
 func TestAnchorTurn_DeletedFileLeavesTree(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "sub", "keep.txt"), "a\n")
-	write(t, filepath.Join(repo, "sub", "gone.txt"), "hello\n")
-	gitT(t, repo, "add", ".")
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "two files")
+	testsupport.Write(t, filepath.Join(repo, "sub", "keep.txt"), "a\n")
+	testsupport.Write(t, filepath.Join(repo, "sub", "gone.txt"), "hello\n")
+	testsupport.Git(t, repo, "add", ".")
+	testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "two files")
 	if err := os.Remove(filepath.Join(repo, "sub", "gone.txt")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(repo, "README.md")); err != nil {
 		t.Fatal(err)
 	}
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := gitT(t, repo, "ls-tree", "-r", "--name-only", commit)
+	got := testsupport.Git(t, repo, "ls-tree", "-r", "--name-only", commit)
 	if got != "sub/keep.txt" {
 		t.Fatalf("tree lists %q, want only sub/keep.txt", got)
 	}
@@ -104,46 +100,46 @@ func TestAnchorTurn_DeletedFileLeavesTree(t *testing.T) {
 
 func TestAnchorTurn_ChainsPreviousAnchor(t *testing.T) {
 	repo := testiso.Repo(t)
-	r := recorder()
-	write(t, filepath.Join(repo, "a.txt"), "a\n")
+	r := testsupport.Recorder()
+	testsupport.Write(t, filepath.Join(repo, "a.txt"), "a\n")
 	tree1, c1, err := AnchorTurn(r, repo, "feature/chain", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "rev-parse", "refs/trellis/replay/feature--chain"); got != c1 {
+	if got := testsupport.Git(t, repo, "rev-parse", "refs/trellis/replay/feature--chain"); got != c1 {
 		t.Fatalf("ref = %s, want %s", got, c1)
 	}
-	write(t, filepath.Join(repo, "b.txt"), "hello\n")
+	testsupport.Write(t, filepath.Join(repo, "b.txt"), "hello\n")
 	_, c2, err := AnchorTurn(r, repo, "feature/chain", tree1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "rev-parse", c2+"^"); got != c1 {
+	if got := testsupport.Git(t, repo, "rev-parse", c2+"^"); got != c1 {
 		t.Fatalf("parent of the second anchor = %s, want %s", got, c1)
 	}
-	if got := gitT(t, repo, "rev-parse", "refs/trellis/replay/feature--chain"); got != c2 {
+	if got := testsupport.Git(t, repo, "rev-parse", "refs/trellis/replay/feature--chain"); got != c2 {
 		t.Fatalf("ref = %s, want %s", got, c2)
 	}
-	if got := gitT(t, repo, "ls-tree", "-r", "--name-only", c2); got != "README.md\na.txt\nb.txt" {
+	if got := testsupport.Git(t, repo, "ls-tree", "-r", "--name-only", c2); got != "README.md\na.txt\nb.txt" {
 		t.Fatalf("second anchor lists %q", got)
 	}
 	// The user's branch and index are untouched.
-	if got := gitT(t, repo, "status", "--porcelain"); got != "?? a.txt\n?? b.txt" {
+	if got := testsupport.Git(t, repo, "status", "--porcelain"); got != "?? a.txt\n?? b.txt" {
 		t.Fatalf("status = %q", got)
 	}
 }
 
 func TestAnchorTurn_RefIsNeverPushed(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "a.txt"), "a\n")
-	if _, _, err := AnchorTurn(recorder(), repo, "main", "", nil); err != nil {
+	testsupport.Write(t, filepath.Join(repo, "a.txt"), "a\n")
+	if _, _, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	bare := filepath.Join(t.TempDir(), "remote.git")
-	gitT(t, repo, "init", "-q", "--bare", bare)
-	gitT(t, repo, "remote", "add", "origin", bare)
-	gitT(t, repo, "push", "-q", "-u", "origin", "main")
-	got := gitT(t, repo, "ls-remote", "origin")
+	testsupport.Git(t, repo, "init", "-q", "--bare", bare)
+	testsupport.Git(t, repo, "remote", "add", "origin", bare)
+	testsupport.Git(t, repo, "push", "-q", "-u", "origin", "main")
+	got := testsupport.Git(t, repo, "ls-remote", "origin")
 	if !strings.Contains(got, "refs/heads/main") {
 		t.Fatalf("the push did not happen: %q", got)
 	}
@@ -154,9 +150,9 @@ func TestAnchorTurn_RefIsNeverPushed(t *testing.T) {
 
 func TestAnchorTurn_GitInvocationKinds(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "a", "b", "c.txt"), "a\n")
-	write(t, filepath.Join(repo, "d.txt"), "hello\n")
-	r := recorder()
+	testsupport.Write(t, filepath.Join(repo, "a", "b", "c.txt"), "a\n")
+	testsupport.Write(t, filepath.Join(repo, "d.txt"), "hello\n")
+	r := testsupport.Recorder()
 	if _, _, err := AnchorTurn(r, repo, "main", "", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -187,8 +183,8 @@ func TestAnchorTurn_GitInvocationKinds(t *testing.T) {
 
 func TestCorpus_NoContentInRecords(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "secret.txt"), "SENTINEL-7f3a\n")
-	tree, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Write(t, filepath.Join(repo, "secret.txt"), "SENTINEL-7f3a\n")
+	tree, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,45 +225,45 @@ const idTemplate = "3236cba6d6ebe89a13ca485fe17c890548d23da5" // "template\n", R
 
 func TestAnchorTurn_RevertToHeadDropsTheStaleBlob(t *testing.T) {
 	repo := testiso.Repo(t)
-	r := recorder()
-	write(t, filepath.Join(repo, "README.md"), "hello\n")
+	r := testsupport.Recorder()
+	testsupport.Write(t, filepath.Join(repo, "README.md"), "hello\n")
 	tree1, _, err := AnchorTurn(r, repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", tree1, "README.md"); got != "100644 blob "+idHello+"\tREADME.md" {
+	if got := testsupport.Git(t, repo, "ls-tree", tree1, "README.md"); got != "100644 blob "+idHello+"\tREADME.md" {
 		t.Fatalf("turn 1: %q", got)
 	}
-	write(t, filepath.Join(repo, "README.md"), "template\n") // back to HEAD's content
+	testsupport.Write(t, filepath.Join(repo, "README.md"), "template\n") // back to HEAD's content
 	tree2, _, err := AnchorTurn(r, repo, "main", tree1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", tree2, "README.md"); got != "100644 blob "+idTemplate+"\tREADME.md" {
+	if got := testsupport.Git(t, repo, "ls-tree", tree2, "README.md"); got != "100644 blob "+idTemplate+"\tREADME.md" {
 		t.Fatalf("turn 2 kept the stale blob: %q", got)
 	}
 }
 
 func TestAnchorTurn_FollowsHeadAfterCommit(t *testing.T) {
 	repo := testiso.Repo(t)
-	r := recorder()
-	write(t, filepath.Join(repo, "one.txt"), "hello\n")
+	r := testsupport.Recorder()
+	testsupport.Write(t, filepath.Join(repo, "one.txt"), "hello\n")
 	tree1, _, err := AnchorTurn(r, repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "add", "one.txt")
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "one")
-	write(t, filepath.Join(repo, "two.txt"), "a\n")
+	testsupport.Git(t, repo, "add", "one.txt")
+	testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "one")
+	testsupport.Write(t, filepath.Join(repo, "two.txt"), "a\n")
 	_, commit, err := AnchorTurn(r, repo, "main", tree1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "README.md\none.txt\ntwo.txt"
-	if got := gitT(t, repo, "ls-tree", "-r", "--name-only", commit); got != want {
+	if got := testsupport.Git(t, repo, "ls-tree", "-r", "--name-only", commit); got != want {
 		t.Fatalf("tree lists %q, want %q", got, want)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "one.txt"); got != "100644 blob "+idHello+"\tone.txt" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "one.txt"); got != "100644 blob "+idHello+"\tone.txt" {
 		t.Fatalf("one.txt: %q", got)
 	}
 }
@@ -277,14 +273,14 @@ func TestAnchorTurn_UnbornHeadStartsFromEmptyTree(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "init", "-q")
-	write(t, filepath.Join(repo, "only", "file.txt"), "hello\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Git(t, repo, "init", "-q")
+	testsupport.Write(t, filepath.Join(repo, "only", "file.txt"), "hello\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "100644 blob " + idHello + "\tonly/file.txt"
-	if got := gitT(t, repo, "ls-tree", "-r", commit); got != want {
+	if got := testsupport.Git(t, repo, "ls-tree", "-r", commit); got != want {
 		t.Fatalf("tree lists %q, want %q", got, want)
 	}
 }
@@ -295,67 +291,67 @@ func TestAnchorTurn_ExecBitIsRecorded(t *testing.T) {
 	if err := os.Chmod(filepath.Join(repo, "README.md"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "README.md"); got != "100755 blob "+idTemplate+"\tREADME.md" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "README.md"); got != "100755 blob "+idTemplate+"\tREADME.md" {
 		t.Fatalf("README.md: %q", got)
 	}
 }
 
 func TestAnchorTurn_SymlinkIsRecordedAs120000(t *testing.T) {
 	repo := testiso.Repo(t)
-	gitT(t, repo, "config", "core.symlinks", "true")
+	testsupport.Git(t, repo, "config", "core.symlinks", "true")
 	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
 		t.Skipf("symlinks are not available here: %v", err)
 	}
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idTarget+"\tlink" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idTarget+"\tlink" {
 		t.Fatalf("link: %q", got)
 	}
 }
 
 func TestAnchorTurn_SymlinkReplacedByFileIsRegular(t *testing.T) {
 	repo := testiso.Repo(t)
-	gitT(t, repo, "config", "core.filemode", "true") // a replacing file is taken as it is on disk
-	gitT(t, repo, "config", "core.symlinks", "true")
+	testsupport.Git(t, repo, "config", "core.filemode", "true") // a replacing file is taken as it is on disk
+	testsupport.Git(t, repo, "config", "core.symlinks", "true")
 	if err := os.Symlink("target.txt", filepath.Join(repo, "link")); err != nil {
 		t.Skipf("symlinks are not available here: %v", err)
 	}
-	gitT(t, repo, "add", "link")
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "link")
+	testsupport.Git(t, repo, "add", "link")
+	testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "link")
 	if err := os.Remove(filepath.Join(repo, "link")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(repo, "link"), "hello\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Write(t, filepath.Join(repo, "link"), "hello\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "100644 blob "+idHello+"\tlink" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "link"); got != "100644 blob "+idHello+"\tlink" {
 		t.Fatalf("link: %q", got)
 	}
 }
 
 func TestAnchorTurn_DirectoryReplacedByFile(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "d", "x.txt"), "hello\n")
-	gitT(t, repo, "add", "d")
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "dir")
+	testsupport.Write(t, filepath.Join(repo, "d", "x.txt"), "hello\n")
+	testsupport.Git(t, repo, "add", "d")
+	testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "dir")
 	if err := os.RemoveAll(filepath.Join(repo, "d")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(repo, "d"), "a\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Write(t, filepath.Join(repo, "d"), "a\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "100644 blob " + idTemplate + "\tREADME.md\n100644 blob " + idA + "\td"
-	if got := gitT(t, repo, "ls-tree", commit); got != want {
+	if got := testsupport.Git(t, repo, "ls-tree", commit); got != want {
 		t.Fatalf("root:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -365,14 +361,14 @@ func TestAnchorTurn_Sha256Repo(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "init", "-q", "--object-format=sha256")
-	write(t, filepath.Join(repo, "top.txt"), "hello\n")
-	write(t, filepath.Join(repo, "sub", "deep.txt"), "a\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Git(t, repo, "init", "-q", "--object-format=sha256")
+	testsupport.Write(t, filepath.Join(repo, "top.txt"), "hello\n")
+	testsupport.Write(t, filepath.Join(repo, "sub", "deep.txt"), "a\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(gitT(t, repo, "ls-tree", "-r", commit), "\n")
+	lines := strings.Split(testsupport.Git(t, repo, "ls-tree", "-r", commit), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("tree lists %q", lines)
 	}
@@ -382,7 +378,7 @@ func TestAnchorTurn_Sha256Repo(t *testing.T) {
 		if len(f) != 3 || len(f[2]) != 64 {
 			t.Fatalf("%q: id is not 64 hex chars", l)
 		}
-		if want := gitT(t, repo, "hash-object", name); f[2] != want {
+		if want := testsupport.Git(t, repo, "hash-object", name); f[2] != want {
 			t.Fatalf("%s: tree id %s, git hash-object %s", name, f[2], want)
 		}
 	}
@@ -393,46 +389,46 @@ func TestAnchorTurn_Sha256Repo(t *testing.T) {
 
 func TestAnchorTurn_RenameAndSpaces(t *testing.T) {
 	repo := testiso.Repo(t)
-	write(t, filepath.Join(repo, "a.txt"), "hello\n")
-	gitT(t, repo, "add", "a.txt")
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "a")
+	testsupport.Write(t, filepath.Join(repo, "a.txt"), "hello\n")
+	testsupport.Git(t, repo, "add", "a.txt")
+	testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "a")
 	if err := os.MkdirAll(filepath.Join(repo, "dir with space"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "mv", "a.txt", "dir with space/b c.txt")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Git(t, repo, "mv", "a.txt", "dir with space/b c.txt")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "100644 blob " + idTemplate + "\tREADME.md\n100644 blob " + idHello + "\tdir with space/b c.txt"
-	if got := gitT(t, repo, "ls-tree", "-r", commit); got != want {
+	if got := testsupport.Git(t, repo, "ls-tree", "-r", commit); got != want {
 		t.Fatalf("tree:\n%s\nwant:\n%s", got, want)
 	}
 }
 
 func TestAnchorTurn_SymbolicReplayRefFallsBackToGit(t *testing.T) {
 	repo := testiso.Repo(t)
-	r := recorder()
-	write(t, filepath.Join(repo, "a.txt"), "a\n")
+	r := testsupport.Recorder()
+	testsupport.Write(t, filepath.Join(repo, "a.txt"), "a\n")
 	_, c0, err := AnchorTurn(r, repo, "other", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// main's replay ref is a symbolic ref to other's: not a plain ref file.
-	gitT(t, repo, "symbolic-ref", "refs/trellis/replay/main", "refs/trellis/replay/other")
-	r2 := recorder()
+	testsupport.Git(t, repo, "symbolic-ref", "refs/trellis/replay/main", "refs/trellis/replay/other")
+	r2 := testsupport.Recorder()
 	_, c1, err := AnchorTurn(r2, repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "rev-parse", c1+"^"); got != c0 {
+	if got := testsupport.Git(t, repo, "rev-parse", c1+"^"); got != c0 {
 		t.Fatalf("parent = %s, want the commit the symbolic ref resolves to, %s", got, c0)
 	}
 	if k := r2.Kinds(); !contains(k, "rev-parse") {
 		t.Fatalf("kinds = %v, want a rev-parse fallback", k)
 	}
 	// Other's ref must not have moved through the symref.
-	if got := gitT(t, repo, "rev-parse", "refs/trellis/replay/other"); got != c0 {
+	if got := testsupport.Git(t, repo, "rev-parse", "refs/trellis/replay/other"); got != c0 {
 		t.Fatalf("other moved to %s", got)
 	}
 }
@@ -446,48 +442,43 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-func commitAll(t *testing.T, repo, msg string) {
-	t.Helper()
-	gitT(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", msg)
-}
-
 func TestAnchorTurn_NoFilemodeKeepsExistingMode(t *testing.T) {
 	repo := testiso.Repo(t)
-	gitT(t, repo, "config", "core.filemode", "false")
-	write(t, filepath.Join(repo, "run.sh"), "a\n")
-	gitT(t, repo, "add", "run.sh")
-	gitT(t, repo, "update-index", "--chmod=+x", "run.sh")
-	commitAll(t, repo, "script")
-	if got := gitT(t, repo, "ls-tree", "HEAD", "run.sh"); got != "100755 blob "+idA+"\trun.sh" {
+	testsupport.Git(t, repo, "config", "core.filemode", "false")
+	testsupport.Write(t, filepath.Join(repo, "run.sh"), "a\n")
+	testsupport.Git(t, repo, "add", "run.sh")
+	testsupport.Git(t, repo, "update-index", "--chmod=+x", "run.sh")
+	testsupport.CommitAll(t, repo, "script")
+	if got := testsupport.Git(t, repo, "ls-tree", "HEAD", "run.sh"); got != "100755 blob "+idA+"\trun.sh" {
 		t.Fatalf("setup: %q", got)
 	}
-	write(t, filepath.Join(repo, "run.sh"), "hello\n")
-	write(t, filepath.Join(repo, "fresh.sh"), "a\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Write(t, filepath.Join(repo, "run.sh"), "hello\n")
+	testsupport.Write(t, filepath.Join(repo, "fresh.sh"), "a\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "run.sh"); got != "100755 blob "+idHello+"\trun.sh" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "run.sh"); got != "100755 blob "+idHello+"\trun.sh" {
 		t.Fatalf("run.sh: %q", got)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "fresh.sh"); got != "100644 blob "+idA+"\tfresh.sh" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "fresh.sh"); got != "100644 blob "+idA+"\tfresh.sh" {
 		t.Fatalf("a new file must be 100644: %q", got)
 	}
 }
 
 func TestAnchorTurn_NoFilemodeKeepsSymlinkEntryAsCheckedOutFile(t *testing.T) {
 	repo := testiso.Repo(t)
-	gitT(t, repo, "config", "core.filemode", "false")
-	gitT(t, repo, "config", "core.symlinks", "false") // model a Windows checkout on every OS
-	gitT(t, repo, "update-index", "--add", "--cacheinfo", "120000,"+idTarget+",link")
-	write(t, filepath.Join(repo, "link"), "target.txt") // a core.symlinks=false checkout
-	commitAll(t, repo, "link")
-	write(t, filepath.Join(repo, "link"), "hello\n")
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	testsupport.Git(t, repo, "config", "core.filemode", "false")
+	testsupport.Git(t, repo, "config", "core.symlinks", "false") // model a Windows checkout on every OS
+	testsupport.Git(t, repo, "update-index", "--add", "--cacheinfo", "120000,"+idTarget+",link")
+	testsupport.Write(t, filepath.Join(repo, "link"), "target.txt") // a core.symlinks=false checkout
+	testsupport.CommitAll(t, repo, "link")
+	testsupport.Write(t, filepath.Join(repo, "link"), "hello\n")
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idHello+"\tlink" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "link"); got != "120000 blob "+idHello+"\tlink" {
 		t.Fatalf("link: %q", got)
 	}
 }
@@ -495,21 +486,21 @@ func TestAnchorTurn_NoFilemodeKeepsSymlinkEntryAsCheckedOutFile(t *testing.T) {
 func TestAnchorTurn_FilemodeTrueUsesLstat(t *testing.T) {
 	skipNoExecBit(t)
 	repo := testiso.Repo(t)
-	gitT(t, repo, "config", "core.filemode", "true")
-	write(t, filepath.Join(repo, "run.sh"), "a\n")
+	testsupport.Git(t, repo, "config", "core.filemode", "true")
+	testsupport.Write(t, filepath.Join(repo, "run.sh"), "a\n")
 	if err := os.Chmod(filepath.Join(repo, "run.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, repo, "add", "run.sh")
-	commitAll(t, repo, "script")
+	testsupport.Git(t, repo, "add", "run.sh")
+	testsupport.CommitAll(t, repo, "script")
 	if err := os.Chmod(filepath.Join(repo, "run.sh"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, commit, err := AnchorTurn(recorder(), repo, "main", "", nil)
+	_, commit, err := AnchorTurn(testsupport.Recorder(), repo, "main", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := gitT(t, repo, "ls-tree", commit, "run.sh"); got != "100644 blob "+idA+"\trun.sh" {
+	if got := testsupport.Git(t, repo, "ls-tree", commit, "run.sh"); got != "100644 blob "+idA+"\trun.sh" {
 		t.Fatalf("run.sh: %q", got)
 	}
 }

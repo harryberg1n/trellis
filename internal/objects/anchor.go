@@ -59,7 +59,7 @@ type change struct {
 // Git kinds used: status, ls-tree, mktree, commit-tree, update-ref; rev-parse
 // only when the replay ref is not a plain ref file (symbolic, reftable).
 func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tree, commit string, err error) {
-	common, gitDir, err := gitDirs(repo)
+	common, gitDir, err := GitDirs(repo)
 	if err != nil {
 		return "", "", err
 	}
@@ -306,9 +306,9 @@ func git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error
 	return res.Stdout, nil
 }
 
-// gitDirs is the repo's own git dir and the common one that holds objects and
+// GitDirs is the repo's own git dir and the common one that holds objects and
 // refs (the same, except in a linked worktree).
-func gitDirs(repo string) (common, gitDir string, err error) {
+func GitDirs(repo string) (common, gitDir string, err error) {
 	dot := filepath.Join(repo, ".git")
 	info, err := os.Stat(dot)
 	if err != nil {
