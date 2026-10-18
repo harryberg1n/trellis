@@ -103,3 +103,28 @@ func TestIsPrimary(t *testing.T) {
 		t.Errorf("IsPrimary(linked worktree) = %v, %v; want false", got, err)
 	}
 }
+
+func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *testing.T) {
+	repo := testiso.Repo(t)
+	common, _, err := GitDirs(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testsupport.Git(t, repo, "branch", "-m", "master")
+	if got := DefaultBranch(common); got != "master" {
+		t.Errorf("repo whose only branch is master: DefaultBranch = %q, want master", got)
+	}
+	testsupport.Git(t, repo, "branch", "main")
+	if got := DefaultBranch(common); got != "main" {
+		t.Errorf("both main and master: DefaultBranch = %q, want main", got)
+	}
+	testsupport.Git(t, repo, "branch", "trunk")
+	testsupport.Git(t, repo, "config", "init.defaultBranch", "trunk")
+	if got := DefaultBranch(common); got != "trunk" {
+		t.Errorf("init.defaultBranch=trunk with a trunk branch: DefaultBranch = %q, want trunk", got)
+	}
+	testsupport.Git(t, repo, "config", "init.defaultBranch", "gone")
+	if got := DefaultBranch(common); got != "main" {
+		t.Errorf("init.defaultBranch names no branch: DefaultBranch = %q, want main", got)
+	}
+}

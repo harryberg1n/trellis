@@ -65,22 +65,30 @@ func Branch(gitDir string) (string, error) {
 	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), nil
 }
 
-// DefaultBranch is the repo's default branch: the one refs/remotes/origin/HEAD
-// names in the common git dir, else "main". Nothing is spawned.
+// DefaultBranch is the repo's default branch, read from files without
+// starting git: the branch refs/remotes/origin/HEAD names in the common git
+// dir; else init.defaultBranch from the repo's config, if that branch exists;
+// else main if refs/heads/main exists, else master if refs/heads/master does;
+// else "main".
 func DefaultBranch(common string) string {
-	raw, err := os.ReadFile(filepath.Join(common, "refs", "remotes", "origin", "HEAD"))
-	if err != nil {
-		return "main"
+	if raw, err := os.ReadFile(filepath.Join(common, "refs", "remotes", "origin", "HEAD")); err == nil {
+		if ref, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "ref:"); ok {
+			if name, ok := strings.CutPrefix(strings.TrimSpace(ref), "refs/remotes/origin/"); ok && name != "" {
+				return name
+			}
+		}
 	}
-	ref, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "ref:")
-	if !ok {
-		return "main"
+	exists := func(branch string) bool {
+		_, found, _ := readRef(common, "refs/heads/"+branch)
+		return found
 	}
-	name, ok := strings.CutPrefix(strings.TrimSpace(ref), "refs/remotes/origin/")
-	if !ok || name == "" {
-		return "main"
+	if name, found, err := ConfigValue(common, "init", "defaultBranch"); err == nil && found && name != "" && exists(name) {
+		return name
 	}
-	return name
+	if !exists("main") && exists("master") {
+		return "master"
+	}
+	return "main"
 }
 
 // IsPrimary reports whether the working tree at repo is the repo's main
