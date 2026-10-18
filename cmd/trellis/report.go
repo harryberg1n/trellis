@@ -214,7 +214,7 @@ func readHistory(r runpkg.Runner, root string, now time.Time, events []kernel.Ev
 	branch := defaultBranch(r, root)
 	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
 	out, err := objects.Git(r, root, nil, "log", "--first-parent", "--since="+since,
-		"--format=%H"+fieldSep+"%aI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)
+		"--format=%H"+fieldSep+"%cI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)
 	if err != nil {
 		return nil, err
 	}
