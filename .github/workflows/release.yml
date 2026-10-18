@@ -73,12 +73,11 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          out="$(dist/trellis-linux-amd64 version)"
-          echo "$out"
-          case "$out" in
-            *"$TAG"*) ;;
-            *) echo "dist/trellis-linux-amd64 version printed \"$out\", want it to name $TAG" >&2; exit 1 ;;
-          esac
+          dist/trellis-linux-amd64 version
+          if [ "$(dist/trellis-linux-amd64 version | awk '{print $2}')" != "$TAG" ]; then
+            echo "dist/trellis-linux-amd64 version does not name exactly $TAG" >&2
+            exit 1
+          fi
       - name: publish
         if: steps.tag.outputs.skip != 'true'
         env:

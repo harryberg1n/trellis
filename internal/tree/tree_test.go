@@ -1574,14 +1574,6 @@ func TestMerge_RedCIWithControlBytesInNamesAndLogsPrintsNone(t *testing.T) {
 	}
 }
 
-func TestPlain_StripsC0ControlBytesButKeepsNewlineAndTab(t *testing.T) {
-	got := plain("a\x00b\x1b[31mc\x07d\re\x7ff\tg\nh\u00e9")
-
-	if want := "ab[31mcde\x7ff\tg\nh\u00e9"; got != want {
-		t.Errorf("plain = %q, want %q", got, want)
-	}
-}
-
 // redCheck answers the shell the --check command runs in with a failure whose
 // last line has an escape sequence.
 type redCheck struct{ Inner run.Runner }
@@ -1732,5 +1724,13 @@ func TestRm_MissingOriginDefaultSaysFetch(t *testing.T) {
 
 	if err == nil || err.Error() != "tree rm: origin/main not fetched: run git fetch origin" {
 		t.Errorf("err = %v, want the fetch line", err)
+	}
+}
+
+func TestPlain_StripsControlCharactersAndLineBreaksButKeepsTab(t *testing.T) {
+	got := plain("a\x00b\x1b[31mc\x07d\re\x7ff\tg\nh\u0085i\u009bjé")
+
+	if want := "ab[31mcdef\tghijé"; got != want {
+		t.Errorf("plain = %q, want %q", got, want)
 	}
 }

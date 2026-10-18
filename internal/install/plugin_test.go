@@ -1,7 +1,6 @@
 package install
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -81,12 +80,22 @@ func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
 			t.Errorf("release.yml lacks the VERSION check %q", want)
 		}
 	}
-	// The built binary names the tag before the release is created.
-	smoke := bytes.Index(raw, []byte(`out="$(dist/trellis-linux-amd64 version)"`))
-	names := strings.Contains(string(raw), `*"$TAG"*) ;;`)
-	publish := bytes.Index(raw, []byte("gh release create"))
-	if smoke < 0 || !names || publish < smoke {
-		t.Errorf("release.yml must run dist/trellis-linux-amd64 version and require the tag in it before gh release create (smoke at %d, requires tag %v, publish at %d)", smoke, names, publish)
+	// The built binary names exactly the tag, in a step that stops at the first
+	// error, before the release is created: v0.0.1 must not pass for v0.0.10.
+	text := string(raw)
+	start := strings.Index(text, "- name: smoke")
+	publish := strings.Index(text, "gh release create")
+	if start < 0 || publish < start {
+		t.Fatalf("release.yml has no smoke step before gh release create (smoke at %d, publish at %d)", start, publish)
+	}
+	step := text[start:publish]
+	for _, want := range []string{
+		"set -euo pipefail",
+		`[ "$(dist/trellis-linux-amd64 version | awk '{print $2}')" != "$TAG" ]`,
+	} {
+		if !strings.Contains(step, want) {
+			t.Errorf("the smoke step lacks %q", want)
+		}
 	}
 }
 

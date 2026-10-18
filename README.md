@@ -19,11 +19,11 @@ Install: download the binary for your platform from the latest GitHub release, c
 - `trellis tree new <name> [--path P]` opens a tree: a git worktree on a new branch of that name, cut from `origin`'s default branch, in a sibling directory. A name cannot be only digits.
 - `trellis tree sync` fetches `origin` and rebases this tree onto its default branch.
 - `trellis tree merge [--check CMD] [--rebase]` runs the optional check, pushes, opens or finds the pull request, waits for its checks, squash-merges it (`--rebase` keeps the commits) and removes the tree. It needs an authenticated `gh`. A repository with no remote lands the tree locally as one squash commit (`--rebase`: a `--no-ff` merge) and needs no `gh`. A repository with a remote needs `origin` and `origin/HEAD` (`git remote set-head origin -a`); trellis does not guess a base.
-- `trellis tree rm [<name>] [--force]` removes a tree and its branch. It refuses uncommitted work, and commits that are neither merged into the default branch nor pushed to the branch's upstream, unless `--force`.
+- `trellis tree rm [<name>] [--force]` removes a tree and its branch. It refuses uncommitted work, and commits that are neither merged into the default branch (a squash- or rebase-merged pull request counts, found with `gh`; in a repository with no remote, a `Merge tree <name>` commit on the default branch) nor pushed to the branch's upstream, unless `--force`.
 
 ## Exit codes
 
-0 done. 1 an error. 2 a failure you can fix and run again (red or cancelled checks, a conflict, a branch that is behind or blocked, a head that moved), or a usage mistake. 130 the verb was interrupted by Ctrl-C or a terminate signal; the running child and its process tree are ended first, and a local squash in flight is undone.
+0 done. 1 an error. 2 a failure you can fix and run again (red or cancelled checks, a conflict, a branch that is behind or blocked, a head that moved), or a usage mistake. 130 `tree`, `update` or `report` was interrupted by Ctrl-C or a terminate signal; the running child and its process tree are ended first, and a local squash in flight is undone.
 
 ## Tests
 
