@@ -28,9 +28,9 @@ func commonDir(gitDir string) string {
 	return filepath.Clean(p)
 }
 
-// configValue is the last value of section.key in the config file of gitDir (or of
+// ConfigValue is the last value of section.key in the config file of gitDir (or of
 // its commondir), read without starting git. Section and key match without case.
-func configValue(gitDir, section, key string) (string, bool, error) {
+func ConfigValue(gitDir, section, key string) (string, bool, error) {
 	f, err := os.Open(filepath.Join(commonDir(gitDir), "config"))
 	if os.IsNotExist(err) {
 		return "", false, nil
@@ -63,7 +63,7 @@ func configValue(gitDir, section, key string) (string, bool, error) {
 // has one, else the platform default. With it off, a file's exec bit is not
 // trusted.
 func coreFilemode(gitDir string) bool {
-	v, ok, err := configValue(gitDir, "core", "filemode")
+	v, ok, err := ConfigValue(gitDir, "core", "filemode")
 	if err != nil || !ok {
 		return filemodeDefault
 	}
