@@ -150,8 +150,10 @@ func TestLight_ScrubsGitEnv(t *testing.T) {
 }
 
 func TestScrubGitEnv(t *testing.T) {
-	in := []string{"PATH=/bin", "GIT_DIR=x", "GIT_WORK_TREE=y", "GIT_INDEX_FILE=z", "GIT_OBJECT_DIRECTORY=o",
-		"GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h"}
+	in := []string{
+		"PATH=/bin", "GIT_DIR=x", "GIT_WORK_TREE=y", "GIT_INDEX_FILE=z", "GIT_OBJECT_DIRECTORY=o",
+		"GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h",
+	}
 	want := []string{"PATH=/bin", "GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h"}
 	if got := scrubGitEnv(in); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)

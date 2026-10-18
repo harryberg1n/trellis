@@ -3,13 +3,14 @@ package objects
 import (
 	"bytes"
 	"compress/zlib"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
 )

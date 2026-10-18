@@ -4,6 +4,7 @@
 package testiso
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -125,7 +126,7 @@ func VerifyNoLeak(t *testing.T, probe string) {
 			if victimState(victim) != beforeState {
 				t.Errorf("the run changed the repository around it:\nbefore\n%s\nafter\n%s", beforeText, victimText(victim))
 			}
-			if got, _ := os.ReadFile(hostileGlobal); string(got) != string(beforeGlobal) {
+			if got, _ := os.ReadFile(hostileGlobal); !bytes.Equal(got, beforeGlobal) {
 				t.Errorf("the run changed the global git config it was handed:\n%s", got)
 			}
 		})

@@ -1,9 +1,10 @@
 package objects
 
 import (
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"path/filepath"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 func TestFormat(t *testing.T) {

@@ -1,0 +1,85 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - revive
+    - gocritic
+    - errorlint
+    - nolintlint
+    - depguard
+    - misspell
+    - unconvert
+    - unparam
+    - bodyclose
+    - prealloc
+  settings:
+    depguard:
+      rules:
+        pure:
+          files:
+            - "**/internal/kernel/**"
+            - "**/internal/measure/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "os"
+              desc: "kernel and measure are pure; effects come back as events"
+            - pkg: "os/exec"
+              desc: "kernel and measure never spawn"
+    revive:
+      rules:
+        - name: unused-parameter
+        - name: unused-receiver
+        - name: bare-return
+        - name: error-naming
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: import-shadowing
+        - name: receiver-naming
+        - name: var-naming
+        - name: early-return
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: defer
+        - name: unhandled-error
+          arguments:
+            - 'fmt\.Print.*'
+            - 'fmt\.Fprint.*'
+            - '\(\*os\.File\)\.Close'
+            - '\(\*bytes\.Buffer\)\.Write.*'
+            - '\(\*strings\.Builder\)\.Write.*'
+    gocritic:
+      enabled-tags: [diagnostic, style, performance]
+      disabled-checks: [hugeParam, unnamedResult, commentedOutCode, whyNoLint]
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    staticcheck:
+      checks: ["all", "-ST1000", "-ST1003"]
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [revive]
+        text: "exported|unhandled-error"
+      - path: internal/testiso/
+        linters: [revive, gocritic]
+        text: "exported|unhandled-error|early-return"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [github.com/harryberg1n/trellis]

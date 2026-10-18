@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -67,7 +68,7 @@ func TestCheckpoint_TornWriteKeepsTheOldFile(t *testing.T) {
 		t.Fatal("save succeeded despite the rename failure")
 	}
 	after, err := os.ReadFile(path)
-	if err != nil || string(after) != string(before) {
+	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("state.json changed: %q -> %q (%v)", before, after, err)
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "state.json.*")); len(left) != 0 {

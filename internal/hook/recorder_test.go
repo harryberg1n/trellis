@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/run"

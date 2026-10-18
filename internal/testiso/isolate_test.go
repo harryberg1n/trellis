@@ -398,7 +398,7 @@ func TestIsolate_StartsTheMSYSAnchorBeforeMovingTheTempDir(t *testing.T) {
 func TestWithoutQueueShims_DropsTheShimDirsAndKeepsTheOrder(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	in := strings.Join([]string{"/usr/bin", filepath.Join("home", "u", "aphrollo", "cargo-queue"), "/opt/git/cmd", "cargo-queue" + string(filepath.Separator)}, sep)
-	want := strings.Join([]string{"/usr/bin", "/opt/git/cmd"}, sep)
+	want := "/usr/bin" + sep + "/opt/git/cmd"
 	if got := withoutQueueShims(in); got != want {
 		t.Errorf("withoutQueueShims(%q) = %q, want %q", in, got, want)
 	}

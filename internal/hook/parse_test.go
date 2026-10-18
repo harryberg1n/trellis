@@ -1,11 +1,12 @@
 package hook
 
 import (
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
