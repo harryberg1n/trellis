@@ -61,15 +61,14 @@ func (g GH) ListIssues(repo, search string) ([]Issue, error) {
 
 // PR is a merged pull request as `gh pr list --json` reports it.
 type PR struct {
-	Number   int       `json:"number"`
-	Branch   string    `json:"headRefName"`
-	MergedAt time.Time `json:"mergedAt"`
+	Number int    `json:"number"`
+	Branch string `json:"headRefName"`
 }
 
 // ListMergedPRs lists the merged pull requests of repo.
 func (g GH) ListMergedPRs(repo string) ([]PR, error) {
 	args := append([]string{"pr", "list"}, repoArgs(repo)...)
-	args = append(args, "--state", "merged", "--limit", "500", "--json", "number,headRefName,mergedAt")
+	args = append(args, "--state", "merged", "--limit", "500", "--json", "number,headRefName")
 	out, err := g.gh(nil, args...)
 	if err != nil {
 		return nil, err

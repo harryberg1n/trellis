@@ -30,11 +30,11 @@ func Report(f Facts) []byte {
 	for _, w := range speed {
 		p("  %s  n=%d  p50=%.1f  p90=%.1f", w.Week, w.N, w.P50.Minutes(), w.P90.Minutes())
 	}
-	lead := LeadTimes(f)
 	var mins []float64
-	for _, lane := range sortedKeys(lead) {
-		mins = append(mins, lead[lane].Minutes())
+	for _, l := range LeadTimes(f) {
+		mins = append(mins, l.Time.Minutes())
 	}
+	sort.Float64s(mins) // the order of the log must not move the interval
 	lo, hi := Bootstrap(mins)
 	p("  mean %.1f minutes, 90%% interval [%.1f, %.1f] (bootstrap, seed %d, %d resamples)", mean(mins), lo, hi, Seed, Resamples)
 

@@ -16,36 +16,43 @@ type WeekSpeed struct {
 	P50, P90 time.Duration
 }
 
-// LeadTimes is each merged lane's time from lane opened to merged, in the
-// order of its merge. The open time is the lane's lane.opened event, else its
-// first event; a lane with no event, or one merged before it opened, has no
-// lead time.
-func LeadTimes(f Facts) map[string]time.Duration {
-	opened, first := map[string]time.Time{}, map[string]time.Time{}
-	for _, ev := range f.Events {
-		if ev.Lane == "" {
-			continue
-		}
-		if at, ok := first[ev.Lane]; !ok || ev.At.Before(at) {
-			first[ev.Lane] = ev.At
-		}
-		if at, ok := opened[ev.Lane]; ev.Kind == kernel.EvLaneOpened && (!ok || ev.At.Before(at)) {
-			opened[ev.Lane] = ev.At
-		}
-	}
-	out := map[string]time.Duration{}
+// Lead is one merge's lead time: from its lane opening to the merge.
+type Lead struct {
+	Lane     string
+	MergedAt time.Time
+	Time     time.Duration
+}
+
+// LeadTimes is the lead time of each merge that has a lane, in the order of
+// f.Merges. The open time is the lane's latest lane.opened event at or before
+// the merge, so a lane opened again after an earlier merge measures from the
+// reopening; with no such event it is the lane's first event at or before the
+// merge. A merge with neither has no lead time.
+func LeadTimes(f Facts) []Lead {
+	var out []Lead
 	for _, m := range linked(f) {
 		if m.Lane == "" {
 			continue
 		}
-		at, ok := opened[m.Lane]
-		if !ok {
-			at, ok = first[m.Lane]
+		var opened, first time.Time
+		foundOpen, foundFirst := false, false
+		for _, ev := range f.Events {
+			if ev.Lane != m.Lane || ev.At.After(m.At) {
+				continue
+			}
+			if !foundFirst || ev.At.Before(first) {
+				first, foundFirst = ev.At, true
+			}
+			if ev.Kind == kernel.EvLaneOpened && (!foundOpen || ev.At.After(opened)) {
+				opened, foundOpen = ev.At, true
+			}
 		}
-		if !ok || m.At.Before(at) {
-			continue
+		switch {
+		case foundOpen:
+			out = append(out, Lead{Lane: m.Lane, MergedAt: m.At, Time: m.At.Sub(opened)})
+		case foundFirst:
+			out = append(out, Lead{Lane: m.Lane, MergedAt: m.At, Time: m.At.Sub(first)})
 		}
-		out[m.Lane] = m.At.Sub(at)
 	}
 	return out
 }
@@ -53,14 +60,9 @@ func LeadTimes(f Facts) map[string]time.Duration {
 // Speed is the p50 and p90 lead time per ISO week of the merge, oldest week
 // first. A percentile is the nearest rank.
 func Speed(f Facts) []WeekSpeed {
-	lead := LeadTimes(f)
 	byWeek := map[string][]time.Duration{}
-	for _, m := range linked(f) {
-		d, ok := lead[m.Lane]
-		if m.Lane == "" || !ok {
-			continue
-		}
-		byWeek[week(m.At)] = append(byWeek[week(m.At)], d)
+	for _, l := range LeadTimes(f) {
+		byWeek[week(l.MergedAt)] = append(byWeek[week(l.MergedAt)], l.Time)
 	}
 	var out []WeekSpeed
 	for _, w := range sortedKeys(byWeek) {

@@ -56,11 +56,10 @@ type Usage struct {
 	Transcript    []byte
 }
 
-// PR is a merged pull request: its number, head branch and merge time.
+// PR is a merged pull request: its number and head branch.
 type PR struct {
-	Number   int
-	Branch   string
-	MergedAt time.Time
+	Number int
+	Branch string
 }
 
 // Facts is everything the report reads. Now is the caller's clock.

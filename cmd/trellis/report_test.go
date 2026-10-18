@@ -104,7 +104,7 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh := &ghFake{inner: testsupport.Recorder(), issues: "[]", prs: `[{"number":3,"headRefName":"C","mergedAt":"2026-10-07T09:00:00Z"}]`}
+	gh := &ghFake{inner: testsupport.Recorder(), issues: "[]", prs: `[{"number":3,"headRefName":"C"}]`}
 	return reportEnv{Repo: repo, Root: stateRoot, Runner: gh, Clock: c}, gh, transcript
 }
 
