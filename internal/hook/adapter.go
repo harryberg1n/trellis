@@ -8,6 +8,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/objects"
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // canonical maps a hook event as written on the command line ("PostToolUse",
@@ -191,11 +192,8 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 // answer is "outside".
 func relIn(root, file string) (string, error) {
 	inside := func(root, file string) (string, bool) {
-		rel, err := filepath.Rel(root, file)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-			return "", false
-		}
-		return filepath.ToSlash(rel), true
+		rel, ok := store.Within(root, file)
+		return filepath.ToSlash(rel), ok
 	}
 	if rel, ok := inside(root, file); ok {
 		return rel, nil
