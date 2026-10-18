@@ -2,6 +2,7 @@ package testiso
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,13 +84,44 @@ func PathWithOnly(t testing.TB, tools ...string) {
 	t.Setenv("PATH", strings.Join(dirs, string(os.PathListSeparator)))
 }
 
-// AddTree adds a linked worktree of the repo at primary, on a new branch, in
-// a sibling directory called dir, and returns its path.
+// AddTree adds a linked worktree of the repo at primary, on a new branch, in a
+// directory called dir, and returns its path. The tree lives under a short
+// directory of the sandbox, not beside the primary: the primary sits under the
+// test's temp dir, named for the whole test name, and Git for Windows refuses a
+// worktree path past 215 characters. The tree is removed when the test ends.
+//
+// Adapted from aphrollo-tools internal/tdd/core/gitpathlimit_windows.go at
+// 12b3724e. Incident: a fixture worktree under a long test name failed with
+// "fatal: '$GIT_DIR' too big".
 func AddTree(t testing.TB, primary, dir, branch string) string {
 	t.Helper()
-	tree := filepath.Join(filepath.Dir(primary), dir)
+	if sandboxRoot == "" {
+		t.Fatal("testiso.AddTree: the package's TestMain did not call testiso.Main")
+	}
+	parent := filepath.Join(sandboxRoot, "wt")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	slot, err := os.MkdirTemp(parent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(slot) })
+	tree := filepath.Join(canonical(slot), dir)
+	if err := treePathError(tree, gitPathLimit()); err != nil {
+		t.Fatal(err)
+	}
 	Git(t, primary, "worktree", "add", "-q", "-b", branch, tree)
 	return tree
+}
+
+// treePathError is the error for a worktree path git for Windows will refuse:
+// longer than limit, where limit is 0 when git has no limit.
+func treePathError(tree string, limit int) error {
+	if limit > 0 && len(tree) > limit {
+		return fmt.Errorf("testiso.AddTree: the worktree path is %d characters; git for Windows refuses a worktree path over %d", len(tree), limit)
+	}
+	return nil
 }
 
 // ForeignSettings is a settings file with two foreign hook entries, odd
