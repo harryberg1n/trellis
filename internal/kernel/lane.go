@@ -43,7 +43,7 @@ func Advance(s LaneState, ev Event) (LaneState, Event) {
 		for k, v := range ev.Detail {
 			d[k] = v
 		}
-		d["after"] = "merged"
+		d[DetailAfter] = "merged"
 		ev.Detail = d
 	}
 	return s, ev

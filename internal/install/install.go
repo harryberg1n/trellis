@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
-
 	"github.com/harryberg1n/trellis/internal/store"
 )
 

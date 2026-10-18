@@ -2,6 +2,8 @@ package testiso
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,8 +48,10 @@ func HookPayload(t testing.TB, event, tool, cwd string, input map[string]string,
 // scheme of the module's payload fixtures.
 func Fill(shape []byte, vars map[string]string) []byte {
 	out := string(shape)
-	for k, v := range vars {
-		quoted := JSONString(v)
+	// Sorted, so a value that itself holds another placeholder expands the
+	// same way on every run.
+	for _, k := range slices.Sorted(maps.Keys(vars)) {
+		quoted := JSONString(vars[k])
 		out = strings.ReplaceAll(out, k, quoted[1:len(quoted)-1])
 	}
 	return []byte(out)
