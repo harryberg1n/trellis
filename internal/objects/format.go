@@ -80,36 +80,14 @@ func coreFilemode(gitDir string) bool {
 // config file of gitDir (or of its commondir) without starting git. A repo
 // that does not say is sha1.
 func Format(gitDir string) (string, error) {
-	f, err := os.Open(filepath.Join(commonDir(gitDir), "config"))
-	if os.IsNotExist(err) {
-		return "sha1", nil
-	}
+	value, found, err := ConfigValue(gitDir, "extensions", "objectformat")
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }() // read-only
-	in := false
-	value := "sha1"
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if strings.HasPrefix(line, "[") {
-			name, _, _ := strings.Cut(strings.TrimPrefix(line, "["), "]")
-			in = strings.EqualFold(strings.TrimSpace(name), "extensions")
-			continue
-		}
-		if !in {
-			continue
-		}
-		line = stripComment(line)
-		k, v, ok := strings.Cut(line, "=")
-		if ok && strings.EqualFold(strings.TrimSpace(k), "objectformat") {
-			value = strings.ToLower(strings.Trim(strings.TrimSpace(v), `"`))
-		}
+	if !found {
+		return "sha1", nil
 	}
-	if err := sc.Err(); err != nil {
-		return "", err
-	}
+	value = strings.ToLower(value)
 	switch value {
 	case "sha1", "sha256":
 		return value, nil
