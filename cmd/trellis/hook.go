@@ -8,13 +8,12 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/hook"
-	"github.com/harryberg1n/trellis/internal/kernel"
 	runner "github.com/harryberg1n/trellis/internal/run"
-	"github.com/harryberg1n/trellis/internal/store"
+	"github.com/harryberg1n/trellis/internal/walls"
 )
 
 // hookVerb is `trellis hook <event>`: it reads one harness payload from stdin
-// and records it. It exits 0 whatever happens inside, and prints nothing. A
+// and records it. It exits 0 whatever happens inside; only a PreToolUse deny exits 2 and prints. A
 // missing event is a wiring mistake and exits 1, which the harness shows to
 // the user without blocking the agent.
 func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
@@ -36,7 +35,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	deps := hook.Deps{
 		Runner: runner.Exec{Clock: clk},
 		Clock:  clk,
-		Rows:   kernel.Table,
+		Rows:   walls.Rows(),
 	}
 	// In the user's cache dir (private to them, unlike a shared temp dir), not
 	// under the state root: it is for when the state root is what failed.
@@ -49,10 +48,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	repo, err := hook.Locate(hook.PayloadCwd(raw))
 	if err == nil {
 		deps.Repo = &repo
-		var root string
-		if root, err = store.Root(repo.Root); err == nil {
-			deps.Store, err = store.Open(store.RepoDir(root, store.RepoID(repo.Remote, repo.Root)), clk)
-		}
+		deps.Store, err = storeOf(repo, clk)
 	}
 	deps.Err = err
 	return hook.Run(args[0], bytes.NewReader(raw), stdout, stderr, deps)

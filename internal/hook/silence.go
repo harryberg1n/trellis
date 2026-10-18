@@ -35,8 +35,8 @@ type Deps struct {
 
 // Run reads one payload from stdin and records it. It returns the exit code,
 // and the code is always 0: a recorder that fails must not block the agent.
-// It writes nothing to stdout or stderr, which stay with the walls (lane 6);
-// the writers are unnamed until they print to them.
+// On PreToolUse it evaluates the walls (see preToolUse) and exits 2 for a deny;
+// on every other event it writes nothing to stdout or stderr.
 // Any failure, a panic included, is appended as an internal.error event, or
 // parked in the fallback store when the main one cannot take it.
 //
@@ -44,13 +44,13 @@ type Deps struct {
 // and then Sync the log and checkpoint. Blobs, including those AnchorTurn
 // writes, are not fsynced, so a power loss can lose them; the next Stop
 // re-anchors from the working tree, so the loss window is the current turn.
-func Run(event string, stdin io.Reader, _, _ io.Writer, deps Deps) (code int) {
+func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (code int) {
 	var p parsed
 	defer func() {
 		if r := recover(); r != nil {
 			fail(deps, event, p, fmt.Errorf("hook: panic: %v", r))
+			code = 0 // a hook that fails lets the call through
 		}
-		code = 0
 	}()
 	raw, err := ReadPayload(stdin)
 	if err != nil {
@@ -60,6 +60,9 @@ func Run(event string, stdin io.Reader, _, _ io.Writer, deps Deps) (code int) {
 	if p, err = parse(event, raw, deps.Repo); err != nil {
 		fail(deps, event, p, err)
 		return 0
+	}
+	if name, _ := canonical(event); name == "PreToolUse" {
+		return preToolUse(deps, event, p, stdout, stderr)
 	}
 	if p.ev.Kind == "" {
 		return 0
