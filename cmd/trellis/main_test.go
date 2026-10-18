@@ -2,15 +2,56 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
 func TestMain(m *testing.M) { testiso.Main(m) }
+
+// binOption changes how runBin starts the binary.
+type binOption func(*exec.Cmd)
+
+// inDir runs the binary with dir as its working directory.
+func inDir(dir string) binOption { return func(c *exec.Cmd) { c.Dir = dir } }
+
+// withEnv adds NAME=value entries to the binary's environment.
+func withEnv(kv ...string) binOption { return func(c *exec.Cmd) { c.Env = append(c.Env, kv...) } }
+
+// runBin runs the built binary with TRELLIS_STATE=state, stdin on its standard
+// input, and returns its exit code, stdout and stderr.
+func runBin(t *testing.T, bin, state, stdin string, args []string, opts ...binOption) (code int, stdout, stderr string) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+state)
+	cmd.Stdin = strings.NewReader(stdin)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	for _, o := range opts {
+		o(cmd)
+	}
+	var exit *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exit) {
+		t.Fatalf("%s %v: %v", bin, args, err)
+	}
+	return cmd.ProcessState.ExitCode(), out.String(), errb.String()
+}
+
+// helloEdit writes hello.txt in repo and returns the PostToolUse payload of an
+// Edit of it by session s-1.
+func helloEdit(t *testing.T, repo string) []byte {
+	t.Helper()
+	file := filepath.Join(repo, "hello.txt")
+	testiso.Write(t, file, "hello\n")
+	return testiso.HookPayload(t, kernel.HookPostToolUse, kernel.ToolEdit, repo,
+		map[string]string{"file_path": file, "old_string": "a", "new_string": "b"}, testiso.WithSession("s-1"))
+}
 
 // build compiles the trellis command with the given extra go build flags.
 func build(t *testing.T, flags ...string) string {

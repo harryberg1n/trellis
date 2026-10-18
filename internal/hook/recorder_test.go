@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -400,7 +399,7 @@ func TestRecorder_SyncFailureBecomesInternalError(t *testing.T) {
 
 func TestRecorder_ObjectToolInputIsSilent(t *testing.T) {
 	e := newEnv(t)
-	body := `{"session_id":"s","cwd":` + strconv.Quote(e.repo) + `,"hook_event_name":"%s","tool_name":"mcp__db__query",` +
+	body := `{"session_id":"s","cwd":` + testiso.JSONString(e.repo) + `,"hook_event_name":"%s","tool_name":"mcp__db__query",` +
 		`"tool_input":{"command":{"sql":"select 1","args":[1,2]},"file_path":["a","b"]},"tool_response":{"rows":[]}}`
 	for _, event := range []string{"PreToolUse", "PostToolUse"} {
 		e.do(t, event, []byte(strings.Replace(body, "%s", event, 1)))

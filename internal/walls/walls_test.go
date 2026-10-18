@@ -1,7 +1,6 @@
 package walls_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,28 +36,24 @@ func newWorld(t testing.TB) world {
 
 // fill expands the placeholders of a fixture payload.
 func (w world) fill(raw string) []byte {
-	esc := func(s string) string {
-		b, _ := json.Marshal(s)
-		return string(b[1 : len(b)-1])
-	}
-	return []byte(strings.NewReplacer(
-		"{{primary}}", esc(w.primary), "{{lane}}", esc(w.lane),
-		"{{primary_slash}}", filepath.ToSlash(w.primary), "{{lane_slash}}", filepath.ToSlash(w.lane),
-	).Replace(raw))
+	return testiso.Fill([]byte(raw), map[string]string{
+		"@PRIMARY@": w.primary, "@LANE@": w.lane,
+		"@PRIMARY_SLASH@": filepath.ToSlash(w.primary), "@LANE_SLASH@": filepath.ToSlash(w.lane),
+	})
 }
 
 // bash is a PreToolUse payload of a Bash call in dir.
 func bash(t testing.TB, dir, command string, session bool) []byte {
 	t.Helper()
-	m := map[string]any{"cwd": dir, "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]string{"command": command}}
-	if session {
-		m["session_id"] = "s-1"
+	return testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolBash, dir, map[string]string{"command": command}, sessionIf(session)...)
+}
+
+// sessionIf is the payload option of an agent's call, or none for a person's.
+func sessionIf(session bool) []testiso.PayloadOption {
+	if !session {
+		return nil
 	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return []testiso.PayloadOption{testiso.WithSession("s-1")}
 }
 
 // decide parses a PreToolUse payload and evaluates the shipped rows on it.
@@ -161,7 +156,7 @@ func TestWalls_TokenInsideAStringNeverBlocks(t *testing.T) {
 			t.Errorf("%q: actions %+v, want none: the token is inside a string, a comment or data", cmd, got)
 		}
 	}
-	psPayload := []byte(`{"session_id":"s","cwd":` + quote(w.lane) + `,"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Write-Host 'git reset --hard'"}}`)
+	psPayload := ps(t, w.lane, "Write-Host 'git reset --hard'")
 	if got := decide(t, psPayload, r); len(got) != 0 {
 		t.Errorf("PowerShell string: actions %+v, want none", got)
 	}
@@ -171,8 +166,6 @@ func TestWalls_TokenInsideAStringNeverBlocks(t *testing.T) {
 		}
 	}
 }
-
-func quote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 // dq is s as a double-quoted shell word: newlines stay newlines, as a commit
 // message typed into a Bash call has them.
@@ -237,7 +230,7 @@ func TestPrimaryWrite_OnlyWhileThePrimaryIsOnTheDefaultBranch(t *testing.T) {
 	w := newWorld(t)
 	r := quiet(t)
 	edit := func(cwd, file string) []byte {
-		return []byte(`{"session_id":"s","cwd":` + quote(cwd) + `,"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":` + quote(file) + `}}`)
+		return testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolEdit, cwd, map[string]string{"file_path": file}, testiso.WithSession("s"))
 	}
 	file := filepath.Join(w.primary, "docs", "a.md")
 	if d := verdicts(decide(t, edit(w.primary, file), r), kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "primary-write" {
@@ -533,14 +526,7 @@ func TestDiscard_BranchDeleteCountsCommitsNoOtherRefReaches(t *testing.T) {
 // ps is a PreToolUse payload of a PowerShell call in dir.
 func ps(t testing.TB, dir, command string) []byte {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{
-		"session_id": "s-1", "cwd": dir, "hook_event_name": "PreToolUse", "tool_name": "PowerShell",
-		"tool_input": map[string]string{"command": command},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
+	return testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolPowerShell, dir, map[string]string{"command": command}, testiso.WithSession("s-1"))
 }
 
 func TestPowerShell_NativePathsReachTheWalls(t *testing.T) {

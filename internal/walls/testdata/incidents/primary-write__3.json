@@ -1,1 +1,1 @@
-{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"{{primary}}","tool_name":"Write","tool_input":{"file_path":"{{primary_slash}}/new.txt","content":"x"}}
+{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@PRIMARY@","tool_name":"Write","tool_input":{"file_path":"@PRIMARY_SLASH@/new.txt","content":"x"}}

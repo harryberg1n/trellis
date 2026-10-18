@@ -1,1 +1,1 @@
-{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"{{lane}}","tool_name":"Edit","tool_input":{"file_path":"{{primary_slash}}/notes.txt","old_string":"a","new_string":"b"}}
+{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@LANE@","tool_name":"Edit","tool_input":{"file_path":"@PRIMARY_SLASH@/notes.txt","old_string":"a","new_string":"b"}}

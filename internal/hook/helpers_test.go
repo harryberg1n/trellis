@@ -2,11 +2,9 @@ package hook
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/clock"
@@ -62,23 +60,9 @@ func (e *env) do(t testing.TB, event string, payload []byte) {
 	}
 }
 
-func jsonEsc(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		panic(err)
-	}
-	return string(b[1 : len(b)-1])
-}
-
 // fill expands a payload template: every value is JSON-escaped, so a Windows
 // path or a content full of newlines stays valid JSON.
-func fill(shape []byte, vars map[string]string) []byte {
-	out := string(shape)
-	for k, v := range vars {
-		out = strings.ReplaceAll(out, k, jsonEsc(v))
-	}
-	return []byte(out)
-}
+func fill(shape []byte, vars map[string]string) []byte { return testiso.Fill(shape, vars) }
 
 func readShape(t testing.TB, name string) []byte {
 	t.Helper()

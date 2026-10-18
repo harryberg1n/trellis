@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -147,7 +146,7 @@ func TestParse_Refuses(t *testing.T) {
 		{"not json", "PostToolUse", []byte("{nope"), "payload"},
 		{"unknown event", "PreCompactish", fill(readShape(t, "stop"), v), "unknown hook event"},
 		{"no session", "Stop", []byte(`{"cwd":"x"}`), "session_id"},
-		{"edit without a path", "PostToolUse", []byte(`{"session_id":"s","cwd":"` + jsonEsc(e.repo) + `","tool_name":"Edit","tool_input":{}}`), "file_path"},
+		{"edit without a path", "PostToolUse", testiso.HookPayload(t, "PostToolUse", "Edit", e.repo, map[string]string{}, testiso.WithSession("s")), "file_path"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -177,8 +176,8 @@ func TestParse_NotOursRecordsNothing(t *testing.T) {
 
 func TestParse_PreToolUseWithoutASessionIsAPerson(t *testing.T) {
 	e := newEnv(t)
-	body := `{"cwd":` + strconv.Quote(e.repo) + `,"tool_name":"Bash","tool_input":{"command":"git status"}}`
-	ev, ctx, err := Parse("PreToolUse", []byte(body))
+	body := testiso.HookPayload(t, "PreToolUse", "Bash", e.repo, map[string]string{"command": "git status"})
+	ev, ctx, err := Parse("PreToolUse", body)
 	if err != nil {
 		t.Fatalf("Parse: %v, want a PreToolUse with no session_id accepted (a person at a git hook)", err)
 	}
@@ -186,15 +185,15 @@ func TestParse_PreToolUseWithoutASessionIsAPerson(t *testing.T) {
 	if ev.Kind != "" || ev.Session != "" || !reflect.DeepEqual(ctx, want) {
 		t.Errorf("event %+v, context %+v; want no kind, no session, context %+v", ev, ctx, want)
 	}
-	if _, _, err := Parse("PostToolUse", []byte(body)); err == nil || !strings.Contains(err.Error(), "session_id") {
+	if _, _, err := Parse("PostToolUse", body); err == nil || !strings.Contains(err.Error(), "session_id") {
 		t.Errorf("PostToolUse without a session: %v, want the session_id error", err)
 	}
 }
 
 func TestParse_PowerShellCommandIsInTheContext(t *testing.T) {
 	e := newEnv(t)
-	body := `{"session_id":"s","cwd":` + strconv.Quote(e.repo) + `,"tool_name":"PowerShell","tool_input":{"command":"git status"}}`
-	_, ctx, err := Parse("PreToolUse", []byte(body))
+	body := testiso.HookPayload(t, "PreToolUse", "PowerShell", e.repo, map[string]string{"command": "git status"}, testiso.WithSession("s"))
+	_, ctx, err := Parse("PreToolUse", body)
 	if err != nil || ctx.Args["command"] != "git status" || ctx.Tool != "PowerShell" {
 		t.Errorf("context %+v, %v; want tool PowerShell with its command", ctx, err)
 	}
