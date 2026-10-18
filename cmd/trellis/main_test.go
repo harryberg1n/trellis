@@ -115,3 +115,21 @@ func TestRun_NoVerbAndUnknownVerbExitTwo(t *testing.T) {
 		}
 	}
 }
+
+func TestRun_VersionAndHelpFlagsAreTheVerbs(t *testing.T) {
+	cases := []struct{ arg, want string }{
+		{"--version", "trellis dev (unknown)\n"},
+		{"--help", usage},
+		{"-h", usage},
+	}
+	for _, c := range cases {
+		var out, errb bytes.Buffer
+		if code := run([]string{c.arg}, &out, &errb); code != 0 {
+			t.Errorf("%s: exit %d: %s", c.arg, code, errb.String())
+			continue
+		}
+		if out.String() != c.want {
+			t.Errorf("%s printed %q, want %q", c.arg, out.String(), c.want)
+		}
+	}
+}
