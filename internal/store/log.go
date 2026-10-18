@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -276,9 +277,9 @@ func (s *Store) Park(ev kernel.Event) error {
 		return err
 	}
 	name := hex.EncodeToString(id[:])
-	d := make(map[string]string, len(ev.Detail)+1)
-	for k, v := range ev.Detail {
-		d[k] = v
+	d := maps.Clone(ev.Detail)
+	if d == nil {
+		d = make(map[string]string, 1)
 	}
 	d[parkIDKey] = name // lets a fold tell a parked event it already appended
 	ev.Detail = d
@@ -286,24 +287,10 @@ func (s *Store) Park(ev kernel.Event) error {
 	if err != nil {
 		return err
 	}
-	final := filepath.Join(s.pendingDir(), name+".json")
-	tmp := final + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(raw)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(tmp) // best effort: a stray .tmp is never globbed as pending; err is the one to report
-		return err
-	}
-	return os.Rename(tmp, final)
+	// Synced through the file's own Sync, not the store's seam: a parked event
+	// is never a Lazy write.
+	return WriteAtomic(s.pendingDir(), name+".json", raw,
+		WithSync((*os.File).Sync), WithMode(0o644))
 }
 
 // BytesRead is how many log bytes this Store has read, for tests that pin

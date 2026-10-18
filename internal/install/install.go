@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // timeoutSeconds is every trellis hook's timeout. A hook that cannot finish
@@ -129,21 +131,7 @@ func pin(bin, src string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".pin-*")
-	if err != nil {
-		return err
-	}
-	_, werr := tmp.Write(content)
-	cerr := tmp.Close()
-	if err := errors.Join(werr, cerr, os.Chmod(tmp.Name(), 0o755)); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Rename(tmp.Name(), bin); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	return nil
+	return store.WriteAtomic(dir, filepath.Base(bin), content, store.WithMode(0o755), store.WithTempPattern(".pin-*"))
 }
 
 func writeSettings(repo string, doc []byte) error {
