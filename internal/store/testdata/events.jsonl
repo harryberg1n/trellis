@@ -1,0 +1,4 @@
+{"seq":1,"kind":"lane.opened","lane":"lane/a","session":"s1","at":"2026-10-17T10:00:00Z","arms":{"exp1":"control"}}
+{"seq":2,"kind":"edit","lane":"lane/a","session":"s1","at":"2026-10-17T10:01:00Z"}
+{"seq":3,"kind":"lane.merged","lane":"lane/a","session":"s1","at":"2026-10-17T10:02:00Z","detail":{"pr":"7"}}
+{"seq":4,"kind":"commit","tree":"tree/b","lane":"lane/old","session":"s2","at":"2026-10-17T10:03:00Z"}
