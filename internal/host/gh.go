@@ -4,8 +4,10 @@ package host
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/run"
@@ -30,9 +32,15 @@ type GH struct {
 }
 
 func (g GH) gh(stdin []byte, args ...string) ([]byte, error) {
-	res, err := g.Runner.Light(run.Spec{Name: "gh", Args: args, Dir: g.Dir, Timeout: ghTimeout, Stdin: stdin})
+	return g.ghWithin(ghTimeout, stdin, args...)
+}
+
+// ghWithin runs gh for at most timeout. On a failure it still returns what gh
+// printed on its standard output.
+func (g GH) ghWithin(timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
+	res, err := g.Runner.Light(run.Spec{Name: "gh", Args: args, Dir: g.Dir, Timeout: timeout, Stdin: stdin})
 	if err != nil {
-		return nil, fmt.Errorf("host: gh %s: %w", args[0]+" "+args[1], err)
+		return res.Stdout, fmt.Errorf("host: gh %s: %w", strings.Join(args[:min(2, len(args))], " "), err)
 	}
 	return res.Stdout, nil
 }
@@ -102,4 +110,52 @@ func trimNL(b []byte) []byte {
 		b = b[:len(b)-1]
 	}
 	return b
+}
+
+// watchTimeout bounds `gh pr checks --watch`, which waits for CI.
+const watchTimeout = 45 * time.Minute
+
+// PRState is a pull request as `gh pr view --json number,state` reports it.
+type PRState struct {
+	Number int    `json:"number"`
+	State  string `json:"state"` // OPEN, CLOSED or MERGED
+}
+
+// ErrNoPR is what PRView reports for a branch with no pull request.
+var ErrNoPR = errors.New("host: no pull request for the branch")
+
+// PRView is the pull request of branch, or an error wrapping ErrNoPR.
+func (g GH) PRView(branch string) (PRState, error) {
+	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state")
+	if err != nil {
+		if strings.Contains(err.Error(), "no pull requests found") {
+			return PRState{}, fmt.Errorf("%w: %s", ErrNoPR, branch)
+		}
+		return PRState{}, err
+	}
+	var pr PRState
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return PRState{}, fmt.Errorf("host: reading gh pr view: %w", err)
+	}
+	return pr, nil
+}
+
+// CreatePR opens a pull request from the current branch of Dir into base,
+// titled and described from its commits, and returns the URL gh prints.
+func (g GH) CreatePR(base string) (string, error) {
+	out, err := g.gh(nil, "pr", "create", "--fill", "--base", base)
+	return string(trimNL(out)), err
+}
+
+// WatchChecks waits for the checks of pull request number to finish. A failed
+// check is an error, and the returned text is what gh printed.
+func (g GH) WatchChecks(number int) (string, error) {
+	out, err := g.ghWithin(watchTimeout, nil, "pr", "checks", strconv.Itoa(number), "--watch")
+	return string(trimNL(out)), err
+}
+
+// MergePR rebase-merges pull request number and deletes its branch.
+func (g GH) MergePR(number int) error {
+	_, err := g.gh(nil, "pr", "merge", strconv.Itoa(number), "--rebase", "--delete-branch")
+	return err
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
+	"github.com/harryberg1n/trellis/internal/run"
 )
 
 // discardUncommitted is the discard-uncommitted wall. A form that can throw
@@ -98,12 +99,10 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	if dir == "" {
 		return "", ""
 	}
-	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
-	out, err := objects.Git(a.r, dir, nil, args...)
+	got, err := statusCost(a.r, dir, paths)
 	if err != nil {
 		return "", fmt.Sprintf("could not measure what %s would discard (%s); allowed", form, firstLine(err.Error()))
 	}
-	got := parseStatus(out)
 	var want cost
 	switch {
 	case form == "reset --hard", form == "reset --merge", form == "checkout -f":
@@ -119,6 +118,28 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 		return "", ""
 	}
 	return fmt.Sprintf("%s discards %s%s", form, want, where), ""
+}
+
+// statusCost counts the files git status lists in dir, for paths or for the
+// whole tree: the measurement of discard-uncommitted.
+func statusCost(r run.Runner, dir string, paths []string) (cost, error) {
+	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
+	out, err := objects.Git(r, dir, nil, args...)
+	if err != nil {
+		return cost{}, err
+	}
+	return parseStatus(out), nil
+}
+
+// Dirty describes the work in the tree at dir that no commit holds ("2
+// unstaged files, 1 untracked file"), measured the way discard-uncommitted
+// measures it, or "" for a clean tree.
+func Dirty(r run.Runner, dir string) (string, error) {
+	c, err := statusCost(r, dir, nil)
+	if err != nil {
+		return "", err
+	}
+	return c.String(), nil
 }
 
 // measureBranch counts the commits `branch -D` would make unreachable from

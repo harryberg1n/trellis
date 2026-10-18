@@ -29,6 +29,10 @@ type Spec struct {
 	Dir     string
 	Timeout time.Duration
 	Stdin   []byte
+	// Direct marks a child the user's own verb asked for (trellis tree ...):
+	// it may write git state, which the refusal of ErrOwnGitState keeps from
+	// the children of tools.
+	Direct bool
 }
 
 // Result is what a finished child left.
@@ -67,8 +71,10 @@ type tree interface {
 // A git child that would write a ref outside refs/trellis/ or a tree's index
 // is refused with ErrOwnGitState before it starts.
 func Light(c clock.Clock, spec Spec) (Result, error) {
-	if err := ownGitState(spec); err != nil {
-		return Result{}, err
+	if !spec.Direct {
+		if err := ownGitState(spec); err != nil {
+			return Result{}, err
+		}
 	}
 	if spec.Timeout <= 0 {
 		return Result{}, ErrNoTimeout
