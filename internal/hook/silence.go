@@ -43,9 +43,9 @@ func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (co
 		}
 		code = 0
 	}()
-	raw, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
+	raw, err := ReadPayload(stdin)
 	if err != nil {
-		fail(deps, event, p, fmt.Errorf("hook: reading stdin: %w", err))
+		fail(deps, event, p, err)
 		return 0
 	}
 	if p, err = parse(event, raw); err != nil {
@@ -101,7 +101,7 @@ func record(deps Deps, p *parsed) error {
 	// disk. Stop and SessionEnd append lazily and then Sync, which is the same
 	// durability as a durable append with half the fsyncs.
 	boundary := ev.Kind == kernel.EvTurnAnchored || ev.Kind == kernel.EvSessionUsage
-	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, engine.Lazy); err != nil {
+	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, engine.WithDurability(store.Lazy)); err != nil {
 		return fmt.Errorf("hook: recording %s: %w", ev.Kind, err)
 	}
 	if boundary {

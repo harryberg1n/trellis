@@ -9,6 +9,7 @@ package hook
 
 import (
 	"bytes"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"sort"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func TestHookLatency_StopP95Under300ms(t *testing.T) {
 		// timed. The files stay few, as in a real turn, so the anchor's cost
 		// does not grow with the run.
 		g := gens[i%len(gens)]
-		writeFile(t, g.file, text(i, 200+i%500))
+		testsupport.Write(t, g.file, text(i, 200+i%500))
 		if code := Run("PostToolUse", bytes.NewReader(g.payload), &stdout, &stderr, e.deps); code != 0 {
 			t.Fatalf("edit %d: exit %d", i, code)
 		}

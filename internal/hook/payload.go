@@ -6,14 +6,13 @@
 package hook
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"io"
+
+	"github.com/harryberg1n/trellis/internal/objects"
 )
 
 // payload is the part of a harness payload the recorder reads. Every hook
@@ -36,6 +35,15 @@ type payload struct {
 // the biggest payload there is.
 const maxPayload = 64 << 20
 
+// ReadPayload reads one payload from r, up to the size bound.
+func ReadPayload(r io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, maxPayload))
+	if err != nil {
+		return nil, fmt.Errorf("reading stdin: %w", err)
+	}
+	return raw, nil
+}
+
 func decode(raw []byte) (payload, error) {
 	var p payload
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -51,99 +59,30 @@ func decode(raw []byte) (payload, error) {
 type Repo struct {
 	Root   string // the working tree
 	GitDir string // its own git dir (the worktree's, in a linked worktree)
-	Common string // the git dir that holds objects, refs and config
 	Lane   string // the branch HEAD names, or "detached"
 	Remote string // the URL of remote origin, "" if it has none
 }
 
-// ErrNotARepo is what Locate returns when no .git lies at or above cwd.
-var ErrNotARepo = errors.New("hook: not in a git repository")
-
-// Locate finds the repository around cwd by walking up to a .git entry and
-// reading HEAD, the worktree's commondir and the config. It starts no process.
+// Locate finds the repository around cwd. The reading is objects' (FindRoot,
+// GitDirs, Branch, ConfigValue); nothing is spawned.
 func Locate(cwd string) (Repo, error) {
-	if !filepath.IsAbs(cwd) {
-		return Repo{}, fmt.Errorf("hook: cwd %q is not absolute", cwd)
-	}
-	dir := filepath.Clean(cwd)
-	for {
-		dot := filepath.Join(dir, ".git")
-		if info, err := os.Stat(dot); err == nil {
-			return readRepo(dir, dot, info.IsDir())
-		}
-		up := filepath.Dir(dir)
-		if up == dir {
-			return Repo{}, fmt.Errorf("%w: %s", ErrNotARepo, cwd)
-		}
-		dir = up
-	}
-}
-
-func readRepo(root, dot string, isDir bool) (Repo, error) {
-	r := Repo{Root: root, GitDir: dot}
-	if !isDir {
-		raw, err := os.ReadFile(dot)
-		if err != nil {
-			return Repo{}, err
-		}
-		p, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir:")
-		if !ok {
-			return Repo{}, fmt.Errorf("hook: %s is not a gitdir file", dot)
-		}
-		r.GitDir = strings.TrimSpace(p)
-		if !filepath.IsAbs(r.GitDir) {
-			r.GitDir = filepath.Join(root, r.GitDir)
-		}
-	}
-	r.Common = r.GitDir
-	if raw, err := os.ReadFile(filepath.Join(r.GitDir, "commondir")); err == nil {
-		if p := strings.TrimSpace(string(raw)); p != "" {
-			if !filepath.IsAbs(p) {
-				p = filepath.Join(r.GitDir, p)
-			}
-			r.Common = filepath.Clean(p)
-		}
-	}
-	head, err := os.ReadFile(filepath.Join(r.GitDir, "HEAD"))
+	root, err := objects.FindRoot(cwd)
 	if err != nil {
 		return Repo{}, err
 	}
-	r.Lane = laneOf(string(head))
-	r.Remote = originURL(filepath.Join(r.Common, "config"))
-	return r, nil
-}
-
-// laneOf is the branch a HEAD file names. A HEAD that holds a commit id is a
-// detached checkout.
-func laneOf(head string) string {
-	ref, ok := strings.CutPrefix(strings.TrimSpace(head), "ref:")
-	if !ok {
-		return "detached"
-	}
-	ref = strings.TrimSpace(ref)
-	return strings.TrimPrefix(ref, "refs/heads/")
-}
-
-// originURL is remote.origin.url from a git config file, "" if there is none.
-func originURL(config string) string {
-	f, err := os.Open(config)
+	_, gitDir, err := objects.GitDirs(root)
 	if err != nil {
-		return ""
+		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
 	}
-	defer f.Close()
-	in, url := false, ""
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if strings.HasPrefix(line, "[") {
-			in = strings.EqualFold(strings.Join(strings.Fields(line), " "), `[remote "origin"]`)
-			continue
-		}
-		if k, v, ok := strings.Cut(line, "="); in && ok && strings.EqualFold(strings.TrimSpace(k), "url") {
-			url = strings.Trim(strings.TrimSpace(v), `"`)
-		}
+	lane, err := objects.Branch(gitDir)
+	if err != nil {
+		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
 	}
-	return url
+	remote, _, err := objects.ConfigValue(gitDir, `remote "origin"`, "url")
+	if err != nil {
+		return Repo{}, fmt.Errorf("remote of %s: %w", root, err)
+	}
+	return Repo{Root: root, GitDir: gitDir, Lane: lane, Remote: remote}, nil
 }
 
 // PayloadCwd is the cwd a payload names, "" if it names none or is not JSON.

@@ -13,9 +13,6 @@ import (
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
-// maxHookPayload bounds what a hook reads from stdin.
-const maxHookPayload = 64 << 20
-
 // hookVerb is `trellis hook <event>`: it reads one harness payload from stdin
 // and records it. It exits 0 whatever happens inside, and prints nothing. A
 // missing event is a wiring mistake and exits 1, which the harness shows to
@@ -25,7 +22,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stderr, "usage: trellis hook <event>\n")
 		return 1
 	}
-	raw, err := io.ReadAll(io.LimitReader(stdin, maxHookPayload))
+	raw, err := hook.ReadPayload(stdin)
 	if err != nil {
 		raw = nil // Run records the empty payload as an internal.error
 	}
@@ -38,19 +35,12 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// root is what failed.
 		Fallback: filepath.Join(os.TempDir(), "trellis-fallback"),
 	}
-	deps.Store, deps.Err = openStore(raw, clk)
+	if repo, err := hook.Locate(hook.PayloadCwd(raw)); err != nil {
+		deps.Err = err
+	} else if root, err := store.Root(repo.Root); err != nil {
+		deps.Err = err
+	} else {
+		deps.Store, deps.Err = store.Open(store.RepoDir(root, store.RepoID(repo.Remote, repo.Root)), clk)
+	}
 	return hook.Run(args[0], bytes.NewReader(raw), stdout, stderr, deps)
-}
-
-// openStore opens the state directory of the repo the payload's cwd is in.
-func openStore(raw []byte, clk clock.Clock) (*store.Store, error) {
-	repo, err := hook.Locate(hook.PayloadCwd(raw))
-	if err != nil {
-		return nil, err
-	}
-	root, err := store.Root(repo.Root)
-	if err != nil {
-		return nil, err
-	}
-	return store.Open(store.RepoDir(root, store.RepoID(repo.Remote, repo.Root)), clk)
 }

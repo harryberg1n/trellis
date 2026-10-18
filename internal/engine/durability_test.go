@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 func TestStep_DurableByDefaultLazyOnRequest(t *testing.T) {
@@ -20,7 +21,7 @@ func TestStep_DurableByDefaultLazyOnRequest(t *testing.T) {
 	}
 
 	n = 0
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "l"), kernel.Context{}, Lazy); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "l"), kernel.Context{}, WithDurability(store.Lazy)); err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {

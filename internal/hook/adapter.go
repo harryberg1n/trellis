@@ -8,32 +8,45 @@ import (
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
-// Hook events the recorder knows. The ones in ignored are harness events that
-// carry nothing to record yet; they are accepted so wiring one up is not an
-// error.
-var events = map[string]string{
-	"pretooluse":         "PreToolUse",
-	"posttooluse":        "PostToolUse",
-	"stop":               "Stop",
-	"sessionstart":       "SessionStart",
-	"sessionend":         "SessionEnd",
-	"userpromptsubmit":   "UserPromptSubmit",
-	"posttoolusefailure": "PostToolUseFailure",
-	"subagentstart":      "SubagentStart",
-	"subagentstop":       "SubagentStop",
-	"notification":       "Notification",
-	"precompact":         "PreCompact",
+// canonical maps a hook event as written on the command line ("PostToolUse",
+// "post-tool-use", "posttooluse") to the harness's name for it. Besides the
+// events the recorder records, it accepts the harness events that carry
+// nothing to record yet, so wiring one up is not an error.
+func canonical(event string) (string, bool) {
+	switch strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(event)) {
+	case "pretooluse":
+		return "PreToolUse", true
+	case "posttooluse":
+		return "PostToolUse", true
+	case "stop":
+		return "Stop", true
+	case "sessionstart":
+		return "SessionStart", true
+	case "sessionend":
+		return "SessionEnd", true
+	case "userpromptsubmit":
+		return "UserPromptSubmit", true
+	case "posttoolusefailure":
+		return "PostToolUseFailure", true
+	case "subagentstart":
+		return "SubagentStart", true
+	case "subagentstop":
+		return "SubagentStop", true
+	case "notification":
+		return "Notification", true
+	case "precompact":
+		return "PreCompact", true
+	}
+	return "", false
 }
 
-// fileTools are the tools whose tool_input names the file they change.
-var fileTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
-
-// canonical maps a hook event as written on the command line ("PostToolUse",
-// "post-tool-use", "posttooluse") to the harness's name for it.
-func canonical(event string) (string, bool) {
-	k := strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(event))
-	name, ok := events[k]
-	return name, ok
+// isFileTool reports whether tool's tool_input names the file it changes.
+func isFileTool(tool string) bool {
+	switch tool {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		return true
+	}
+	return false
 }
 
 // parsed is a payload read as far as the effects need it.
@@ -118,7 +131,7 @@ func parse(event string, raw []byte) (parsed, error) {
 	}
 	out.ctx = kernel.Context{Tool: p.ToolName, Args: args}
 
-	if !fileTools[p.ToolName] {
+	if !isFileTool(p.ToolName) {
 		return out, nil
 	}
 	file := p.ToolInput.FilePath

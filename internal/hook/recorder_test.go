@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,7 +53,7 @@ func TestRecorder_SilentOverAllPayloads(t *testing.T) {
 func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 	e := newEnv(t)
 	file := filepath.Join(e.repo, "hello.txt")
-	writeFile(t, file, "hello\n")
+	testsupport.Write(t, file, "hello\n")
 	v := vars(e.repo, file, "hello\n")
 	v["@SESSION@"] = "sess-1"
 
@@ -73,10 +74,10 @@ func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 	if !reflect.DeepEqual(ev.Detail, want) {
 		t.Errorf("detail = %v, want %v", ev.Detail, want)
 	}
-	if got := gitOut(t, e.repo, "hash-object", "hello.txt"); ev.Detail["blob"] != got {
+	if got := testsupport.Git(t, e.repo, "hash-object", "hello.txt"); ev.Detail["blob"] != got {
 		t.Errorf("blob %s, git hash-object says %s", ev.Detail["blob"], got)
 	}
-	gitOut(t, e.repo, "cat-file", "-e", ev.Detail["blob"])
+	testsupport.Git(t, e.repo, "cat-file", "-e", ev.Detail["blob"])
 }
 
 func TestRecorder_EditHookSpawnsNothing(t *testing.T) {
@@ -96,11 +97,11 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 	e := newEnv(t)
 	a := filepath.Join(e.repo, "a.txt")
 	b := filepath.Join(e.repo, "dir", "b.txt")
-	writeFile(t, a, "a\n")
-	writeFile(t, b, "b\n")
+	testsupport.Write(t, a, "a\n")
+	testsupport.Write(t, b, "b\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "write_01_create_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, b, "b\n")))
-	writeFile(t, filepath.Join(e.repo, "c.txt"), "made by bash\n") // what the Bash command did
+	testsupport.Write(t, filepath.Join(e.repo, "c.txt"), "made by bash\n") // what the Bash command did
 	e.do(t, "PostToolUse", fill(readShape(t, "bash_post"), vars(e.repo, "", "")))
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
 
@@ -113,12 +114,12 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 	}
 	anchor := evs[3]
 	ref := "refs/trellis/replay/main"
-	commit := gitOut(t, e.repo, "rev-parse", ref)
-	tree := gitOut(t, e.repo, "rev-parse", ref+"^{tree}")
+	commit := testsupport.Git(t, e.repo, "rev-parse", ref)
+	tree := testsupport.Git(t, e.repo, "rev-parse", ref+"^{tree}")
 	if anchor.Detail["commit"] != commit || anchor.Detail["tree"] != tree || anchor.Detail["ref"] != ref {
 		t.Errorf("turn.anchored detail %v, want commit %s tree %s ref %s", anchor.Detail, commit, tree, ref)
 	}
-	files := strings.Fields(gitOut(t, e.repo, "ls-tree", "-r", "--name-only", ref))
+	files := strings.Fields(testsupport.Git(t, e.repo, "ls-tree", "-r", "--name-only", ref))
 	if want := []string{"README.md", "a.txt", "c.txt", "dir/b.txt"}; !reflect.DeepEqual(files, want) {
 		t.Errorf("anchored tree holds %v, want %v", files, want)
 	}
@@ -127,7 +128,7 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 	editPayload := func(e *env) []byte {
 		f := filepath.Join(e.repo, "x.txt")
-		writeFile(t, f, "x\n")
+		testsupport.Write(t, f, "x\n")
 		return fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n"))
 	}
 	pendingKinds := func(e *env) []string {
@@ -163,7 +164,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 	t.Run("state root is a file", func(t *testing.T) {
 		e := newEnv(t)
 		root := filepath.Join(t.TempDir(), "root")
-		writeFile(t, root, "not a directory")
+		testsupport.Write(t, root, "not a directory")
 		_, err := store.Open(root, e.deps.Clock)
 		if err == nil {
 			t.Fatal("store.Open on a file succeeded")
@@ -179,7 +180,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		if err := os.RemoveAll(e.state); err != nil {
 			t.Fatal(err)
 		}
-		writeFile(t, e.state, "not a directory")
+		testsupport.Write(t, e.state, "not a directory")
 		run(t, e, editPayload(e))
 		if got, want := pendingKinds(e), []string{"internal.error"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("fallback pending holds %v, want %v", got, want)
@@ -217,7 +218,7 @@ func TestRecorder_EditIsLazyStopIsDurable(t *testing.T) {
 		return f.Sync()
 	})
 	a := filepath.Join(e.repo, "a.txt")
-	writeFile(t, a, "a\n")
+	testsupport.Write(t, a, "a\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "write_01_create_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "bash_post"), vars(e.repo, "", "")))

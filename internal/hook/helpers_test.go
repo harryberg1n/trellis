@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 // env is a fresh repo, a state root outside it, and Deps over both.
@@ -37,7 +37,7 @@ func newEnv(t testing.TB) *env {
 		t.Fatal(err)
 	}
 	e.st = st
-	e.rec = &run.Recorder{Inner: run.Exec{Clock: clock.Real()}}
+	e.rec = testsupport.Recorder()
 	e.deps = Deps{Store: st, Runner: e.rec, Clock: clock.Real(), Rows: kernel.Table, Fallback: e.fallback}
 	return e
 }
@@ -129,7 +129,10 @@ type generated struct {
 	payload []byte
 }
 
-var genDirs = []string{"internal/a", "internal/b", "cmd/x", "docs", "pkg/deep/er", ".", "tests"}
+func genDir(i int) string {
+	dirs := [...]string{"internal/a", "internal/b", "cmd/x", "docs", "pkg/deep/er", ".", "tests"}
+	return dirs[i%len(dirs)]
+}
 
 // generate makes n PostToolUse Edit/Write payloads from the 20 recorded
 // shapes, deterministically: shape i%20, directory i%7, session i%13, content
@@ -140,9 +143,9 @@ func generate(t testing.TB, repo string, n int) []generated {
 	shapes := editShapes(t)
 	out := make([]generated, n)
 	for i := range out {
-		file := filepath.Join(repo, filepath.FromSlash(genDirs[i%len(genDirs)]), fmt.Sprintf("f%04d.go", i))
+		file := filepath.Join(repo, filepath.FromSlash(genDir(i)), fmt.Sprintf("f%04d.go", i))
 		content := text(i, (i*37)%3000+1)
-		writeFile(t, file, content)
+		testsupport.Write(t, file, content)
 		v := vars(repo, file, content)
 		v["@SESSION@"] = fmt.Sprintf("00000000-0000-4000-8000-%012d", i%13)
 		out[i] = generated{shape: i % 20, file: file, payload: fill(shapes[i%20], v)}
@@ -164,28 +167,6 @@ func text(seed, size int) string {
 		}
 	}
 	return string(b)
-}
-
-func gitOut(t testing.TB, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("git %v: %v: %s", args, err, errb.String())
-	}
-	return strings.TrimSpace(out.String())
-}
-
-func writeFile(t testing.TB, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func kinds(evs []kernel.Event) []string {
