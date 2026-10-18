@@ -19,4 +19,5 @@ func tryLock(f *os.File) (bool, error) {
 	return false, err
 }
 
-func unlock(f *os.File) { syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }
+// unlock is best effort: closing the file releases the lock regardless.
+func unlock(f *os.File) { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }

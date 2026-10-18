@@ -66,7 +66,7 @@ func (s *Store) Hold() (release func(), err error) {
 	}
 	ok, err := tryLock(f)
 	if err != nil || !ok {
-		f.Close()
+		_ = f.Close() // nothing was written; the lock error is the one to report
 		if err == nil {
 			err = errors.New("store: lock is held")
 		}

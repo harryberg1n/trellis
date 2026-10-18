@@ -15,7 +15,7 @@ import (
 // can fail.
 func CountGitSpawns(t *testing.T) (count func() int) {
 	t.Helper()
-	real, err := exec.LookPath("git")
+	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func CountGitSpawns(t *testing.T) (count func() int) {
 	if err := os.WriteFile(counter, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, shimName), []byte(shimScript(real, counter)), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, shimName), []byte(shimScript(gitPath, counter)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

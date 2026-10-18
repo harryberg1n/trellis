@@ -74,7 +74,8 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 	if isGit(spec.Name) {
 		env = scrubGitEnv(env)
 	}
-	cmd.Env = append(env, noPrompt...)
+	env = append(env, noPrompt...)
+	cmd.Env = env
 	if spec.Stdin != nil {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}

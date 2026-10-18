@@ -24,7 +24,6 @@ import (
 	"time"
 )
 
-// staleRoot is how old a root directory of a finished-or-killed run must be
 // Main is the whole TestMain of a package: it isolates the run, runs m, removes
 // what the isolation made and exits with m's code. Every package with tests
 // calls it, as `func TestMain(m *testing.M) { testiso.Main(m) }`.
@@ -120,6 +119,7 @@ func inside(dir, path string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// staleRoot is how old a root directory of a finished-or-killed run must be
 // before the next run of its family removes it. No test binary of this module
 // runs for anything near it.
 const staleRoot = 2 * time.Hour
@@ -149,7 +149,7 @@ func MkRoot(prefix string) (string, error) {
 // directory a test took away its own write bit on, and os.RemoveAll leaves
 // either behind.
 func RemoveAll(dir string) {
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, _ error) error {
 		if d != nil && d.IsDir() {
 			_ = os.Chmod(path, 0o700)
 		}

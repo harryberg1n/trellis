@@ -128,15 +128,16 @@ func parse(event string, raw []byte, known *Repo) (parsed, error) {
 	} else {
 		repo, rerr = Locate(p.Cwd)
 	}
-	if rerr == nil {
+	switch {
+	case rerr == nil:
 		out.repo = repo
 		args["repo"] = repo.Root
 		out.ev.Lane = repo.Lane
-	} else if errors.Is(rerr, objects.ErrNotARepo) {
+	case errors.Is(rerr, objects.ErrNotARepo):
 		// Not a repository: nothing here is ours to record. Silent, not an error.
 		out.ev.Kind, out.ev.Detail = "", nil
 		kind = ""
-	} else if kind != "" {
+	case kind != "":
 		return out, rerr
 	}
 	if p.ToolName == "Bash" && p.input("command") != "" {

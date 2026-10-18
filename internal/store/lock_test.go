@@ -16,7 +16,7 @@ func TestLock_SecondHandleIsRefusedWhileHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if ok, err := tryLock(f); ok || err != nil {
 		t.Fatalf("tryLock while held = %v, %v; want false, nil", ok, err)
 	}

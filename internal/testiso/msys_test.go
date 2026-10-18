@@ -7,13 +7,13 @@ import "testing"
 
 // Anchor is safe to call from every test binary and every run: once, silently,
 // and on a box with no shell it does nothing.
-func TestAnchor_CanBeCalledRepeatedly(t *testing.T) {
+func TestAnchor_CanBeCalledRepeatedly(_ *testing.T) {
 	anchor()
 	anchor()
 }
 
 // Letting the anchor go twice, or before it was ever started, is harmless.
-func TestRelease_IsSafeAnyNumberOfTimes(t *testing.T) {
+func TestRelease_IsSafeAnyNumberOfTimes(_ *testing.T) {
 	release()
 	anchor()
 	release()

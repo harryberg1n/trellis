@@ -31,7 +31,7 @@ func inflated(t testing.TB, gitDir, id string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	zr, err := zlib.NewReader(f)
 	if err != nil {
 		t.Fatal(err)

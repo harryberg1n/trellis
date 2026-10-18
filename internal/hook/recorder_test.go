@@ -142,7 +142,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 	}
 	pendingKinds := func(e *env) []string {
 		m, _ := filepath.Glob(filepath.Join(e.fallback, "events.pending", "*.json"))
-		var out []string
+		out := make([]string, 0, len(m))
 		for _, f := range m {
 			raw, err := os.ReadFile(f)
 			if err != nil {
@@ -159,7 +159,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		}
 		return out
 	}
-	run := func(t *testing.T, e *env, payload []byte) {
+	record := func(t *testing.T, e *env, payload []byte) {
 		t.Helper()
 		var out, errb bytes.Buffer
 		if code := Run("PostToolUse", bytes.NewReader(payload), &out, &errb, e.deps); code != 0 {
@@ -179,7 +179,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 			t.Fatal("store.Open on a file succeeded")
 		}
 		e.deps.Store, e.deps.Err = nil, err
-		run(t, e, editPayload(e))
+		record(t, e, editPayload(e))
 		if got, want := pendingKinds(e), []string{"internal.error"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("fallback pending holds %v, want %v", got, want)
 		}
@@ -190,14 +190,14 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		testsupport.Write(t, e.state, "not a directory")
-		run(t, e, editPayload(e))
+		record(t, e, editPayload(e))
 		if got, want := pendingKinds(e), []string{"internal.error"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("fallback pending holds %v, want %v", got, want)
 		}
 	})
 	t.Run("bad payload with a good store", func(t *testing.T) {
 		e := newEnv(t)
-		run(t, e, []byte("{not json"))
+		record(t, e, []byte("{not json"))
 		evs := e.events(t)
 		if len(evs) != 1 || evs[0].Kind != "internal.error" || evs[0].Detail["error"] == "" || evs[0].Detail["event"] != "PostToolUse" {
 			t.Errorf("events %+v, want one internal.error naming the event and the error", evs)
@@ -212,7 +212,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		if err := os.Remove(filepath.Join(e.repo, "x.txt")); err != nil {
 			t.Fatal(err)
 		}
-		run(t, e, p)
+		record(t, e, p)
 		if got, want := kinds(e.events(t)), []string{"internal.error"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("kinds %v, want %v", got, want)
 		}

@@ -35,8 +35,9 @@ func (r *Recorder) Count() int {
 
 // Kinds is each spawn's kind in order.
 func (r *Recorder) Kinds() []string {
-	var out []string
-	for _, s := range r.Specs() {
+	specs := r.Specs()
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
 		out = append(out, Kind(s))
 	}
 	return out
