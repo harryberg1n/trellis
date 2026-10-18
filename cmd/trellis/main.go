@@ -21,7 +21,7 @@ verbs:
   doctor    check the installed hooks against this binary and the state root
   eject     remove the hooks install added
   tree      worktrees over plain git and gh: trellis tree new|sync|merge|rm
-  update    fetch the newest release, verify and pin it, re-install every repo: trellis update [--to VERSION] [--dry] [--allow-dev]
+  update    fetch the newest release, verify and pin it, re-install every repo: trellis update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]
   help      print this text
 `
 

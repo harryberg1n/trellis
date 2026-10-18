@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +45,8 @@ type Options struct {
 	To       string // switch to this version instead of the newest release
 	Dry      bool   // print each step with "would " and change nothing
 	AllowDev bool   // let a build whose version is "dev" update
+
+	ForgetMissing bool // drop a recorded repo that is not found from the record
 }
 
 // Run updates. It prints one line per step; with Dry the lines start "would "
@@ -59,9 +60,15 @@ func Run(env Env, o Options) error {
 	if !o.Dry {
 		removeStale(env.Exe)
 	}
+	// Read before the re-install below: that marks the record, and a record
+	// an install had not marked when this run began may be missing repos.
+	complete, err := install.ReposComplete(env.Root)
+	if err != nil {
+		return flat(err)
+	}
 	tag, err := u.target(o.To)
 	if err != nil {
-		return err
+		return flat(err)
 	}
 	if tag == env.Version || (o.To == "" && compareTags(tag, env.Version) < 0) {
 		u.say("[skip] already at %s", env.Version)
@@ -69,22 +76,29 @@ func Run(env Env, o Options) error {
 	}
 	bin, err := u.pin(tag)
 	if err != nil {
-		return err
+		return flat(err)
 	}
-	alive, failed, err := u.reinstall(tag, bin)
+	alive, missing, failed, err := u.reinstall(tag, bin, o.ForgetMissing)
 	if err != nil {
-		return err
+		return flat(err)
 	}
 	if err := u.replaceOnPath(bin); err != nil {
 		return err
 	}
-	u.sweep(tag, alive)
+	u.sweep(tag, sweepFacts{alive: alive, missing: missing, complete: complete})
 	u.step("update: %s -> %s", env.Version, tag)
 	if failed > 0 {
 		return fmt.Errorf("%d of %d repos could not be updated", failed, len(alive))
 	}
 	return nil
 }
+
+// flat is err on one line.
+func flat(err error) error {
+	return errors.New(oneLine(err))
+}
+
+func oneLine(err error) string { return strings.Join(strings.Fields(err.Error()), " ") }
 
 type updater struct {
 	Env
@@ -226,18 +240,25 @@ func (u updater) smoke(staged, tag string) error {
 }
 
 // reinstall points every recorded repo's hooks at the pinned binary of tag.
-// It returns the repos that are still there and how many failed.
-func (u updater) reinstall(tag, bin string) (alive []string, failed int, err error) {
+// It returns the repos it found, the ones it did not, and how many failed. A
+// repo that is not found stays in the record unless forget says to drop it: an
+// unmounted drive or a moved checkout still has hooks that point at a pin.
+func (u updater) reinstall(tag, bin string, forget bool) (alive, missing []string, failed int, err error) {
 	repos, err := install.Repos(u.Root)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	for _, repo := range repos {
-		if _, serr := os.Stat(repo); errors.Is(serr, fs.ErrNotExist) {
-			u.step("skip %s: gone", repo)
+		if _, serr := os.Stat(repo); serr != nil {
+			if !forget {
+				u.step("skip %s: not found", repo)
+				missing = append(missing, repo)
+				continue
+			}
+			u.step("forget %s: not found", repo)
 			if !u.dry {
 				if err := install.ForgetRepo(u.Root, repo); err != nil {
-					return nil, 0, err
+					return nil, nil, 0, err
 				}
 			}
 			continue
@@ -250,7 +271,7 @@ func (u updater) reinstall(tag, bin string) (alive []string, failed int, err err
 		opts := install.Options{Repo: repo, Root: u.Root, Exe: bin, Version: tag}
 		actions, err := install.Install(opts)
 		if err != nil {
-			u.say("install %s: %s", repo, strings.Join(strings.Fields(err.Error()), " "))
+			u.say("install %s: %s", repo, oneLine(err))
 			failed++
 			continue
 		}
@@ -259,7 +280,7 @@ func (u updater) reinstall(tag, bin string) (alive []string, failed int, err err
 			u.say("doctor %s: %s", repo, problem)
 		}
 	}
-	return alive, failed, nil
+	return alive, missing, failed, nil
 }
 
 // replaceOnPath replaces the running binary with the pinned one, or says
@@ -292,32 +313,50 @@ func (u updater) replaceOnPath(bin string) error {
 	return nil
 }
 
+// sweepFacts is what the sweep knows about the recorded repos.
+type sweepFacts struct {
+	alive, missing []string
+	complete       bool // an install had marked the record when the run began
+}
+
 // sweep removes the pinned versions beyond the newest three that no live repo's
 // hooks point at. A repo whose settings cannot be read stops the sweep: its
 // hooks might point at anything.
-func (u updater) sweep(tag string, alive []string) {
+func (u updater) sweep(tag string, facts sweepFacts) {
 	keep := map[string]bool{tag: true, u.Version: true}
-	if !u.dry {
-		for _, repo := range alive {
-			refs, err := install.ReferencedVersions(u.Root, repo)
-			if err != nil {
-				u.say("sweep: %s: %s", repo, strings.Join(strings.Fields(err.Error()), " "))
-				return
-			}
-			for _, r := range refs {
-				keep[r] = true
-			}
+	pins := append(pinned(u.Root), tag)
+	plan := sweepPlan(pins, keep)
+	if len(plan) == 0 {
+		return
+	}
+	// A pin is removed only on positive evidence that nothing points at it. A
+	// record no install marked may lack repos; a repo not found cannot be read.
+	switch {
+	case !facts.complete:
+		u.say("sweep skipped: repos installed before v0.0.4 are not recorded; run trellis install in each once")
+		return
+	case len(facts.missing) > 0:
+		u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", facts.missing[0])
+		return
+	}
+	// ReferencedVersions only reads, so a dry run reads it too.
+	for _, repo := range facts.alive {
+		refs, err := install.ReferencedVersions(u.Root, repo)
+		if err != nil {
+			u.say("sweep: %s: %s", repo, oneLine(err))
+			return
+		}
+		for _, r := range refs {
+			keep[r] = true
 		}
 	}
-	pins := pinned(u.Root)
-	pins = append(pins, tag)
 	for _, v := range sweepPlan(pins, keep) {
 		if u.dry {
 			u.step("remove pin %s", v)
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(u.Root, "bin", v)); err != nil {
-			u.say("keep pin %s: in use: %s", v, strings.Join(strings.Fields(err.Error()), " "))
+			u.say("keep pin %s: in use: %s", v, oneLine(err))
 			continue
 		}
 		u.say("remove pin %s", v)

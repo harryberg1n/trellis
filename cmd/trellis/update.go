@@ -15,7 +15,7 @@ import (
 )
 
 // updateUsageLine is the usage line of update.
-const updateUsageLine = "update [--to VERSION] [--dry] [--allow-dev]"
+const updateUsageLine = "update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
 
 // updateVerb runs `trellis update` in the real process.
 func updateVerb(args []string, stdout, stderr io.Writer) int {
@@ -23,6 +23,7 @@ func updateVerb(args []string, stdout, stderr io.Writer) int {
 	to := fs.String("to", "", "switch to this pinned (or released) version instead of the newest release")
 	dry := fs.Bool("dry", false, "print each step with \"would \" and change nothing")
 	allowDev := fs.Bool("allow-dev", false, "let a build whose version is \"dev\" update")
+	forget := fs.Bool("forget-missing", false, "drop a recorded repo that is not found from the record")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
 	}
@@ -45,7 +46,7 @@ func updateVerb(args []string, stdout, stderr io.Writer) int {
 		GOOS:    runtime.GOOS,
 		GOARCH:  runtime.GOARCH,
 	}
-	if err := update.Run(env, update.Options{To: *to, Dry: *dry, AllowDev: *allowDev}); err != nil {
+	if err := update.Run(env, update.Options{To: *to, Dry: *dry, AllowDev: *allowDev, ForgetMissing: *forget}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)
 		return 1
 	}
