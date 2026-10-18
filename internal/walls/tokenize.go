@@ -12,16 +12,16 @@ import (
 // either kind is doubled to be literal, and a here-string spans lines.
 func isPowerShell(tool string) bool { return tool == kernel.ToolPowerShell }
 
-// parse splits cmd into the simple commands the shell would run, and returns
-// the command with its strings and comments blanked.
+// parse splits cmd into the simple commands the shell would run: at each
+// separator, and at each parenthesis that opens or closes a subshell.
 //
 // The cut points are found on mask.Code's output, where the contents of
 // strings and comments are blanks: a `;`, `&&`, `||`, `|`, `&` or newline
 // inside a string or after a `#` can never split a command. The words are read
 // from the text with its comments blanked and its strings kept, so a path in
 // quotes is still the path. The two views are the same length, byte for byte.
-func parse(tool, cmd string) (segs [][]word, masked string) {
-	masked = mask.Code(tool, cmd)
+func parse(tool, cmd string) (segs [][]word) {
+	masked := mask.Code(tool, cmd)
 	code := mask.Blank(tool, cmd, false, true)
 	esc := byte('\\')
 	if isPowerShell(tool) {
@@ -77,7 +77,7 @@ func parse(tool, cmd string) (segs [][]word, masked string) {
 		}
 	}
 	cut(len(masked), len(masked))
-	return segs, masked
+	return segs
 }
 
 // reserved are the words that open or close a compound command without being

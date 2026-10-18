@@ -144,10 +144,10 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 
 // FoldFallback appends the events parked in dir/events.pending, a fallback
 // store another process wrote when this one was unusable, oldest first, and
-// removes their files. At most max files are taken (0 means all). A dir that
+// removes their files. At most limit files are taken (0 means all). A dir that
 // is not there folds nothing.
-func (tx *Tx) FoldFallback(dir string, max int) ([]kernel.Event, error) {
-	return tx.foldDir(filepath.Join(dir, "events.pending"), nil, max)
+func (tx *Tx) FoldFallback(dir string, limit int) ([]kernel.Event, error) {
+	return tx.foldDir(filepath.Join(dir, "events.pending"), nil, limit)
 }
 
 type parked struct {
@@ -187,7 +187,7 @@ func readParked(dir string) ([]parked, error) {
 	return ps, nil
 }
 
-func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, max int) ([]kernel.Event, error) {
+func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, limit int) ([]kernel.Event, error) {
 	ps, err := readParked(dir)
 	if err != nil {
 		return nil, err
@@ -224,8 +224,8 @@ func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, max int
 		}
 		return ps[i].name < ps[j].name
 	})
-	if max > 0 && len(ps) > max {
-		ps = ps[:max]
+	if limit > 0 && len(ps) > limit {
+		ps = ps[:limit]
 	}
 	evs := make([]kernel.Event, len(ps))
 	for i, p := range ps {
@@ -246,9 +246,9 @@ func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, max int
 	return out, nil
 }
 
-// CapParked keeps at most max files in events.pending and removes the oldest
+// CapParked keeps at most limit files in events.pending and removes the oldest
 // (by modification time, then name) beyond that.
-func (s *Store) CapParked(max int) error {
+func (s *Store) CapParked(limit int) error {
 	entries, err := os.ReadDir(s.pendingDir())
 	if err != nil {
 		return err
@@ -266,7 +266,7 @@ func (s *Store) CapParked(max int) error {
 			files = append(files, file{e.Name(), info.ModTime()})
 		}
 	}
-	if len(files) <= max {
+	if len(files) <= limit {
 		return nil
 	}
 	sort.Slice(files, func(i, j int) bool {
@@ -276,7 +276,7 @@ func (s *Store) CapParked(max int) error {
 		return files[i].name < files[j].name
 	})
 	var errs []error
-	for _, f := range files[:len(files)-max] {
+	for _, f := range files[:len(files)-limit] {
 		if err := s.remove(filepath.Join(s.pendingDir(), f.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}

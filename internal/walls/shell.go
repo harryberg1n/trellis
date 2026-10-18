@@ -124,7 +124,7 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 		src = stripHeredocBodies(cmd)
 	}
 	dir := cwd
-	segs, _ := parse(tool, src)
+	segs := parse(tool, src)
 	for _, seg := range segs {
 		if target, ok := cdTarget(seg); ok {
 			dir = resolve(dir, target)
@@ -282,7 +282,8 @@ func closeParen(src string, from int) int {
 		case '(':
 			depth++
 		case ')':
-			if depth--; depth == 0 {
+			depth--
+			if depth == 0 {
 				return j
 			}
 		}

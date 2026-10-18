@@ -123,13 +123,13 @@ func TestWriteTargets(t *testing.T) {
 }
 
 func TestParseGit_ReadsGlobalOptionsOutOfTheWay(t *testing.T) {
-	seg := segments("Bash", `FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
+	seg := parse("Bash", `FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
 	got, ok := parseGit(seg, filepath.FromSlash("/w"))
 	want := gitCall{Dir: filepath.FromSlash("/w/sub"), Globals: []string{"core.hooksPath=/h"}, Verb: "commit", Args: []string{"-m", "x y"}}
 	if !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("parseGit = %+v, %v; want %+v", got, ok, want)
 	}
-	if _, ok := parseGit(segments("Bash", "echo git commit")[0], "/w"); ok {
+	if _, ok := parseGit(parse("Bash", "echo git commit")[0], "/w"); ok {
 		t.Error("echo git commit read as a git call")
 	}
 }
@@ -153,7 +153,7 @@ func TestTokenize_PerTool(t *testing.T) {
 	}
 	for _, c := range cases {
 		var got [][]string
-		for _, seg := range segments(c.tool, c.cmd) {
+		for _, seg := range parse(c.tool, c.cmd) {
 			got = append(got, texts(seg))
 		}
 		if !reflect.DeepEqual(got, c.want) {
@@ -232,10 +232,4 @@ func TestAllowPeople_DeniesAnAgentRunningTrellisAllow(t *testing.T) {
 	if got != want {
 		t.Errorf("DenyLine = %q, want %q", got, want)
 	}
-}
-
-// segments is parse without the masked text.
-func segments(tool, cmd string) [][]word {
-	segs, _ := parse(tool, cmd)
-	return segs
 }
