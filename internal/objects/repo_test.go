@@ -284,3 +284,44 @@ func TestBranch_ARebaseInAWorktreeKeepsItsBranch(t *testing.T) {
 		})
 	}
 }
+
+func TestStashEmpty_FollowsTheStashRefAndItsLog(t *testing.T) {
+	repo := testiso.Repo(t)
+	common := filepath.Join(repo, ".git")
+	if !StashEmpty(common) {
+		t.Fatal("StashEmpty of a repository that never stashed = false, want true")
+	}
+	testiso.Write(t, filepath.Join(repo, "README.md"), "changed\n")
+	testiso.Git(t, repo, "stash", "push", "-q")
+	if StashEmpty(common) {
+		t.Error("StashEmpty with one entry = true, want false")
+	}
+	testiso.Write(t, filepath.Join(repo, "README.md"), "changed again\n")
+	testiso.Git(t, repo, "stash", "push", "-q")
+	testiso.Git(t, repo, "stash", "drop", "-q")
+	if StashEmpty(common) {
+		t.Error("StashEmpty with one of two entries dropped = true, want false")
+	}
+	testiso.Git(t, repo, "stash", "clear")
+	if !StashEmpty(common) {
+		t.Error("StashEmpty after stash clear = false, want true")
+	}
+	// A log left behind with no entries in it is empty; one with an entry is not.
+	testiso.Write(t, filepath.Join(common, "logs", "refs", "stash"), "")
+	if !StashEmpty(common) {
+		t.Error("StashEmpty with an empty stash log = false, want true")
+	}
+	testiso.Write(t, filepath.Join(common, "logs", "refs", "stash"), "0000 1111 A <a@b> 1 +0000\tWIP\n")
+	if StashEmpty(common) {
+		t.Error("StashEmpty with an entry in the stash log = true, want false")
+	}
+}
+
+func TestStashEmpty_AnUnreadableRefIsNotEmpty(t *testing.T) {
+	repo := testiso.Repo(t)
+	common := filepath.Join(repo, ".git")
+	testiso.Write(t, filepath.Join(common, "refs", "stash"), "ref: refs/heads/main\n")
+	if StashEmpty(common) {
+		t.Error("StashEmpty with a refs/stash it cannot read = true, want false (unknown is not empty)")
+	}
+}

@@ -77,11 +77,15 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	if a.r == nil {
 		return "", ""
 	}
-	if _, ok := repoAt(c.Dir); !ok && form != "worktree remove --force" {
+	repo, ok := repoAt(c.Dir)
+	if !ok && form != "worktree remove --force" {
 		return "", ""
 	}
 	switch {
 	case strings.HasPrefix(form, "stash "):
+		if objects.StashEmpty(repo.Common) {
+			return "", "" // nothing to drop
+		}
 		return form + " discards a stash entry for good", ""
 	case strings.HasPrefix(form, "branch -D "):
 		return measureBranch(a, c, form), ""

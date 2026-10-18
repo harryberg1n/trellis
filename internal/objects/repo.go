@@ -213,3 +213,24 @@ func rebasedBranch(gitDir string) string {
 	}
 	return ""
 }
+
+// StashEmpty reports whether the repository holds no stash entry, read from
+// refs/stash (loose or packed) and logs/refs/stash under common without
+// starting git. It answers true only when it is sure: a ref it cannot read
+// leaves the stash not empty.
+// Source: aphrollo-tools 12b3724e internal/cli/git_shim_discard.go
+// (stashCost). Incident: #650, the discard wall; a `stash drop` on a stash
+// with nothing in it discards nothing and is not to be refused.
+func StashEmpty(common string) bool {
+	if _, found, fallback := readRef(common, "refs/stash"); found || fallback {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(common, "logs", "refs", "stash"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return true
+	case err != nil:
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == ""
+}

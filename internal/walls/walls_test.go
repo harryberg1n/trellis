@@ -30,6 +30,9 @@ func newWorld(t testing.TB) world {
 	testiso.Git(t, primary, "branch", "unmerged", c)
 	testiso.Write(t, filepath.Join(tree, "README.md"), "changed\n")
 	testiso.Write(t, filepath.Join(tree, "scratch.txt"), "scratch\n")
+	// One stash entry, made without touching the files above: `stash drop` of
+	// an empty stash discards nothing and passes.
+	testiso.Git(t, tree, "stash", "store", "-m", "kept", testiso.Git(t, tree, "stash", "create"))
 	return world{primary: primary, tree: tree}
 }
 
@@ -782,6 +785,25 @@ func TestDiscard_CleanXMeasuresIgnoredFiles(t *testing.T) {
 	} {
 		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+". Override: ") {
 			t.Errorf("%q: deny line %q, want it to say %q", c.cmd, got, c.want)
+		}
+	}
+}
+
+func TestDiscard_StashDropOfAnEmptyStashPasses(t *testing.T) {
+	r := quiet(t)
+	tree := testiso.Repo(t) // a repository of its own: the world keeps one stash entry
+	for _, cmd := range []string{"git stash drop", "git stash clear", "git stash drop stash@{0}"} {
+		if got := decide(t, bash(t, tree, cmd, true), r); len(got) != 0 {
+			t.Errorf("%q with no stash: actions %+v, want none", cmd, got)
+		}
+	}
+	testiso.Write(t, filepath.Join(tree, "README.md"), "changed\n")
+	testiso.Git(t, tree, "stash", "push", "-q")
+	for _, cmd := range []string{"git stash drop", "git stash clear"} {
+		d := verdicts(decide(t, bash(t, tree, cmd, true), r), kernel.VerdictDeny)
+		want := "trellis: discard-uncommitted: " + strings.TrimPrefix(cmd, "git ") + " discards a stash entry for good. Override: trellis allow discard-uncommitted."
+		if len(d) != 1 || d[0].Line != want {
+			t.Errorf("%q with a stash entry: denies %+v, want the line %q", cmd, d, want)
 		}
 	}
 }
