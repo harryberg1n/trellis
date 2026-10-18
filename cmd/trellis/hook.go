@@ -17,7 +17,13 @@ import (
 // and records it. It exits 0 whatever happens inside, and prints nothing. A
 // missing event is a wiring mistake and exits 1, which the harness shows to
 // the user without blocking the agent.
-func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
+	// Whatever panics below, the agent must not see a trace or a blocking exit.
+	defer func() {
+		if r := recover(); r != nil {
+			code = 0
+		}
+	}()
 	if len(args) != 1 {
 		_, _ = io.WriteString(stderr, "usage: trellis hook <event>\n")
 		return 1

@@ -131,6 +131,8 @@ func now(deps Deps) time.Time {
 // parked in the fallback store. A failure of the fallback is dropped: there is
 // nowhere left to write, and the agent must go on.
 func fail(deps Deps, event string, p parsed, err error) {
+	// Nothing here may escape: a panic while recording a failure is dropped.
+	defer func() { _ = recover() }()
 	ev := kernel.Event{
 		Kind:    kernel.EvInternalError,
 		Lane:    p.ev.Lane,
@@ -142,7 +144,7 @@ func fail(deps Deps, event string, p parsed, err error) {
 		ev.Detail["recording"] = p.ev.Kind
 	}
 	if deps.Store != nil {
-		_, aerr := deps.Store.Append(ev)
+		aerr := appendGuarded(deps.Store, ev)
 		if aerr == nil || errors.Is(aerr, store.ErrParked) {
 			return
 		}
@@ -160,4 +162,16 @@ func fail(deps Deps, event string, p parsed, err error) {
 	if s, oerr := store.Open(deps.Fallback, clk); oerr == nil {
 		_ = s.Park(ev)
 	}
+}
+
+// appendGuarded is Store.Append with a panic turned into an error, so the
+// fallback still gets the event.
+func appendGuarded(s *store.Store, ev kernel.Event) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("store panicked: %v", r)
+		}
+	}()
+	_, err = s.Append(ev)
+	return err
 }

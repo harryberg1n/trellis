@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
@@ -277,5 +278,26 @@ func TestRecorder_FileOutsideRepoIsIgnored(t *testing.T) {
 	}
 	if got := fallbackFiles(e); len(got) != 0 {
 		t.Errorf("fallback holds %v, want nothing parked", got)
+	}
+}
+
+type panicRunner struct{}
+
+func (panicRunner) Light(run.Spec) (run.Result, error) { panic("runner exploded") }
+
+func TestRecorder_DoublePanicStillSilent(t *testing.T) {
+	e := newEnv(t)
+	// The anchor panics; then the internal.error append panics too, in fsync.
+	e.st.SetFsync(func(*os.File) error { panic("disk exploded") })
+	e.deps.Runner = panicRunner{}
+
+	var out, errb bytes.Buffer
+	code := Run("Stop", bytes.NewReader(fill(readShape(t, "stop"), vars(e.repo, "", ""))), &out, &errb, e.deps)
+
+	if code != 0 || out.Len() != 0 || errb.Len() != 0 {
+		t.Errorf("exit %d, stdout %q, stderr %q; want 0, empty, empty", code, out.String(), errb.String())
+	}
+	if got := fallbackFiles(e); len(got) != 1 {
+		t.Errorf("fallback holds %v, want the internal.error parked there", got)
 	}
 }
