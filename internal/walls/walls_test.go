@@ -741,3 +741,47 @@ func TestUndercover_VendorAddressesInLinesAndIdentities(t *testing.T) {
 		}
 	}
 }
+
+// git clean -x also deletes what .gitignore hides (.env, build output), -X only
+// that; the measurement counts the ignored files git status lists as !!.
+func TestDiscard_CleanXMeasuresIgnoredFiles(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	tree := testiso.AddTree(t, w.primary, "ign", "ign/x")
+	testiso.Write(t, filepath.Join(tree, ".gitignore"), ".env\n")
+	testiso.Git(t, tree, "add", ".gitignore")
+	testiso.Git(t, tree, "commit", "-qm", "ignore .env")
+	testiso.Write(t, filepath.Join(tree, ".env"), "SECRET=1\n")
+
+	denyLine := func(cmd string) string {
+		d := verdicts(decide(t, bash(t, tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 {
+			return ""
+		}
+		return d[0].Line
+	}
+	for _, cmd := range []string{"git clean -fd", "git clean -fd --exclude=keep", "git clean -fdn", "git clean -ndx"} {
+		if got := decide(t, bash(t, tree, cmd, true), r); len(got) != 0 {
+			t.Errorf("%q with only an ignored file: actions %+v, want none", cmd, got)
+		}
+	}
+	for _, c := range []struct{ cmd, want string }{
+		{"git clean -fdx", "clean -fdx discards 1 ignored file"},
+		{"git clean -fdX", "clean -fdX discards 1 ignored file"},
+		{"git clean -f -x", "clean -f -x discards 1 ignored file"},
+	} {
+		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+". Override: ") {
+			t.Errorf("%q: deny line %q, want it to say %q", c.cmd, got, c.want)
+		}
+	}
+	testiso.Write(t, filepath.Join(tree, "new.txt"), "n\n")
+	for _, c := range []struct{ cmd, want string }{
+		{"git clean -fd", "clean -fd discards 1 untracked file"},
+		{"git clean -fdx", "clean -fdx discards 1 untracked file, 1 ignored file"},
+		{"git clean -fdX", "clean -fdX discards 1 ignored file"},
+	} {
+		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+". Override: ") {
+			t.Errorf("%q: deny line %q, want it to say %q", c.cmd, got, c.want)
+		}
+	}
+}

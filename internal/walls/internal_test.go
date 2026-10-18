@@ -81,9 +81,9 @@ func TestDiscardIntent(t *testing.T) {
 func TestParseStatus(t *testing.T) {
 	out := " M a.txt\x00M  b.txt\x00MM c.txt\x00?? d.txt\x00!! e.log\x00R  new.txt\x00old.txt\x00 D f.txt\x00"
 	got := parseStatus([]byte(out))
-	want := cost{Unstaged: 3, Staged: 3, Untracked: 1}
+	want := cost{Unstaged: 3, Staged: 3, Untracked: 1, Ignored: 1}
 	if got != want {
-		t.Errorf("parseStatus = %+v, want %+v (a.txt, c.txt, f.txt unstaged; b.txt, c.txt, the rename staged; d.txt untracked)", got, want)
+		t.Errorf("parseStatus = %+v, want %+v (a.txt, c.txt, f.txt unstaged; b.txt, c.txt, the rename staged; d.txt untracked; e.log ignored)", got, want)
 	}
 }
 
