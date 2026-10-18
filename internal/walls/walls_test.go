@@ -573,3 +573,21 @@ func TestWalls_CommentsAndMaskedTextNeverSplitOrMatch(t *testing.T) {
 		t.Errorf("echo $(git reset --hard): denies %+v, want one", d)
 	}
 }
+
+func TestWalls_AnUnreadableRemoteDoesNotOpenTheMainCommitWall(t *testing.T) {
+	w := newWorld(t)
+	cfg := filepath.Join(w.primary, ".git", "config")
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A line over bufio.Scanner's 64KB limit makes the remote read fail.
+	_, werr := f.WriteString("[remote \"origin\"]\n\turl = " + strings.Repeat("x", 70000) + "\n")
+	if cerr := f.Close(); werr != nil || cerr != nil {
+		t.Fatal(werr, cerr)
+	}
+	denies := verdicts(decide(t, bash(t, w.primary, `git commit -m "wip"`, true), quiet(t)), kernel.VerdictDeny)
+	if len(denies) != 1 || denies[0].RowID != "main-commit" {
+		t.Errorf("denies %+v, want main-commit: the config read failed but the repo is still known", denies)
+	}
+}
