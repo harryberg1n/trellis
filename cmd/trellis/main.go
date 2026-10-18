@@ -15,6 +15,7 @@ const usage = `usage: trellis <verb>
 verbs:
   version   print the version and commit
   hook      record one agent hook payload read from stdin: trellis hook <event>
+  report    print speed, cost and labels; --issue files them on harryberg1n/trellis
   help      print this text
 `
 
@@ -39,6 +40,13 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "hook":
 		return hookVerb(args[1:], stdin, stdout, stderr)
+	case "report":
+		env, err := realReportEnv()
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
+			return 1
+		}
+		return reportCmd(args[1:], stdout, stderr, env)
 	case "help":
 		_, _ = io.WriteString(stdout, usage)
 		return 0

@@ -1,0 +1,256 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/host"
+	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/measure"
+	"github.com/harryberg1n/trellis/internal/objects"
+	runpkg "github.com/harryberg1n/trellis/internal/run"
+	"github.com/harryberg1n/trellis/internal/store"
+)
+
+// reportRepo is the repository the weekly report issue is filed on. Scores
+// leave the box only as aggregates, and only here, never on the consumer
+// repository.
+const reportRepo = "harryberg1n/trellis"
+
+// historyWindow is how far back the report reads the default branch.
+const historyWindow = 60 * 24 * time.Hour
+
+// realReportEnv is the environment of the running process: the working
+// directory, the state root for it, real children and the wall clock.
+func realReportEnv() (reportEnv, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return reportEnv{}, err
+	}
+	root, err := store.Root(wd)
+	if err != nil {
+		return reportEnv{}, err
+	}
+	c := clock.Real()
+	return reportEnv{Repo: wd, Root: root, Runner: runpkg.Exec{Clock: c}, Clock: c}, nil
+}
+
+// reportEnv is what the report verb touches: the repository, the runner that
+// starts git and gh, the clock and the state root.
+type reportEnv struct {
+	Repo   string // absolute path inside the repository
+	Root   string // the state root
+	Runner runpkg.Runner
+	Clock  clock.Clock
+}
+
+// reportCmd runs `trellis report [--issue]`. All facts are gathered here and
+// handed to measure.
+func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	issue := fs.Bool("issue", false, "file the aggregate report as an issue on "+reportRepo)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	root, err := objects.FindRoot(env.Repo)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
+		return 1
+	}
+	facts, name, err := gatherFacts(root, env, stderr)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
+		return 1
+	}
+	body := measure.Report(facts)
+	if !*issue {
+		_, _ = stdout.Write(body)
+		return 0
+	}
+	title := fmt.Sprintf("report %s %s", name, measure.Week(facts.Now))
+	gh := host.GH{Runner: env.Runner, Dir: root}
+	msg, err := fileReport(gh, title, string(body))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, msg)
+	return 0
+}
+
+// fileReport creates the week's issue, or edits it when one with the title
+// exists.
+func fileReport(gh host.GH, title, body string) (string, error) {
+	found, err := gh.ListIssues(reportRepo, title+" in:title")
+	if err != nil {
+		return "", err
+	}
+	for _, is := range found {
+		if is.Title == title {
+			if err := gh.EditIssue(reportRepo, is.Number, body); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("updated %s#%d", reportRepo, is.Number), nil
+		}
+	}
+	url, err := gh.CreateIssue(reportRepo, title, body)
+	if err != nil {
+		return "", err
+	}
+	return "filed " + url, nil
+}
+
+// gatherFacts reads the default branch history, the escape issues, the event
+// log and the transcripts the log names. name is the repository's name.
+func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, string, error) {
+	now := env.Clock.Now()
+	facts := measure.Facts{Now: now}
+
+	remote := configRemote(env.Runner, root)
+	name := repoName(remote, root)
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return facts, name, err
+	}
+	st, err := store.Open(store.RepoDir(env.Root, store.RepoID(remote, absRoot)), env.Clock)
+	if err != nil {
+		return facts, name, fmt.Errorf("opening the event log: %w", err)
+	}
+	facts.Events, err = st.Read(0)
+	if err != nil {
+		return facts, name, fmt.Errorf("reading the event log: %w", err)
+	}
+
+	facts.Merges, err = readHistory(env.Runner, root, now, facts.Events)
+	if err != nil {
+		return facts, name, err
+	}
+
+	issues, err := host.GH{Runner: env.Runner, Dir: root}.ListIssues("", "escape:")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: escape issues not read: %v\n", err)
+	}
+	for _, is := range issues {
+		facts.Issues = append(facts.Issues, measure.Issue{Number: is.Number, Title: is.Title, Body: is.Body, At: is.CreatedAt})
+	}
+
+	seen := map[string]bool{}
+	for _, ev := range facts.Events {
+		p := ev.Detail["transcript"]
+		if ev.Kind != kernel.EvSessionUsage || p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
+			continue
+		}
+		facts.Usage = append(facts.Usage, measure.Usage{Lane: ev.Lane, Session: ev.Session, Transcript: raw})
+	}
+	return facts, name, nil
+}
+
+func configRemote(r runpkg.Runner, root string) string {
+	out, err := objects.Git(r, root, nil, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// repoName is the last element of the remote URL without ".git", else the
+// directory name.
+func repoName(remote, root string) string {
+	if remote != "" {
+		u := strings.TrimSuffix(strings.TrimRight(remote, "/"), ".git")
+		if i := strings.LastIndexAny(u, "/:"); i >= 0 {
+			return u[i+1:]
+		}
+		return u
+	}
+	return filepath.Base(root)
+}
+
+// defaultBranch is origin's HEAD branch, else main, else master, else HEAD.
+func defaultBranch(r runpkg.Runner, root string) string {
+	if out, err := objects.Git(r, root, nil, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if b := strings.TrimSpace(string(out)); b != "" {
+			return b
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if _, err := objects.Git(r, root, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+			return b
+		}
+	}
+	return "HEAD"
+}
+
+const (
+	fieldSep  = "\x1f"
+	recordSep = "\x1e"
+)
+
+var (
+	trailingPR = regexp.MustCompile(`\(#(\d+)\)\s*$`)
+	mergePR    = regexp.MustCompile(`^Merge pull request #(\d+) from \S+?/(\S+)`)
+)
+
+// readHistory is `git log --first-parent` on the default branch within the
+// window, each commit with the line ranges it touched.
+func readHistory(r runpkg.Runner, root string, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
+	branch := defaultBranch(r, root)
+	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
+	out, err := objects.Git(r, root, nil, "log", "--first-parent", "--since="+since,
+		"--format=%H"+fieldSep+"%aI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)
+	if err != nil {
+		return nil, err
+	}
+	laneOfPR := map[int]string{}
+	for _, ev := range events {
+		if n, err := strconv.Atoi(ev.Detail["pr"]); err == nil && ev.Lane != "" {
+			laneOfPR[n] = ev.Lane
+		}
+	}
+	var merges []measure.Merge
+	for _, rec := range strings.Split(string(out), recordSep) {
+		rec = strings.TrimLeft(rec, "\r\n")
+		f := strings.SplitN(rec, fieldSep, 4)
+		if len(f) != 4 {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, f[1])
+		if err != nil {
+			continue
+		}
+		m := measure.Merge{Sha: f[0], Subject: f[2], Body: f[3], At: at}
+		if g := trailingPR.FindStringSubmatch(m.Subject); g != nil {
+			m.PR, _ = strconv.Atoi(g[1])
+		} else if g := mergePR.FindStringSubmatch(m.Subject); g != nil {
+			m.PR, _ = strconv.Atoi(g[1])
+			m.Lane = path.Clean(g[2])
+		}
+		if lane, ok := laneOfPR[m.PR]; ok && m.PR > 0 {
+			m.Lane = lane
+		}
+		diff, err := objects.Git(r, root, nil, "show", "-m", "--first-parent", "-U0", "--no-color", "--format=", m.Sha)
+		if err != nil {
+			return nil, err
+		}
+		m.Added, m.Removed = measure.ParseHunks(string(diff))
+		merges = append(merges, m)
+	}
+	return merges, nil
+}
