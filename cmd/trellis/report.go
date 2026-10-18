@@ -213,11 +213,17 @@ func readGitHub(facts *measure.Facts, env reportEnv, root string, stderr io.Writ
 	}
 }
 
+// fieldSep separates the fields of a commit header. A NUL brackets each header
+// in the log output: git never prints one in a text diff or a message, so no
+// content can split a record.
 const (
-	fieldSep  = "\x1f"
-	recordSep = "\x1e"
-	headerEnd = "\x1d"
+	fieldSep = "\x1f"
+	nul      = "\x00"
 )
+
+// historyTimeout is the time the one history call gets: five seconds a day of
+// the window, where each commit once had its own thirty.
+const historyTimeout = time.Duration(historyWindow/(24*time.Hour)) * 5 * time.Second
 
 var (
 	trailingPR = regexp.MustCompile(`\(#(\d+)\)\s*$`)
@@ -231,11 +237,14 @@ var (
 func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
 	root, branch := repo.Root, repo.History
 	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
-	out, err := objects.Git(r, root, nil, "log", "--first-parent", "-m", "-p", "-U0", "--no-color", "--since="+since,
-		"--format="+recordSep+"%H"+fieldSep+"%cI"+fieldSep+"%s"+fieldSep+"%b"+headerEnd, branch)
+	res, err := r.Light(runpkg.Spec{Name: "git", Dir: root, Timeout: historyTimeout, Args: []string{
+		"log", "--first-parent", "-m", "-p", "-U0", "--no-color", "--since=" + since,
+		"--format=%x00%H" + fieldSep + "%cI" + fieldSep + "%s" + fieldSep + "%b%x00", branch,
+	}})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading the history: %w", err)
 	}
+	out := res.Stdout
 	treeOfPR := map[int]string{}
 	landed := map[string]kernel.Event{} // tree.merged events by the sha they landed as
 	for _, ev := range events {
@@ -247,9 +256,10 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 		}
 	}
 	var merges []measure.Merge
-	for _, rec := range strings.Split(string(out), recordSep) {
-		head, diff, _ := strings.Cut(rec, headerEnd)
-		f := strings.SplitN(head, fieldSep, 4)
+	parts := strings.Split(string(out), nul) // "", header, diff, header, diff, ...
+	for i := 1; i+1 < len(parts); i += 2 {
+		f := strings.SplitN(parts[i], fieldSep, 4)
+		diff := parts[i+1]
 		if len(f) != 4 {
 			continue
 		}

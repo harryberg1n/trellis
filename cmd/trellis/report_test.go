@@ -415,3 +415,39 @@ func TestReport_ReadsTheHistoryInOneGitCall(t *testing.T) {
 		t.Errorf("history took %d git log and %d git show calls, want 1 and 0", logs, shows)
 	}
 }
+
+// A control byte inside a diff must not split a commit's record.
+func TestReadHistory_ControlBytesInADiffDoNotSplitTheRecord(t *testing.T) {
+	repo := testiso.Repo(t)
+	t.Setenv("GIT_COMMITTER_DATE", "2026-10-09T09:00:00Z")
+	testiso.Write(t, filepath.Join(repo, "ctl.txt"), "a\x1eb\x1dc\x1fd\nsecond\n")
+	testiso.Git(t, repo, "add", "-A")
+	testiso.Git(t, repo, "commit", "-q", "-m", "add ctl (#7)")
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+
+	merges, err := readHistory(testsupport.Recorder(), mustRepo(t, repo), now, nil)
+
+	if err != nil || len(merges) != 2 {
+		t.Fatalf("readHistory = %d merges, %v; want the fixture's first commit and ours", len(merges), err)
+	}
+	m := merges[0] // newest first
+	if m.Subject != "add ctl (#7)" || m.PR != 7 {
+		t.Errorf("merge = %+v, want subject %q and PR 7", m, "add ctl (#7)")
+	}
+	if spans := m.Added["ctl.txt"]; len(spans) != 1 || spans[0].Start != 1 || spans[0].End != 2 {
+		t.Errorf("added spans of ctl.txt = %+v, want lines 1 to 2", spans)
+	}
+}
+
+// The one history call is given time in proportion to the window it reads.
+func TestReadHistory_TimeoutFollowsTheWindow(t *testing.T) {
+	repo := testiso.Repo(t)
+	rec := testsupport.Recorder()
+	if _, err := readHistory(rec, mustRepo(t, repo), time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC), nil); err != nil {
+		t.Fatal(err)
+	}
+	specs := rec.Specs()
+	if len(specs) != 1 || specs[0].Timeout != 5*time.Minute {
+		t.Errorf("history specs %+v, want one call with a 5 minute timeout (5 s a day over 60 days)", specs)
+	}
+}
