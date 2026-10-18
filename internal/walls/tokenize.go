@@ -167,8 +167,14 @@ func tokenizeBash(s string) []word {
 		case c == '"':
 			b.has = true
 			for i++; i < len(runes) && runes[i] != '"'; i++ {
-				if runes[i] == '\\' && i+1 < len(runes) {
+				// Inside double quotes a backslash escapes only $, a backtick,
+				// a quote, a backslash and a newline (which joins the lines);
+				// before any other rune it is itself.
+				if runes[i] == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]) {
 					i++
+					if runes[i] == '\n' {
+						continue
+					}
 				}
 				b.quoted(runes[i])
 			}

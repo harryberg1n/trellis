@@ -17,3 +17,11 @@ func TestResolve_ReadsAnMSYSDrivePathOnWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowPeople_FindsThePinnedWindowsBinaryInDoubleQuotes(t *testing.T) {
+	cmd := `"C:\Users\x\AppData\Local\trellis\bin\v0.0.6\trellis.exe" allow y`
+	a := &analysis{tool: "Bash", cwd: t.TempDir(), command: cmd}
+	if got, want := allowPeople(a), "allow is for a person: ask them to run trellis allow y"; got != want {
+		t.Errorf("allowPeople(%q) = %q, want %q", cmd, got, want)
+	}
+}

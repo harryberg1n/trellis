@@ -47,9 +47,11 @@ func primaryCause(r run.Runner, what, target string) string {
 	if err != nil {
 		rel = target
 	}
-	// Git's own directory is not the working tree, and an ignored path is not
-	// on the default branch: neither lands anything without review.
-	if first, _, _ := strings.Cut(filepath.ToSlash(rel), "/"); first == ".git" || isIgnored(r, f.Root, rel) {
+	// An ignored path is not on the default branch, and .git/info holds the
+	// exclude file that says so. The rest of .git (hooks, config, HEAD, refs,
+	// the index) stays guarded: a write there defeats hook-bypass and
+	// main-commit.
+	if strings.HasPrefix(filepath.ToSlash(rel), ".git/info/") || isIgnored(r, f.Root, rel) {
 		return ""
 	}
 	return fmt.Sprintf("%s %s is in the primary checkout, which is on %s", what, filepath.ToSlash(rel), f.Branch)

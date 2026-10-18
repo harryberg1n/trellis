@@ -606,6 +606,10 @@ func TestPrimaryWrite_ExemptsIgnoredPathsAndTheGitDir(t *testing.T) {
 		{filepath.Join(w.primary, "docs", "sdd", "plan.md"), false},
 		{filepath.Join(w.primary, "build.log"), false},
 		{filepath.Join(w.primary, ".git", "info", "exclude"), false},
+		{filepath.Join(w.primary, ".git", "hooks", "pre-commit"), true},
+		{filepath.Join(w.primary, ".git", "config"), true},
+		{filepath.Join(w.primary, ".git", "refs", "heads", "main"), true},
+		{filepath.Join(w.primary, ".git", "HEAD"), true},
 		{filepath.Join(w.primary, "docs", "a.md"), true},
 		{filepath.Join(w.primary, "README.md"), true},
 	} {
