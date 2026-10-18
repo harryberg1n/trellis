@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
+	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/walls"
 )
 
@@ -83,7 +84,7 @@ func conflictFixable(repo objects.Repo, files []string) error {
 // conflicts leaves MERGE_HEAD: whatever else fails, the primary checkout must
 // not be left merging.
 func abortMerge(env Env, w where, cause error) error {
-	cancelled := env.cancelled()
+	cancelled := errors.Is(cause, context.Canceled)
 	env = env.uncancelled() // the abort must run after an interrupt
 	if _, herr := env.runGit(w.Primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr != nil {
 		return fmt.Errorf("tree merge: %w", cause)
@@ -93,7 +94,7 @@ func abortMerge(env Env, w where, cause error) error {
 		return fmt.Errorf("tree merge: could not abort the merge in %s: %w", w.Primary, aerr)
 	}
 	if cancelled {
-		return fmt.Errorf("tree merge: interrupted; the merge in %s was aborted: %w", w.Primary, context.Canceled)
+		return interruptedf("tree merge: interrupted; the merge in %s was aborted", w.Primary)
 	}
 	return conflictFixable(w.Repo, files)
 }
@@ -121,7 +122,10 @@ func squashLocal(env Env, w where, subject, body string) error {
 // outcome of a Ctrl-C. A conflict names its files only when it came from the
 // squash (merging).
 func undoFailedSquash(env Env, w where, cause error, merging bool) error {
-	cancelled := env.cancelled()
+	if merging && errors.Is(cause, run.ErrNotStarted) {
+		return interruptedf("tree merge: interrupted before the squash started")
+	}
+	cancelled := errors.Is(cause, context.Canceled)
 	env = env.uncancelled()
 	var files []string
 	if merging {
@@ -132,7 +136,7 @@ func undoFailedSquash(env Env, w where, cause error, merging bool) error {
 	}
 	switch {
 	case cancelled:
-		return fmt.Errorf("tree merge: interrupted; the squash in %s was undone: %w", w.Primary, context.Canceled)
+		return interruptedf("tree merge: interrupted; the squash in %s was undone", w.Primary)
 	case len(files) > 0:
 		return conflictFixable(w.Repo, files)
 	}
@@ -149,6 +153,9 @@ func undoFailedSquash(env Env, w where, cause error, merging bool) error {
 // a glob character matches only itself. The squash's leftovers (SQUASH_MSG,
 // MERGE_MSG, AUTO_MERGE) go too, so the next commit does not open prefilled.
 func undoSquash(env Env, dir string) error {
+	if err := removeStaleIndexLock(env, dir); err != nil {
+		return err
+	}
 	out, err := env.runGit(dir, "diff", "-z", "--no-renames", "--name-only", "HEAD")
 	if err != nil {
 		return err
@@ -190,6 +197,24 @@ func undoSquash(env Env, dir string) error {
 		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+	}
+	return nil
+}
+
+// removeStaleIndexLock deletes the index.lock a killed git child left behind.
+// The child that made it has exited by now, and the primary was verified
+// clean before the merge, so no other git of ours holds it; restoring paths
+// fails while it is there.
+func removeStaleIndexLock(env Env, dir string) error {
+	p, err := env.runGit(dir, "rev-parse", "--git-path", "index.lock")
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }

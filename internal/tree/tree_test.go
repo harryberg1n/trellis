@@ -1448,14 +1448,24 @@ type cancelAfter struct {
 	Inner  run.Runner
 	Verb   []string
 	Cancel context.CancelFunc
+	Before bool   // cancel before the matching child, which then never starts
+	After  func() // called once the matching child has run, before the cancel
 }
 
 func (c *cancelAfter) Light(spec run.Spec) (run.Result, error) {
 	if spec.Ctx != nil && spec.Ctx.Err() != nil {
 		return run.Result{}, spec.Ctx.Err()
 	}
+	match := spec.Name == "git" && slices.Contains(spec.Args, c.Verb[0]) && slices.Contains(spec.Args, c.Verb[1])
+	if match && c.Before {
+		c.Cancel()
+		return run.Result{}, errors.Join(run.ErrNotStarted, context.Canceled)
+	}
 	res, err := c.Inner.Light(spec)
-	if err == nil && spec.Name == "git" && slices.Contains(spec.Args, c.Verb[0]) && slices.Contains(spec.Args, c.Verb[1]) {
+	if err == nil && match {
+		if c.After != nil {
+			c.After()
+		}
 		c.Cancel()
 		return res, fmt.Errorf("git: %w", context.Canceled)
 	}
@@ -1587,5 +1597,51 @@ func TestMerge_CheckLastLineHasNoControlBytes(t *testing.T) {
 	want := `tree merge: check "make test" failed: last [31mred`
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %q, want %q", err, want)
+	}
+}
+
+func TestMerge_InterruptWithAStaleIndexLockStillLeavesThePrimaryClean(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	commitFile(t, path, "README.md", "tree readme\n")
+	lock := filepath.Join(f.primary, ".git", "index.lock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel,
+		After: func() { testiso.Write(t, lock, "") }} // what a killed git leaves behind
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "was undone") {
+		t.Fatalf("err = %v, want an interrupt that names the undone squash", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean:\n%s", got)
+	}
+	if exists(lock) {
+		t.Errorf("the stale index.lock was left")
+	}
+}
+
+func TestMerge_InterruptBeforeTheSquashStartsSaysSo(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel, Before: true}
+
+	err := Merge(env, "")
+
+	if err == nil || err.Error() != "tree merge: interrupted before the squash started" || !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the before-the-squash line wrapping context.Canceled", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean:\n%s", got)
 	}
 }

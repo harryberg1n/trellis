@@ -58,13 +58,26 @@ func (e Env) uncancelled() Env {
 	return e
 }
 
+// interruptErr is the one-line error of a verb a signal cut short. It wraps
+// context.Canceled, which is how callers tell it from a failure.
+type interruptErr struct{ msg string }
+
+func (e *interruptErr) Error() string { return e.msg }
+
+func (*interruptErr) Unwrap() error { return context.Canceled }
+
+func interruptedf(format string, a ...any) error {
+	return &interruptErr{msg: fmt.Sprintf(format, a...)}
+}
+
 // cancelled reports whether the verb was interrupted.
 func (e Env) cancelled() bool { return e.Ctx != nil && e.Ctx.Err() != nil }
 
 // interrupted is err, or when the verb was interrupted and err does not say so
 // already, a one-line error that does.
 func (e Env) interrupted(verb string, err error) error {
-	if err == nil || !e.cancelled() || strings.Contains(err.Error(), "interrupted") {
+	var already *interruptErr
+	if err == nil || !e.cancelled() || errors.As(err, &already) {
 		return err
 	}
 	return fmt.Errorf("tree %s: interrupted: %w", verb, context.Canceled)
