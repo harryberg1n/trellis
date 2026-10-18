@@ -1,0 +1,70 @@
+name: nightly mutants
+
+# Copied in shape from aphrollo-tools .github/workflows/nightly-mutants.yml
+# at 12b3724e, where the per-merge mutation measurement held a shared runner
+# for 15 minutes after every push to main (issue #334) and moved to one
+# nightly run. Trellis's version mutates whole packages with gremlins rather
+# than the diff since the last run: the repo is small enough. Only the
+# packages whose suites do not shell out to git are in scope; a mutant in
+# the others costs a 50 s suite run each. A survivor is a test that asserts
+# nothing about that line, which is the mechanical check of the rule that a
+# test's expectation is a literal. No threshold yet: the first nights set
+# the baseline (recorded in the plan), then --threshold-efficacy goes in per
+# package and a night below it is red.
+
+on:
+  schedule:
+    - cron: "45 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mutants
+  cancel-in-progress: false
+
+jobs:
+  mutants:
+    if: github.repository == 'harryberg1n/trellis'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+      - name: mutate the pure packages
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          {
+            echo "| package | efficacy | coverage | killed | lived | not covered | timed out |"
+            echo "|---|---|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for pkg in kernel measure mask store clock engine walls; do
+            echo "=== internal/$pkg"
+            log="mutants-$pkg.log"
+            if ! gremlins unleash "./internal/$pkg" --workers 2 -S lt | tee "$log"; then
+              status=1
+            fi
+            eff=$(grep -o 'Test efficacy: [0-9.]*%' "$log" | tail -1 | cut -d' ' -f3)
+            cov=$(grep -o 'Mutator coverage: [0-9.]*%' "$log" | tail -1 | cut -d' ' -f3)
+            counts=$(grep -E '^Killed:|^Timed out:' "$log" | tr '\n' ' ')
+            killed=$(echo "$counts" | sed -E 's/.*Killed: ([0-9]+).*/\1/')
+            lived=$(echo "$counts" | sed -E 's/.*Lived: ([0-9]+).*/\1/')
+            notcov=$(echo "$counts" | sed -E 's/.*Not covered: ([0-9]+).*/\1/')
+            timed=$(echo "$counts" | sed -E 's/.*Timed out: ([0-9]+).*/\1/')
+            echo "| $pkg | ${eff:-?} | ${cov:-?} | ${killed:-?} | ${lived:-?} | ${notcov:-?} | ${timed:-?} |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $status
+      - name: keep the survivor lists
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants
+          path: mutants-*.log
+          if-no-files-found: ignore
