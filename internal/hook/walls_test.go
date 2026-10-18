@@ -3,9 +3,11 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -168,5 +170,72 @@ func TestPreToolUse_GarbageStillExitsZero(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := Run("PreToolUse", bytes.NewReader([]byte("not json")), &out, &errb, e.deps); code != 0 || out.Len() != 0 || errb.Len() != 0 {
 		t.Errorf("exit %d, stdout %q, stderr %q; want 0, empty, empty", code, out.String(), errb.String())
+	}
+}
+
+func TestContextJSON_IsValidJSONForControlCharacters(t *testing.T) {
+	line := "trellis: x: a\x1bb\ac d <e> & \"f\"\\g"
+	var got struct {
+		Out struct {
+			Event   string `json:"hookEventName"`
+			Context string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(contextJSON([]string{line, "second"})), &got); err != nil {
+		t.Fatalf("contextJSON is not JSON: %v", err)
+	}
+	if got.Out.Event != "PreToolUse" || got.Out.Context != line+"\nsecond" {
+		t.Errorf("decoded %+v, want PreToolUse and the two lines joined by a newline", got.Out)
+	}
+}
+
+func TestPreToolUse_AnAllowWithALineIsShownAsContext(t *testing.T) {
+	e := newEnv(t)
+	lane := e.dirtyLane(t)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(gitPath))
+	code, stdout, stderr := e.pre(t, lane, `git commit -m "fix"`, true)
+	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"not applicable: gitleaks not installed"}}` + "\n"
+	if code != 0 || stdout != want || stderr != "" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want 0, %q, empty", code, stdout, stderr, want)
+	}
+	if evs := e.events(t); len(evs) != 0 {
+		t.Errorf("events %v, want none: the line is shown, not recorded", details(evs))
+	}
+}
+
+func TestOverride_NeedsATokenForEveryDeny(t *testing.T) {
+	e := newEnv(t)
+	testsupport.FakeTool(t, "gitleaks", 0, "")
+	cmd := "git commit --no-verify -m x" // main-commit and hook-bypass, in the primary on main
+	if err := e.st.Allow("main-commit"); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := e.pre(t, e.repo, cmd, true)
+	if code != 2 || !strings.Contains(stderr, "trellis: main-commit: ") || !strings.Contains(stderr, "trellis: hook-bypass: ") {
+		t.Fatalf("one token for two denies: exit %d, stderr %q; want 2 and both lines", code, stderr)
+	}
+	if ok, err := e.st.TakeAllow("main-commit"); err != nil || !ok {
+		t.Fatalf("the main-commit token was burnt although the command stayed blocked (%v, %v)", ok, err)
+	}
+	for _, id := range []string{"main-commit", "hook-bypass"} {
+		if err := e.st.Allow(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, _, stderr := e.pre(t, e.repo, cmd, true); code != 0 || stderr != "" {
+		t.Fatalf("a token for each deny: exit %d, stderr %q; want 0", code, stderr)
+	}
+	var overridden []string
+	for _, ev := range e.events(t) {
+		if ev.Kind == "wall.overridden" {
+			overridden = append(overridden, ev.Detail["row"])
+		}
+	}
+	if !reflect.DeepEqual(overridden, []string{"main-commit", "hook-bypass"}) {
+		t.Errorf("wall.overridden rows %v, want [main-commit hook-bypass]", overridden)
 	}
 }
