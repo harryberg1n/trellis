@@ -29,7 +29,7 @@ const markerText = "# trellis is on in this repository.\n# Commit this file; a r
 
 // Options says where to install and what.
 type Options struct {
-	Repo      string // the repository's primary checkout; "" touches no repository
+	Repo      string // a checkout of the repository (a linked worktree stands for its primary); "" touches no repository
 	ConfigDir string // the Claude config directory whose settings.json holds the hooks
 	Root      string // the state root
 	Exe       string // the running binary, the source of the pinned copy
@@ -38,17 +38,21 @@ type Options struct {
 
 	AllowDev bool // pin a build whose version is "dev"
 
+	here string // the checkout the verb runs in, set by atPrimary; "" when Repo is none
+
 	// Clock names the backup of an existing settings file; nil is the wall clock.
 	Clock clock.Clock
 }
 
 // atPrimary is o with Repo naming the primary checkout of its repository: a
 // linked worktree stands for its primary, whose root holds the committed
-// trellis.toml and is the one path the record of repositories keeps. A Repo
-// that is not a repository, or "", is left as it is.
+// trellis.toml and is the one path the record of repositories keeps. The
+// checkout Repo named stays in here: the marker is written and checked there.
+// A Repo that is not a repository, or "", is left as it is.
 func (o Options) atPrimary() Options {
+	o.here = o.Repo
 	if r, err := objects.Open(o.Repo); o.Repo != "" && err == nil {
-		o.Repo = r.PrimaryRoot()
+		o.here, o.Repo = r.Root, r.PrimaryRoot()
 	}
 	return o
 }
@@ -264,7 +268,8 @@ func withBackup(actions []string, backup, file string) []string {
 }
 
 // Install wires the user-level settings (see Wire), writes trellis.toml at the
-// repository's root when it has none, and removes trellis's entries from the
+// root of the checkout it runs in (a linked worktree's own, committed from there)
+// when that has none, and removes trellis's entries from the
 // repository's project-local settings and from each linked worktree's. It
 // records the repository for `trellis update`. It validates everything before
 // it writes anything, and returns one line per action; with Dry the lines
@@ -283,8 +288,8 @@ func Install(o Options) ([]string, error) {
 		if edits, notes, err = planPrune(o); err != nil {
 			return nil, err
 		}
-		if writeMarker = !objects.HasMarker(o.Repo); writeMarker {
-			actions = append(actions, "write "+filepath.Join(o.Repo, objects.MarkerFile))
+		if writeMarker = !objects.HasMarker(o.here); writeMarker {
+			actions = append(actions, "write "+filepath.Join(o.here, objects.MarkerFile))
 		} else {
 			actions = append(actions, "keep "+objects.MarkerFile)
 		}
@@ -302,7 +307,7 @@ func Install(o Options) ([]string, error) {
 	}
 	actions = withBackup(actions, backup, p.file)
 	if writeMarker {
-		err := store.WriteAtomic(o.Repo, objects.MarkerFile, []byte(markerText), store.WithMode(0o644), store.WithTempPattern(".trellis-*"))
+		err := store.WriteAtomic(o.here, objects.MarkerFile, []byte(markerText), store.WithMode(0o644), store.WithTempPattern(".trellis-*"))
 		if err != nil {
 			return nil, err
 		}
@@ -513,7 +518,7 @@ func Eject(o Options) ([]string, error) {
 	if o.Repo == "" {
 		return actions, nil
 	}
-	if objects.HasMarker(o.Repo) {
+	if objects.HasMarker(o.here) {
 		actions = append(actions, "keep "+objects.MarkerFile+": it is this repository's own committed file")
 	}
 	return actions, ForgetRepo(o.Root, o.Repo)
@@ -550,7 +555,7 @@ func Doctor(o Options) []string {
 // project-local file that would fire the hooks a second time.
 func checkRepo(o Options) []string {
 	var problems []string
-	if !objects.HasMarker(o.Repo) {
+	if !objects.HasMarker(o.here) {
 		problems = append(problems, objects.MarkerFile+" missing: this repository is off")
 	}
 	dirs, _, err := checkouts(o.Repo)

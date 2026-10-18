@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -37,16 +38,18 @@ func mergeLocal(env Env, w where, check string, rebase bool) error {
 	if primary.Branch != repo.Default {
 		return fmt.Errorf("tree merge: the primary checkout is on %s, not %s", primary.Branch, repo.Default)
 	}
-	// Untracked files in the primary never block a landing: a merge does
-	// not touch them, and git refuses on its own when one would be
-	// overwritten. The primary of every installed repository holds at
-	// least one, the settings file install wrote.
+	// Untracked files in the primary do not block a landing, except one at a
+	// path the tree changes (refuseUntrackedCollision). The primary of every
+	// installed repository holds at least one, the settings file install wrote.
 	dirty, err := walls.Dirty(env.git(), w.Primary, walls.IgnoreUntracked())
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
 	if dirty != "" {
 		return fmt.Errorf("tree merge: the primary checkout has %s; commit or discard it first", dirty)
+	}
+	if err := refuseUntrackedCollision(env, w); err != nil {
+		return err
 	}
 
 	subject := "Merge tree " + name
@@ -242,4 +245,49 @@ func mergeBody(env Env, dir, base, name string) string {
 		subjects[i] = "- " + s
 	}
 	return strings.Join(subjects, "\n")
+}
+
+// refuseUntrackedCollision refuses, before anything changes, a landing that
+// would write a path the primary holds untracked: git stops such a merge with
+// a half-said error, and the file is not git's to overwrite. The paths are the
+// ones the tree adds or modifies against its merge base (a path it deletes
+// is git's to leave alone), read NUL-separated; the
+// primary's untracked entries are the "??" records of status, each file on its
+// own (a git-ignored file is not untracked, so it never collides).
+func refuseUntrackedCollision(env Env, w where) error {
+	base, err := env.runGit(w.Primary, "merge-base", "HEAD", w.Repo.Branch)
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	changed, err := env.runGit(w.Primary, "diff", "-z", "--no-renames", "--name-only", "--diff-filter=ACMRT", base+".."+w.Repo.Branch)
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	status, err := env.runGit(w.Primary, "status", "--porcelain", "-z", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	var untracked []string
+	for _, rec := range strings.Split(status, "\x00") {
+		if p, ok := strings.CutPrefix(rec, "?? "); ok {
+			untracked = append(untracked, p)
+		}
+	}
+	// A path collides when the tree writes it or a file below it, or a
+	// directory above it, over an untracked entry (a file where the tree
+	// wants a directory, or the reverse). The untracked path is named: it is
+	// the one to remove.
+	added := strings.Split(changed, "\x00")
+	var msgs []string
+	for _, u := range untracked {
+		if slices.ContainsFunc(added, func(p string) bool {
+			return p != "" && (p == u || strings.HasPrefix(p, u+"/") || strings.HasPrefix(u, p+"/"))
+		}) {
+			msgs = append(msgs, fmt.Sprintf("tree merge: %s is untracked in the primary and the tree changes it: remove it there or commit it, then merge again", u))
+		}
+	}
+	if len(msgs) > 0 {
+		return &Fixable{Msg: strings.Join(msgs, "\n")}
+	}
+	return nil
 }

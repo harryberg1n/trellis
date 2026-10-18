@@ -32,7 +32,7 @@ verbs:
 exit codes of merge and sync: 0 done; 130 interrupted; 2 when you can fix it and run it again (red or cancelled
 checks, a conflict, a branch that is behind or blocked, a head that moved after the checks judged it, a run of
 the head still queued after 30 minutes, uncommitted changes (sync), commits on origin the tree lacks (a refused
-push)); 1 anything else.
+push), an untracked file in the primary at a path the tree changes); 1 anything else.
 `
 
 // treeUsageLine is the usage line of a tree verb.

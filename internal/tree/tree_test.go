@@ -1942,3 +1942,100 @@ func TestMerge_LocalRefusesAPrimaryStuckMidRebase(t *testing.T) {
 		t.Errorf("err = %v, want %q", err, want)
 	}
 }
+
+func TestMerge_LocalRefusesAnUntrackedPathTheTreeChangesAndChangesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []MergeOption
+	}{{"squash", nil}, {"rebase", []MergeOption{Rebase()}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLocalFixture(t)
+			path := f.openTree(t)
+			commitFile(t, path, "trellis.toml", "# on\n")
+			commitFile(t, path, "docs/a.txt", "a\n")
+			commitFile(t, path, "mine.txt", "mine\n")
+			testiso.Write(t, filepath.Join(f.primary, "trellis.toml"), "# on, untracked\n")
+			testiso.Write(t, filepath.Join(f.primary, "docs", "a.txt"), "untracked\n")
+			testiso.Write(t, filepath.Join(f.primary, "scratch.txt"), "not the tree's\n")
+			status := func() string {
+				return testiso.Git(t, f.primary, "status", "--porcelain", "-uall") + "|" + testiso.Git(t, path, "status", "--porcelain", "-uall") +
+					"|" + testiso.Git(t, f.primary, "rev-parse", "HEAD") + "|" + testiso.Git(t, path, "rev-parse", "HEAD")
+			}
+			before := status()
+
+			err := Merge(f.env(path), "", tc.opts...)
+
+			want := "tree merge: docs/a.txt is untracked in the primary and the tree changes it: remove it there or commit it, then merge again\n" +
+				"tree merge: trellis.toml is untracked in the primary and the tree changes it: remove it there or commit it, then merge again"
+			if fixable(err) == nil || err.Error() != want {
+				t.Fatalf("err = %v, want fixable %q", err, want)
+			}
+			if after := status(); after != before {
+				t.Errorf("checkouts changed:\nbefore %q\nafter  %q", before, after)
+			}
+			if !exists(path) || slices.Contains(f.kinds(), "tree.merged") {
+				t.Errorf("tree exists %v, kinds %v; want the tree kept and no merge recorded", exists(path), f.kinds())
+			}
+		})
+	}
+}
+
+func TestMerge_LocalAnIgnoredFileAtAnUntouchedPathIsNoCollision(t *testing.T) {
+	f := newLocalFixture(t)
+	commitFile(t, f.primary, ".gitignore", "scratch.log\n")
+	path := f.openTree(t)
+	commitFile(t, path, "mine.txt", "mine\n")
+	testiso.Write(t, filepath.Join(f.primary, "scratch.log"), "ignored\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
+		t.Errorf("subject = %q, want Merge tree feat", got)
+	}
+}
+
+func TestMerge_LocalAPathTheTreeDeletesAndThePrimaryHoldsUntrackedLands(t *testing.T) {
+	f := newLocalFixture(t)
+	commitFile(t, f.primary, "x.txt", "x\n")
+	path := f.openTree(t)
+	testiso.Git(t, path, "rm", "-q", "x.txt")
+	testiso.Git(t, path, "commit", "-qm", "drop x.txt")
+	commitFile(t, path, "mine.txt", "mine\n")
+	testiso.Git(t, f.primary, "rm", "-q", "x.txt")
+	testiso.Git(t, f.primary, "commit", "-qm", "drop x.txt in the primary")
+	testiso.Write(t, filepath.Join(f.primary, "x.txt"), "recreated, untracked\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
+		t.Errorf("subject = %q, want Merge tree feat", got)
+	}
+	if !exists(filepath.Join(f.primary, "x.txt")) {
+		t.Error("the untracked x.txt is gone after the merge")
+	}
+}
+
+func TestMerge_LocalADirectoryAndFileClashIsACollision(t *testing.T) {
+	for _, tc := range []struct{ name, treeFile, primaryFile, want string }{
+		{"tree adds below an untracked file", "a/b", "a", "a"},
+		{"tree adds a file over an untracked directory", "d", "d/e", "d/e"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLocalFixture(t)
+			path := f.openTree(t)
+			commitFile(t, path, tc.treeFile, "tree\n")
+			testiso.Write(t, filepath.Join(f.primary, filepath.FromSlash(tc.primaryFile)), "untracked\n")
+
+			err := Merge(f.env(path), "")
+
+			want := "tree merge: " + tc.want + " is untracked in the primary and the tree changes it: remove it there or commit it, then merge again"
+			if fixable(err) == nil || err.Error() != want {
+				t.Fatalf("err = %v, want fixable %q", err, want)
+			}
+		})
+	}
+}

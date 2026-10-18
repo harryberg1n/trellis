@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/hook"
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -186,5 +187,39 @@ func TestInstall_PinnedBinaryRunsTheHook(t *testing.T) {
 	}
 	if code, out, errs := runBin(t, pinned, state, "", []string{"doctor", "--repo", repo, "--config-dir", config}); code != 0 || out != "doctor: ok\n" || errs != "" {
 		t.Errorf("doctor from the pinned copy: exit %d, stdout %q, stderr %q", code, out, errs)
+	}
+}
+
+func TestInstallVerbs_InATreeTheMarkerIsTheTreesAndThePrimaryStaysOffUntilItIsMerged(t *testing.T) {
+	env, repo, _, _ := installFixture(t, false)
+	tree := testiso.AddTree(t, repo, "feat-tree", "feat")
+	inTree := env
+	inTree.Cwd = tree
+
+	if code, out, errs := runInstall(inTree, "install", "--allow-dev"); code != 0 || errs != "" || !strings.Contains(out, "write "+filepath.Join(tree, "trellis.toml")+"\n") {
+		t.Fatalf("install in the tree: %d %q %q", code, out, errs)
+	}
+
+	if _, err := os.Stat(filepath.Join(tree, "trellis.toml")); err != nil {
+		t.Errorf("trellis.toml not written in the tree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "trellis.toml")); !os.IsNotExist(err) {
+		t.Errorf("trellis.toml written in the primary (%v)", err)
+	}
+	if hook.Off(tree, "") {
+		t.Error("the hook is off in the tree that holds trellis.toml")
+	}
+	if !hook.Off(repo, "") {
+		t.Error("the hook is on in the primary before the file is merged")
+	}
+	if code, out, _ := runInstall(inTree, "doctor"); code != 0 || out != "doctor: ok\n" {
+		t.Errorf("doctor in the tree: %d %q", code, out)
+	}
+	if code, out, _ := runInstall(env, "doctor"); code != 1 || out != "trellis.toml missing: this repository is off\n" {
+		t.Errorf("doctor in the primary: %d %q", code, out)
+	}
+	code, out, _ := runInstall(inTree, "eject")
+	if want := "keep trellis.toml: it is this repository's own committed file\n"; code != 0 || !strings.HasSuffix(out, want) {
+		t.Errorf("eject in the tree: %d %q, want it to end %q", code, out, want)
 	}
 }
