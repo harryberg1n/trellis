@@ -60,12 +60,6 @@ func Run(env Env, o Options) error {
 	if !o.Dry {
 		removeStale(env.Exe)
 	}
-	// Read before the re-install below: that marks the record, and a record
-	// an install had not marked when this run began may be missing repos.
-	complete, err := install.ReposComplete(env.Root)
-	if err != nil {
-		return flat(err)
-	}
 	tag, err := u.target(o.To)
 	if err != nil {
 		return flat(err)
@@ -82,11 +76,13 @@ func Run(env Env, o Options) error {
 	if err != nil {
 		return flat(err)
 	}
-	if err := u.replaceOnPath(bin); err != nil {
-		return err
-	}
-	u.sweep(tag, sweepFacts{alive: alive, missing: missing, complete: complete})
+	pathErr := u.replaceOnPath(bin)
+	u.sweep(tag, sweepFacts{alive: alive, missing: missing})
 	u.step("update: %s -> %s", env.Version, tag)
+	if pathErr != nil {
+		u.say("the binary on PATH was not replaced: %s", oneLine(pathErr))
+		return flat(pathErr)
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d repos could not be updated", failed, len(alive))
 	}
@@ -166,9 +162,15 @@ func (u updater) pin(tag string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	pinned, _, err := install.Pin(u.Root, tag, staged)
+	pinned, copied, err := install.Pin(u.Root, tag, staged)
 	if err != nil {
 		return "", err
+	}
+	if copied {
+		// After the pin, so a crash between the two leaves a pin no sweep takes.
+		if err := install.RecordCreatedPin(u.Root, tag); err != nil {
+			return "", err
+		}
 	}
 	u.say("pin %s", pinned)
 	return pinned, nil
@@ -289,9 +291,12 @@ func (u updater) replaceOnPath(bin string) error {
 	if u.Exe == "" {
 		return nil
 	}
-	if _, inside := store.Within(filepath.Join(u.Root, "bin"), store.Canonical(u.Exe)); inside {
+	// Both sides in one spelling: os.Executable and the state root may differ
+	// (8.3 short names, symlinks) for the same file.
+	exe, pin := store.Canonical(u.Exe), store.Canonical(bin)
+	if _, inside := store.Within(store.Canonical(filepath.Join(u.Root, "bin")), exe); inside {
 		// A pinned copy is what the hooks run; it is not the one on PATH.
-		u.say("the binary on PATH is %s; the new one is %s", u.Exe, bin)
+		u.say("the binary on PATH is %s; the new one is %s", exe, pin)
 		return nil
 	}
 	if u.dry {
@@ -304,7 +309,7 @@ func (u updater) replaceOnPath(bin string) error {
 	}
 	switch err := replaceExe(u.Exe, data); {
 	case errors.Is(err, errNotWritable):
-		u.say("the binary on PATH is %s; the new one is %s", u.Exe, bin)
+		u.say("the binary on PATH is %s; the new one is %s", exe, pin)
 	case err != nil:
 		return err
 	default:
@@ -316,7 +321,6 @@ func (u updater) replaceOnPath(bin string) error {
 // sweepFacts is what the sweep knows about the recorded repos.
 type sweepFacts struct {
 	alive, missing []string
-	complete       bool // an install had marked the record when the run began
 }
 
 // sweep removes the pinned versions beyond the newest three that no live repo's
@@ -325,17 +329,22 @@ type sweepFacts struct {
 func (u updater) sweep(tag string, facts sweepFacts) {
 	keep := map[string]bool{tag: true, u.Version: true}
 	pins := append(pinned(u.Root), tag)
-	plan := sweepPlan(pins, keep)
-	if len(plan) == 0 {
+	madeByUpdate, err := install.CreatedPins(u.Root)
+	if err != nil {
+		u.say("sweep: %s", oneLine(err))
 		return
 	}
-	// A pin is removed only on positive evidence that nothing points at it. A
-	// record no install marked may lack repos; a repo not found cannot be read.
-	switch {
-	case !facts.complete:
-		u.say("sweep skipped: repos installed before v0.0.4 are not recorded; run trellis install in each once")
+	created := map[string]bool{}
+	for _, v := range madeByUpdate {
+		created[v] = true
+	}
+	// Only a pin update created is a candidate: one an install made may be
+	// pointed at by a repo the record never heard of.
+	if len(sweepPlan(pins, keep, created)) == 0 {
 		return
-	case len(facts.missing) > 0:
+	}
+	// A repo not found cannot be read, so what it references is unknown.
+	if len(facts.missing) > 0 {
 		u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", facts.missing[0])
 		return
 	}
@@ -350,7 +359,7 @@ func (u updater) sweep(tag string, facts sweepFacts) {
 			keep[r] = true
 		}
 	}
-	for _, v := range sweepPlan(pins, keep) {
+	for _, v := range sweepPlan(pins, keep, created) {
 		if u.dry {
 			u.step("remove pin %s", v)
 			continue

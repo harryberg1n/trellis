@@ -178,6 +178,9 @@ func TestUpdate_DownloadsVerifiesPinsAndReinstallsEveryRepo(t *testing.T) {
 	if got := read(t, w.exe); got != newBinary {
 		t.Errorf("the binary on PATH = %q, want %q", got, newBinary)
 	}
+	if got := read(t, filepath.Join(w.root, "pins.txt")); got != "v0.0.4\n" {
+		t.Errorf("pins.txt = %q, want the pin update created", got)
+	}
 	if _, err := os.Stat(filepath.Join(w.root, "stage", "v0.0.4")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the staging directory was left: %v", err)
 	}
@@ -318,13 +321,8 @@ func TestUpdate_ToSwitchesWithoutDownload(t *testing.T) {
 
 func TestUpdate_KeepsNewestThreePins(t *testing.T) {
 	w := newWorld(t)
-	src := filepath.Join(w.dir, "src2", "trellis")
-	testiso.Write(t, src, "older")
-	for _, v := range []string{"v0.0.1", "v0.0.2", "v0.0.10", "odd"} {
-		if _, _, err := install.Pin(w.root, v, src); err != nil {
-			t.Fatal(err)
-		}
-	}
+	w.updatePins("v0.0.1", "v0.0.2", "v0.0.10")
+	w.oldPins("odd")
 
 	if err := w.run(Options{}); err != nil {
 		t.Fatal(err)
@@ -340,10 +338,11 @@ func TestUpdate_KeepsNewestThreePins(t *testing.T) {
 	}
 }
 
-func TestSweepPlan_KeepsReferencedAndProtectedPins(t *testing.T) {
+func TestSweepPlan_RemovesOnlyOldUnreferencedCreatedPins(t *testing.T) {
 	pins := []string{"v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4", "v0.0.10", "v0.0.10", "odd"}
 
-	got := sweepPlan(pins, map[string]bool{"v0.0.1": true})
+	created := map[string]bool{"v0.0.1": true, "v0.0.2": true, "v0.0.4": true}
+	got := sweepPlan(pins, map[string]bool{"v0.0.1": true}, created)
 
 	if want := []string{"v0.0.2"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("sweepPlan removes %v, want %v", got, want)
@@ -440,6 +439,18 @@ func (w *world) oldPins(versions ...string) {
 	}
 }
 
+// updatePins pins these versions the way update does: the file, then a line in
+// pins.txt.
+func (w *world) updatePins(versions ...string) {
+	w.t.Helper()
+	w.oldPins(versions...)
+	for _, v := range versions {
+		if err := install.RecordCreatedPin(w.root, v); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
 // alsoReference adds a second Stop hook to the repo's settings that runs the
 // pinned binary of version, a place install's re-install does not rewrite.
 func (w *world) alsoReference(repo, version string) {
@@ -462,7 +473,8 @@ func (w *world) alsoReference(repo, version string) {
 
 func TestUpdate_SweepKeepsAPinARepoStillReferences(t *testing.T) {
 	w := newWorld(t)
-	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	w.updatePins("v0.0.1", "v0.0.2")
+	w.oldPins("v0.0.5")
 	w.alsoReference(w.repos[1], "v0.0.1")
 
 	if err := w.run(Options{}); err != nil {
@@ -477,30 +489,28 @@ func TestUpdate_SweepKeepsAPinARepoStillReferences(t *testing.T) {
 	}
 }
 
-func TestUpdate_SweepSkippedUntilAnInstallMarkedTheRecord(t *testing.T) {
+func TestUpdate_NeverSweepsAPinItDidNotCreate(t *testing.T) {
 	w := newWorld(t)
-	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
-	// A record from before the marker existed: repos listed, no first line.
-	testiso.Write(t, filepath.Join(w.root, "repos.txt"), w.repos[0]+"\n"+w.repos[1]+"\n")
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5") // made by installs, not in pins.txt
 
 	if err := w.run(Options{}); err != nil {
 		t.Fatal(err)
 	}
 
-	// The re-install of each repo marks the record, but only after the sweep
-	// decision reads it, so this run still must not sweep.
 	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("pins = %v, want %v", got, want)
 	}
-	const line = "sweep skipped: repos installed before v0.0.4 are not recorded; run trellis install in each once"
-	if !contains(w.lines(), line) {
-		t.Errorf("no line %q in:\n%s", line, w.out)
+	for _, l := range w.lines() {
+		if strings.Contains(l, "pin v0.0.1") || strings.HasPrefix(l, "sweep") {
+			t.Errorf("unexpected line %q", l)
+		}
 	}
 }
 
 func TestUpdate_SweepSkippedWhileARepoIsMissing(t *testing.T) {
 	w := newWorld(t)
-	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	w.updatePins("v0.0.1", "v0.0.2")
+	w.oldPins("v0.0.5")
 	missing := store.Canonical(filepath.Join(w.dir, "unmounted"))
 	if err := install.RecordRepo(w.root, missing); err != nil {
 		t.Fatal(err)
@@ -520,7 +530,8 @@ func TestUpdate_SweepSkippedWhileARepoIsMissing(t *testing.T) {
 
 func TestUpdate_SweepStopsWhenASettingsFileIsUnreadable(t *testing.T) {
 	w := newWorld(t)
-	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	w.updatePins("v0.0.1", "v0.0.2")
+	w.oldPins("v0.0.5")
 	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
 
 	err := w.run(Options{})
@@ -540,17 +551,28 @@ func TestUpdate_SweepStopsWhenASettingsFileIsUnreadable(t *testing.T) {
 	}
 }
 
-func TestUpdate_DryNamesOnlyPinsARealRunRemoves(t *testing.T) {
-	w := newWorld(t)
-	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
-	w.alsoReference(w.repos[1], "v0.0.1")
-
-	if err := w.run(Options{Dry: true}); err != nil {
-		t.Fatal(err)
+func TestUpdate_DryNamesExactlyThePinsARealRunRemoves(t *testing.T) {
+	removed := func(dry bool) []string {
+		w := newWorld(t)
+		w.updatePins("v0.0.1", "v0.0.2", "v0.0.6")
+		w.oldPins("v0.0.5", "v0.0.7")
+		w.alsoReference(w.repos[1], "v0.0.1")
+		if err := w.run(Options{Dry: dry}); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, l := range w.lines() {
+			if name, ok := strings.CutPrefix(strings.TrimPrefix(l, "would "), "remove pin "); ok {
+				out = append(out, name)
+			}
+		}
+		return out
 	}
 
-	if !contains(w.lines(), "would remove pin v0.0.2") || contains(w.lines(), "would remove pin v0.0.1") {
-		t.Errorf("dry sweep lines wrong in:\n%s", w.out)
+	dry, actual := removed(true), removed(false)
+
+	if want := []string{"v0.0.2"}; !reflect.DeepEqual(dry, want) || !reflect.DeepEqual(actual, want) {
+		t.Errorf("dry removes %v, actual removes %v; both want %v", dry, actual, want)
 	}
 }
 
@@ -645,6 +667,18 @@ func TestUpdate_ANonPermissionFailureOnPathIsAnError(t *testing.T) {
 	if strings.Contains(w.out.String(), "the binary on PATH is") {
 		t.Errorf("a failure that is not a permission one printed the hint:\n%s", w.out)
 	}
+	lines := w.lines()
+	if !contains(lines, "update: v0.0.3 -> v0.0.4") {
+		t.Errorf("no summary line in:\n%s", w.out)
+	}
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "the binary on PATH was not replaced: ") {
+		t.Errorf("last line = %q, want the reason the binary on PATH was not replaced", last)
+	}
+	for _, repo := range w.repos {
+		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
+			t.Errorf("%s hooks point at %v, want [v0.0.4]", repo, got)
+		}
+	}
 }
 
 func TestUpdate_BinaryOnPathInsideThePinsIsNamedNotReplaced(t *testing.T) {
@@ -655,7 +689,7 @@ func TestUpdate_BinaryOnPathInsideThePinsIsNamedNotReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := "the binary on PATH is " + w.exe + "; the new one is " + install.BinPath(w.root, "v0.0.4", "")
+	want := "the binary on PATH is " + store.Canonical(w.exe) + "; the new one is " + store.Canonical(install.BinPath(w.root, "v0.0.4", ""))
 	if !contains(w.lines(), want) {
 		t.Errorf("no line %q in:\n%s", want, w.out)
 	}

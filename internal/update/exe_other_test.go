@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/install"
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -28,7 +29,7 @@ func TestUpdate_UnwritableBinaryOnPathNamesTheNewOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := "the binary on PATH is " + w.exe + "; the new one is " + install.BinPath(w.root, "v0.0.4", "")
+	want := "the binary on PATH is " + store.Canonical(w.exe) + "; the new one is " + store.Canonical(install.BinPath(w.root, "v0.0.4", ""))
 	if !contains(w.lines(), want) {
 		t.Errorf("no line %q in:\n%s", want, w.out)
 	}
