@@ -19,7 +19,10 @@ type Checkpoint struct {
 
 func (s *Store) statePath() string { return filepath.Join(s.dir, "state.json") }
 
-// Checkpoint loads state.json; a missing file is an empty checkpoint.
+// Checkpoint loads state.json; a missing file is an empty checkpoint. So is
+// one that is empty or does not parse (a lazy Save can leave it so after a
+// power loss): its bytes go to events.quarantine and the caller replays the
+// log from Seq 1, as it does for any checkpoint behind the log.
 func (tx *Tx) Checkpoint() (Checkpoint, error) {
 	var cp Checkpoint
 	raw, err := os.ReadFile(tx.s.statePath())
@@ -29,8 +32,11 @@ func (tx *Tx) Checkpoint() (Checkpoint, error) {
 	if err != nil {
 		return cp, err
 	}
-	err = json.Unmarshal(raw, &cp)
-	return cp, err
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		tx.s.skip(logLine{off: -1, raw: raw})
+		return Checkpoint{}, nil
+	}
+	return cp, nil
 }
 
 // Save writes state.json atomically: a temp file in the same directory,
