@@ -13,34 +13,26 @@ import (
 	"unicode/utf8"
 )
 
-// StringsAndComments blanks both the strings and the comments of cmd, read as
-// bash. A string's own quotes stay, so `echo "x"` masks to `echo " "`.
-func StringsAndComments(cmd string) string {
-	return NewLexer(Bash()).Lex(cmd, true, true)
+// rowFor is the lexer row of the tool that runs the command: PowerShell for
+// the PowerShell tool, bash for anything else.
+func rowFor(tool string) Language {
+	if tool == "PowerShell" {
+		return PowerShell()
+	}
+	return Bash()
 }
 
-// ForTool is cmd masked by the row of the tool that runs it: PowerShell for
-// the PowerShell tool, bash for anything else. Strings and comments are blanked.
-func ForTool(tool, cmd string) string { return Blank(tool, cmd, true, true) }
-
 // Blank is cmd read by the tool's row with the contents of its strings, its
-// comments, or both blanked. The result is as long as cmd, byte for byte.
+// comments, or both blanked. The result is as long as cmd, byte for byte. A
+// string's own quotes stay, so `echo "x"` masks to `echo " "`.
 func Blank(tool, cmd string, strs, comments bool) string {
-	row := Bash()
-	if tool == "PowerShell" {
-		row = PowerShell()
-	}
-	return NewLexer(row).Lex(cmd, strs, comments)
+	return NewLexer(rowFor(tool)).Lex(cmd, strs, comments)
 }
 
 // Code is cmd with its strings and comments blanked, newlines inside strings
 // included: every newline left is one that ends a command. As long as cmd.
 func Code(tool, cmd string) string {
-	row := Bash()
-	if tool == "PowerShell" {
-		row = PowerShell()
-	}
-	lx := NewLexer(row)
+	lx := NewLexer(rowFor(tool))
 	lx.StringNewlines = true
 	return lx.Lex(cmd, true, true)
 }
