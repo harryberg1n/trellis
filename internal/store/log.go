@@ -221,6 +221,7 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close() // also on a panic in fsync; the explicit Close below reports its error
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
 		last := make([]byte, 1)
 		if _, err := f.ReadAt(last, fi.Size()-1); err == nil && last[0] != newline {
@@ -229,12 +230,10 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 		}
 	}
 	if _, err := f.Write(buf.Bytes()); err != nil {
-		f.Close()
 		return nil, err
 	}
 	if tx.mode == Durable {
 		if err := tx.s.fsync(f); err != nil {
-			f.Close()
 			return nil, err
 		}
 	}
