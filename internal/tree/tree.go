@@ -220,16 +220,16 @@ func Merge(env Env, check string) error {
 		return errors.New("tree merge: gh is not installed or not authenticated")
 	}
 	if _, err := env.runGit(repo.Root, "push", "--force-with-lease", "-u", "origin", name); err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return fmt.Errorf("tree merge: push failed: %s", firstLine(err))
 	}
 	env.say("pushed %s", name)
 	gh := host.GH{Runner: env.Runner, Dir: repo.Root}
 	if err := ensurePullRequest(gh, name, repo.Default); err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
 	st, err := gh.ViewMergeable(name, env.wait)
 	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
 	pr := st.Number
 	env.say("pull request #%d", pr)
@@ -256,7 +256,7 @@ func Merge(env Env, check string) error {
 		// gh merges first and then tries to move this checkout off the branch,
 		// which it cannot while the default branch is checked out elsewhere.
 		if st, verr := gh.PRView(name); verr != nil || st.State != "MERGED" {
-			return fmt.Errorf("tree merge: #%d: %w", pr, err)
+			return fmt.Errorf("tree merge: merge failed: %s", firstLine(err))
 		}
 	}
 	env.record(mergedEvent(name, pr))

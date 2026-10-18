@@ -99,8 +99,31 @@ func checksError(env Env, gh host.GH, pr int, err error) error {
 	if fx := unpassedChecks(env, gh, pr, ""); fx != nil {
 		return fx
 	}
-	line, _, _ := strings.Cut(strings.TrimPrefix(err.Error(), "host: "), "\n")
-	return fmt.Errorf("tree merge: checks could not be read: %s", line)
+	return fmt.Errorf("tree merge: checks could not be read: %s", firstLine(err))
+}
+
+var exitStatus = regexp.MustCompile(`exit status \d+:\s*`)
+
+// firstLine is the first non-empty line of the stderr a failed child left in
+// err: run.Light puts it after "exit status N: ". An error in another shape
+// gives its own first line.
+func firstLine(err error) string {
+	text := err.Error()
+	if loc := exitStatus.FindStringIndex(text); loc != nil {
+		if l := firstNonEmpty(text[loc[1]:]); l != "" {
+			return l
+		}
+	}
+	return firstNonEmpty(text)
+}
+
+func firstNonEmpty(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return l
+		}
+	}
+	return ""
 }
 
 // unpassedChecks is a Fixable listing every check of the pull request that
