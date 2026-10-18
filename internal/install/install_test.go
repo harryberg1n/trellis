@@ -34,7 +34,7 @@ func newFixture(t *testing.T) fixture {
 }
 
 func (f fixture) opts(version string, dry bool) Options {
-	return Options{Repo: f.repo, Root: f.root, Exe: f.exe, Version: version, Dry: dry}
+	return Options{Repo: f.repo, Common: filepath.Join(f.repo, ".git"), Root: f.root, Exe: f.exe, Version: version, Dry: dry}
 }
 
 func (f fixture) settings() string { return SettingsPath(f.repo) }
@@ -85,6 +85,7 @@ func TestInstall_AddsTrellisEntriesOnly(t *testing.T) {
 		"copy binary " + bin,
 		"add hook PreToolUse", "add hook PostToolUse", "add hook Stop",
 		"add hook SessionStart", "add hook SessionEnd", "add hook UserPromptSubmit",
+		"exclude .claude/settings.local.json from git status",
 	}
 	// Stop and PreToolUse already exist as foreign arrays: still "add hook".
 	if strings.Join(actions, "\n") != strings.Join(want, "\n") {
@@ -162,7 +163,7 @@ func TestInstall_DryChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 7 || actions[0] != "would copy binary "+filepath.Join(f.root, "bin", "v0.0.2", "trellis") || actions[1] != "would add hook PreToolUse" {
+	if len(actions) != 8 || actions[0] != "would copy binary "+filepath.Join(f.root, "bin", "v0.0.2", "trellis") || actions[1] != "would add hook PreToolUse" {
 		t.Errorf("actions %q", actions)
 	}
 	after := hashTree(t, f.repo, f.root)
@@ -250,7 +251,7 @@ func TestEject_LeavesOnlyForeignEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 6 || actions[0] != "remove hook Stop" {
+	if len(actions) != 7 || actions[0] != "remove hook Stop" {
 		t.Errorf("actions %q", actions)
 	}
 	if got := readFile(t, f.settings()); got != foreignSettings {
@@ -413,4 +414,77 @@ func contains(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// The settings file install writes is untracked in every installed primary
+// checkout; the repository's local exclude list keeps it out of git status,
+// so nothing that counts untracked files (tree merge, the discard wall)
+// counts the file trellis itself made.
+func TestInstall_ExcludesTheSettingsFileFromGitStatus(t *testing.T) {
+	f := newFixture(t)
+	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+	testiso.Write(t, exclude, "# foreign line\n*.log\n")
+
+	actions, err := Install(f.opts("v0.0.2", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions[len(actions)-1]; got != "exclude .claude/settings.local.json from git status" {
+		t.Errorf("last action = %q", got)
+	}
+	want := "# foreign line\n*.log\n.claude/settings.local.json\n"
+	if got := readFile(t, exclude); got != want {
+		t.Errorf("exclude:\n%s\nwant:\n%s", got, want)
+	}
+	if got := testiso.Git(t, f.repo, "status", "--porcelain"); got != "" {
+		t.Errorf("git status after install = %q, want clean", got)
+	}
+
+	actions, err = Install(f.opts("v0.0.2", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions[len(actions)-1]; got != "keep exclude .claude/settings.local.json" {
+		t.Errorf("second install last action = %q", got)
+	}
+	if got := readFile(t, exclude); got != want {
+		t.Errorf("second install changed the exclude file:\n%s", got)
+	}
+}
+
+func TestInstall_DryDoesNotTouchTheExcludeFile(t *testing.T) {
+	f := newFixture(t)
+	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+	testiso.Write(t, exclude, "*.log\n")
+
+	actions, err := Install(f.opts("v0.0.2", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions[len(actions)-1]; got != "would exclude .claude/settings.local.json from git status" {
+		t.Errorf("last action = %q", got)
+	}
+	if got := readFile(t, exclude); got != "*.log\n" {
+		t.Errorf("dry run changed the exclude file: %q", got)
+	}
+}
+
+func TestEject_RemovesOnlyTheExcludeLineItAdded(t *testing.T) {
+	f := newFixture(t)
+	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+	testiso.Write(t, exclude, "*.log\n")
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+
+	actions, err := Eject(f.opts("v0.0.2", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions[len(actions)-1]; got != "remove exclude .claude/settings.local.json" {
+		t.Errorf("last action = %q", got)
+	}
+	if got := readFile(t, exclude); got != "*.log\n" {
+		t.Errorf("exclude after eject = %q, want the foreign line only", got)
+	}
 }

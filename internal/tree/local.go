@@ -26,7 +26,11 @@ func mergeLocal(env Env, w where, check string) error {
 	if primary.Branch != repo.Default {
 		return fmt.Errorf("tree merge: the primary checkout is on %s, not %s", primary.Branch, repo.Default)
 	}
-	dirty, err := walls.Dirty(env.git(), w.Primary)
+	// Untracked files in the primary never block a landing: a merge does
+	// not touch them, and git refuses on its own when one would be
+	// overwritten. The primary of every installed repository holds at
+	// least one, the settings file install wrote.
+	dirty, err := walls.Dirty(env.git(), w.Primary, walls.IgnoreUntracked())
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}

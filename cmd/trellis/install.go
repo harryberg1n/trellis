@@ -89,7 +89,7 @@ func installOptions(repoFlag string, env installEnv) (install.Options, error) {
 	if err != nil {
 		return install.Options{}, err
 	}
-	return install.Options{Repo: repo.Root, Root: root, Exe: env.Exe, Version: buildinfo.Version}, nil
+	return install.Options{Repo: repo.Root, Common: repo.Common, Root: root, Exe: env.Exe, Version: buildinfo.Version}, nil
 }
 
 // installCmd prints one line per action; with Dry the lines start "would ".

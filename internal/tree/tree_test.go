@@ -578,15 +578,39 @@ func TestMerge_LocalRefusesDirtyPrimary(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)
 	commitFile(t, path, "mine.txt", "mine\n")
-	testiso.Write(t, filepath.Join(f.primary, "scratch.txt"), "x")
+	testiso.Write(t, filepath.Join(f.primary, "README.md"), "edited in the primary\n")
 
 	err := Merge(f.env(path), "")
 
-	if err == nil || !strings.Contains(err.Error(), "primary checkout") || !strings.Contains(err.Error(), "1 untracked file") {
+	if err == nil || !strings.Contains(err.Error(), "primary checkout") || !strings.Contains(err.Error(), "1 unstaged file") {
 		t.Errorf("err = %v, want a refusal naming the dirty primary checkout", err)
 	}
 	if !exists(path) {
 		t.Errorf("tree removed")
+	}
+}
+
+// The primary checkout of every installed repository holds an untracked
+// .claude/settings.local.json that trellis itself wrote; untracked files
+// never block a landing, since git refuses on its own when a merge would
+// overwrite one.
+func TestMerge_LocalIgnoresUntrackedFilesInThePrimary(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "mine.txt", "mine\n")
+	settings := filepath.Join(f.primary, ".claude", "settings.local.json")
+	testiso.Write(t, settings, "{}\n")
+	testiso.Write(t, filepath.Join(f.primary, "scratch.txt"), "x")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
+		t.Errorf("subject = %q, want Merge tree feat", got)
+	}
+	if !exists(settings) || !exists(filepath.Join(f.primary, "scratch.txt")) {
+		t.Errorf("an untracked file of the primary is gone after the merge")
 	}
 }
 

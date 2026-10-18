@@ -131,13 +131,26 @@ func statusCost(r run.Runner, dir string, paths []string) (cost, error) {
 	return parseStatus(out), nil
 }
 
+// DirtyOption narrows what Dirty counts.
+type DirtyOption func(*cost)
+
+// IgnoreUntracked leaves untracked files out of the count: for a checkout
+// that only receives a merge, where git itself refuses to overwrite one.
+func IgnoreUntracked() DirtyOption {
+	return func(c *cost) { c.Untracked = 0 }
+}
+
 // Dirty describes the work in the tree at dir that no commit holds ("2
 // unstaged files, 1 untracked file"), measured the way discard-uncommitted
-// measures it, or "" for a clean tree.
-func Dirty(r run.Runner, dir string) (string, error) {
+// measures it, or "" for a clean tree. Files git ignores, including the
+// repository's own exclude list, are never counted.
+func Dirty(r run.Runner, dir string, opts ...DirtyOption) (string, error) {
 	c, err := statusCost(r, dir, nil)
 	if err != nil {
 		return "", err
+	}
+	for _, o := range opts {
+		o(&c)
 	}
 	return c.String(), nil
 }

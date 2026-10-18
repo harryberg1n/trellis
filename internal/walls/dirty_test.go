@@ -25,3 +25,19 @@ func TestDirty_DescribesWhatNoCommitHolds(t *testing.T) {
 		t.Errorf("Dirty = %q, %v; want %q", got, err, want)
 	}
 }
+
+func TestDirty_IgnoreUntrackedCountsOnlyWhatGitTracks(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := run.Exec{Clock: clock.Real()}
+	testiso.Write(t, filepath.Join(repo, "new.txt"), "x")
+	if got, err := Dirty(r, repo, IgnoreUntracked()); err != nil || got != "" {
+		t.Fatalf("untracked only: Dirty = %q, %v; want empty", got, err)
+	}
+
+	testiso.Write(t, filepath.Join(repo, "README.md"), "changed\n")
+
+	got, err := Dirty(r, repo, IgnoreUntracked())
+	if err != nil || got != "1 unstaged file" {
+		t.Errorf("Dirty = %q, %v; want %q", got, err, "1 unstaged file")
+	}
+}
