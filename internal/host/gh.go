@@ -231,8 +231,9 @@ func (g GH) WorkflowCount() (int, error) {
 }
 
 // MergeCommit is the sha of the commit that merged pull request number: the
-// tip of its commits on the base branch for a rebase merge. Empty when the
-// pull request is not merged.
+// squash commit, or the tip of its commits on the base branch for a rebase
+// merge. Empty when the pull request is not merged or GitHub has not reported
+// the commit yet.
 func (g GH) MergeCommit(number int) (string, error) {
 	out, err := g.gh(nil, "pr", "view", strconv.Itoa(number), "--json", "mergeCommit")
 	if err != nil {
