@@ -68,7 +68,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 	for p, id := range blobs {
 		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
 	}
-	st, err := git(r, repo, nil, "status", "-z", "--untracked-files=all")
+	st, err := Git(r, repo, nil, "status", "-z", "--untracked-files=all")
 	if err != nil {
 		return "", "", err
 	}
@@ -128,7 +128,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 		args = append(args, "-p", prev)
 	}
 	args = append(args, "-m", "trellis anchor "+lane)
-	out, err := git(r, repo, nil, args...)
+	out, err := Git(r, repo, nil, args...)
 	if err != nil {
 		return "", "", err
 	}
@@ -137,7 +137,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 	if hasPrev && !viaGit {
 		upd = append(upd, prev)
 	}
-	if _, err := git(r, repo, nil, upd...); err != nil {
+	if _, err := Git(r, repo, nil, upd...); err != nil {
 		return "", "", err
 	}
 	return tree, commit, nil
@@ -177,7 +177,7 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 			}
 			spec = root + ":" + d
 		}
-		out, err := git(r, repo, nil, "ls-tree", "-z", spec)
+		out, err := Git(r, repo, nil, "ls-tree", "-z", spec)
 		if err != nil {
 			return "", err
 		}
@@ -247,7 +247,7 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 		if len(batch) > 1 {
 			args = append(args, "--batch")
 		}
-		out, err := git(r, repo, append([]byte{}, in.Bytes()...), args...)
+		out, err := Git(r, repo, append([]byte{}, in.Bytes()...), args...)
 		if err != nil {
 			return "", err
 		}
@@ -297,8 +297,8 @@ func parseLsTree(out []byte) (map[string]entry, error) {
 	return list, nil
 }
 
-// git runs one git child through r and returns its stdout.
-func git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
+// Git runs one git child through r and returns its stdout.
+func Git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
 	res, err := r.Light(run.Spec{Name: "git", Args: args, Dir: repo, Timeout: gitTimeout, Stdin: stdin})
 	if err != nil {
 		return nil, fmt.Errorf("objects: git %s: %w", run.Kind(run.Spec{Name: "git", Args: args}), err)
