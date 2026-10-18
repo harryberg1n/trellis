@@ -204,6 +204,19 @@ func TestLeadTimes_SquashMergeUsesThePRBranchLane(t *testing.T) {
 	}
 }
 
+func TestParseHunks_HeaderLookingLinesInsideAHunkAreContent(t *testing.T) {
+	// A removed SQL comment "-- drop it" shows as "--- drop it", an added
+	// "++ x" as "+++ x"; neither is a file header.
+	diff := "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -4,2 +4,2 @@\n--- drop it\n+++ x\n@@ -9 +9 @@\n" +
+		"diff --git a/z.go b/z.go\n--- a/z.go\n+++ b/z.go\n@@ -1 +1 @@\n"
+	added, removed := ParseHunks(diff)
+	wa := map[string][]Span{"q.sql": {{Start: 4, End: 5}, {Start: 9, End: 9}}, "z.go": {{Start: 1, End: 1}}}
+	wr := map[string][]Span{"q.sql": {{Start: 4, End: 5}, {Start: 9, End: 9}}, "z.go": {{Start: 1, End: 1}}}
+	if !reflect.DeepEqual(added, wa) || !reflect.DeepEqual(removed, wr) {
+		t.Errorf("added %v removed %v, want %v and %v", added, removed, wa, wr)
+	}
+}
+
 func TestParseHunks(t *testing.T) {
 	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -3,2 +3,4 @@ func x\n+x\n@@ -20 +22,0 @@\n" +
 		"diff --git a/gone.go b/gone.go\n--- a/gone.go\n+++ /dev/null\n@@ -1,5 +0,0 @@\n"

@@ -205,15 +205,20 @@ func overlaps(a, b map[string][]Span) bool {
 }
 
 // ParseHunks reads the output of `git show -U0 --format=` into the new-side
-// ranges added and the old-side ranges removed, by path.
+// ranges added and the old-side ranges removed, by path. File headers are read
+// only between a "diff --git" line and its first hunk; a "---" or "+++" line
+// inside a hunk is content (a removed SQL comment, say).
 func ParseHunks(diff string) (added, removed map[string][]Span) {
 	added, removed = map[string][]Span{}, map[string][]Span{}
 	var oldPath, path string
+	header := false // between a "diff --git" line and its first hunk
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
-		case strings.HasPrefix(line, "--- "):
+		case strings.HasPrefix(line, "diff --git "):
+			header, oldPath, path = true, "", ""
+		case header && strings.HasPrefix(line, "--- "):
 			oldPath = strings.TrimPrefix(strings.TrimPrefix(line, "--- "), "a/")
-		case strings.HasPrefix(line, "+++ "):
+		case header && strings.HasPrefix(line, "+++ "):
 			path = strings.TrimPrefix(line, "+++ ")
 			if path == "/dev/null" {
 				path = oldPath
@@ -221,6 +226,7 @@ func ParseHunks(diff string) (added, removed map[string][]Span) {
 				path = strings.TrimPrefix(path, "b/")
 			}
 		case strings.HasPrefix(line, "@@ ") && path != "":
+			header = false
 			fields := strings.Fields(line)
 			if len(fields) < 3 {
 				continue
