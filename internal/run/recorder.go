@@ -43,18 +43,14 @@ func (r *Recorder) Kinds() []string {
 	return out
 }
 
-// Kind is the git subcommand of a git spec (leading "-c key=value" pairs
-// skipped), else the program name.
+// Kind is the git subcommand of a git spec (git's leading options skipped),
+// else the program name.
 func Kind(s Spec) string {
-	if s.Name != "git" {
+	if !isGit(s.Name) {
 		return s.Name
 	}
-	args := s.Args
-	for len(args) >= 2 && args[0] == "-c" {
-		args = args[2:]
+	if verb := ParseGitArgs(s.Args).Verb; verb != "" {
+		return verb
 	}
-	if len(args) == 0 {
-		return s.Name
-	}
-	return args[0]
+	return s.Name
 }

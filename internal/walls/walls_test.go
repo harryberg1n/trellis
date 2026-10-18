@@ -188,6 +188,8 @@ func TestWalls_RealCommandsStillBlock(t *testing.T) {
 		{`echo $(git reset --hard)`, "discard-uncommitted"},
 		{`cd ` + filepath.ToSlash(w.lane) + ` && git checkout -- README.md`, "discard-uncommitted"},
 		{`git -C ` + filepath.ToSlash(w.lane) + ` clean -fd`, "discard-uncommitted"},
+		{`git --config-env foo=BAR reset --hard`, "discard-uncommitted"},
+		{`git --super-prefix sub/ reset --hard`, "discard-uncommitted"},
 		{`git commit -nm "x"`, "hook-bypass"},
 		{`git commit -m x --no-verify`, "hook-bypass"},
 		{`git push --no-verify`, "hook-bypass"},

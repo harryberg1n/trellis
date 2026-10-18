@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/harryberg1n/trellis/internal/run"
 )
 
 // word is one shell word: text is the argument the program receives (quotes
@@ -475,23 +477,13 @@ func parseGit(seg []word, dir string) (gitCall, bool) {
 	if i >= len(seg) || baseCommand(seg[i].text) != "git" {
 		return gitCall{}, false
 	}
-	call := gitCall{Dir: dir}
-	for i++; i < len(seg); i++ {
-		a := seg[i].text
-		switch {
-		case !strings.HasPrefix(a, "-"):
-			call.Verb = a
-			call.Args = texts(seg[i+1:])
-			return call, true
-		case a == "-C" && i+1 < len(seg):
-			i++
-			call.Dir = resolve(call.Dir, seg[i].text)
-		case a == "-c" && i+1 < len(seg):
-			i++
-			call.Globals = append(call.Globals, seg[i].text)
-		case (a == "--git-dir" || a == "--work-tree" || a == "--namespace") && i+1 < len(seg):
-			i++
-		}
+	g := run.ParseGitArgs(texts(seg[i+1:]))
+	if g.Verb == "" {
+		return gitCall{}, false
 	}
-	return gitCall{}, false
+	call := gitCall{Dir: dir, Globals: g.Config, Verb: g.Verb, Args: g.Rest}
+	for _, d := range g.Dirs {
+		call.Dir = resolve(call.Dir, d)
+	}
+	return call, true
 }

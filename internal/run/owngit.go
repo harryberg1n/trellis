@@ -51,7 +51,8 @@ func ownGitState(spec Spec) error {
 	if !isGit(spec.Name) {
 		return nil
 	}
-	verb, args := gitVerb(spec.Args)
+	g := ParseGitArgs(spec.Args)
+	verb, args := g.Verb, g.Rest
 	var bad string
 	switch {
 	case verb == "" || readVerbs[verb]:
@@ -82,22 +83,6 @@ func ownGitState(spec Spec) error {
 
 func hasPrefixArg(args []string, prefix string) bool {
 	return slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, prefix) })
-}
-
-// gitVerb is the subcommand of a git argv and the arguments after it, with
-// git's own leading options skipped.
-func gitVerb(args []string) (verb string, rest []string) {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case !strings.HasPrefix(a, "-"):
-			return a, args[i+1:]
-		case a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" || a == "--namespace" ||
-			a == "--super-prefix" || a == "--config-env":
-			i++ // the option's value is the next argument
-		}
-	}
-	return "", nil
 }
 
 // updateRefTargets is the refs a git update-ref would write: its first operand,
