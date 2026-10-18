@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,8 @@ func TestOwnGitState_Forms(t *testing.T) {
 		{"status", gitSpec("", "", "status", "-z"), false},
 		{"commit-tree", gitSpec("", "", "commit-tree", "abc", "-m", "x"), false},
 		{"not git", Spec{Name: "go", Args: []string{"update-ref", "refs/heads/x"}, Timeout: time.Minute}, false},
-		{"git by path", Spec{Name: `C:\Program Files\Git\cmd\git.exe`, Args: []string{"update-ref", "refs/heads/x", "a"}, Timeout: time.Minute}, true},
+		{"git by path", Spec{Name: filepath.Join(string(filepath.Separator), "usr", "bin", "git"), Args: []string{"update-ref", "refs/heads/x", "a"}, Timeout: time.Minute}, true},
+		{"git.exe by path", Spec{Name: filepath.Join(string(filepath.Separator), "opt", "Git", "cmd", "GIT.EXE"), Args: []string{"update-ref", "refs/heads/x", "a"}, Timeout: time.Minute}, true},
 	}
 	for _, c := range cases {
 		err := ownGitState(c.spec)
