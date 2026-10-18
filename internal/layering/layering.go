@@ -40,7 +40,7 @@ func (f Finding) String() string { return fmt.Sprintf("%s:%d: %s", f.File, f.Lin
 // call is found through the import it names, so an alias does not hide it and
 // an unrelated identifier does not trip it. A directory that does not exist is
 // skipped. Findings come back ordered by file and line.
-func Check(dirs []string, forbiddenImports []string, forbiddenCalls []string) ([]Finding, error) {
+func Check(dirs, forbiddenImports, forbiddenCalls []string) ([]Finding, error) {
 	var out []Finding
 	for _, dir := range dirs {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {

@@ -355,7 +355,7 @@ func readRef(common, ref string) (id string, found, fallback bool) {
 	if err != nil {
 		return "", false, !errors.Is(err, fs.ErrNotExist)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		id, name, ok := strings.Cut(sc.Text(), " ")

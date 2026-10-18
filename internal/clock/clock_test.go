@@ -48,7 +48,7 @@ func TestFake_AfterZeroFiresAtOnce(t *testing.T) {
 	}
 }
 
-func TestFake_BlockUntilSeesARegisteredWaiter(t *testing.T) {
+func TestFake_BlockUntilSeesARegisteredWaiter(_ *testing.T) {
 	f := Fake(t0)
 	go f.After(time.Hour)
 	f.BlockUntil(1)

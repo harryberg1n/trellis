@@ -170,7 +170,7 @@ func text(seed, size int) string {
 }
 
 func kinds(evs []kernel.Event) []string {
-	var out []string
+	out := make([]string, 0, len(evs))
 	for _, e := range evs {
 		out = append(out, e.Kind)
 	}

@@ -38,7 +38,7 @@ func ConfigValue(gitDir, section, key string) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	in, found, value := false, false, ""
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -87,7 +87,7 @@ func Format(gitDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	in := false
 	value := "sha1"
 	sc := bufio.NewScanner(f)

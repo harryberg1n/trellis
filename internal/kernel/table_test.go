@@ -6,7 +6,10 @@ import (
 )
 
 func errStrings(errs []error) []string {
-	var out []string
+	if len(errs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(errs))
 	for _, e := range errs {
 		out = append(out, e.Error())
 	}

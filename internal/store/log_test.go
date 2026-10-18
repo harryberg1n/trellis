@@ -249,7 +249,9 @@ func TestLog_TornTailDoesNotWedgeTheStore(t *testing.T) {
 	if _, err := f.WriteString(`{"seq":2,"kind":"com`); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := s.Append(ev("commit", "l"))
 	if err != nil || len(out) != 1 || out[0].Seq != 2 {
@@ -357,7 +359,9 @@ func TestLog_UnterminatedCompleteTailKeepsItsSeq(t *testing.T) {
 	if _, err := f.WriteString(`{"seq":3,"kind":"merge","lane":"l","session":"s1","at":"2026-10-18T12:00:00Z"}`); err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := s.Append(ev("commit", "l"))
 	if err != nil || len(out) != 1 || out[0].Seq != 4 {

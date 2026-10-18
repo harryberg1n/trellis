@@ -72,9 +72,15 @@ func TestEngine_CallerArmsAreRecordedAndKept(t *testing.T) {
 
 func TestEngine_FlagsEventsAfterMergeAndPersistsLaneState(t *testing.T) {
 	s, _, _ := open(t)
-	Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{})
-	Step(s, nil, ev(kernel.EvLaneMerged, "lane/m"), kernel.Context{})
-	Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Step(s, nil, ev(kernel.EvLaneMerged, "lane/m"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	got, _ := s.Read(1)
 	if got[2].Detail["after"] != "merged" {
 		t.Fatalf("third event Detail = %v, want after=merged", got[2].Detail)
@@ -95,8 +101,12 @@ func TestEngine_ReturnsDecideActions(t *testing.T) {
 
 func TestEngine_CheckpointCarriesLastSeq(t *testing.T) {
 	s, dir, _ := open(t)
-	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
-	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -184,13 +194,17 @@ func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
 
 func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
 	s, dir, _ := open(t)
-	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	fi, err := os.Stat(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := s.BytesRead()
-	Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	// One read for the next Seq; none to catch the checkpoint up.
 	if got := s.BytesRead() - before; got != fi.Size() {
 		t.Fatalf("Step read %d log bytes, want %d (one tail read)", got, fi.Size())

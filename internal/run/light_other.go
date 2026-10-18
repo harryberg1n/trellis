@@ -34,4 +34,4 @@ func (g *groupTree) kill() {
 	}
 }
 
-func (g *groupTree) finish() {}
+func (*groupTree) finish() {}

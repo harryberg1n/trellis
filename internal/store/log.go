@@ -244,7 +244,7 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close() // also on a panic in fsync; the explicit Close below reports its error
+	defer func() { _ = f.Close() }() // also on a panic in fsync; the explicit Close below reports its error
 	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
 		last := make([]byte, 1)
 		if _, err := f.ReadAt(last, fi.Size()-1); err == nil && last[0] != newline {
@@ -300,7 +300,7 @@ func (s *Store) Park(ev kernel.Event) error {
 		err = cerr
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp) // best effort: a stray .tmp is never globbed as pending; err is the one to report
 		return err
 	}
 	return os.Rename(tmp, final)
@@ -398,7 +398,7 @@ func (s *Store) scanTail(from uint64, locked bool) ([]kernel.Event, uint64, erro
 	if err != nil {
 		return nil, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
