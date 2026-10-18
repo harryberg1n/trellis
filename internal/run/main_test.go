@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -29,6 +31,8 @@ func TestMain(m *testing.M) {
 		os.Exit(stubbornMain())
 	case "exiter":
 		os.Exit(exiterMain())
+	case "parent":
+		os.Exit(parentMain())
 	}
 	testiso.Main(m)
 }
@@ -92,5 +96,17 @@ func childMain() int {
 	}
 	_ = conn.Close() // the pid is sent; nothing more to report
 	blockForever()
+	return 0
+}
+
+// parentMain runs a stubborn child through Light and waits for it: the child
+// reports its pid to the test, and the test then kills this process.
+func parentMain() int {
+	if err := os.Setenv(roleEnv, "stubborn"); err != nil {
+		return 2
+	}
+	if _, err := Light(clock.Real(), Spec{Name: os.Args[0], Timeout: time.Hour}); err != nil {
+		return 3
+	}
 	return 0
 }

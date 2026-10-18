@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +41,12 @@ func (g GH) gh(stdin []byte, args ...string) ([]byte, error) {
 func (g GH) ghWithin(timeout time.Duration, stdin []byte, args ...string) ([]byte, error) {
 	res, err := g.Runner.Light(run.Spec{Name: "gh", Args: args, Dir: g.Dir, Timeout: timeout, Stdin: stdin})
 	if err != nil {
-		return res.Stdout, fmt.Errorf("host: gh %s: %w", strings.Join(args[:min(2, len(args))], " "), err)
+		kind := strings.Join(args[:min(2, len(args))], " ")
+		if errors.Is(err, run.ErrTimeout) {
+			// the command and its deadline, in the words Transient reads
+			return res.Stdout, fmt.Errorf("host: gh %s: timed out after %ds: %w", kind, int(timeout.Seconds()), err)
+		}
+		return res.Stdout, fmt.Errorf("host: gh %s: %w", kind, err)
 	}
 	return res.Stdout, nil
 }
@@ -157,10 +163,40 @@ func (g GH) Checks(number int) ([]Check, error) {
 	return checks, nil
 }
 
-// FailedLog is the log of the failed steps of workflow run id.
+// FailedLog is the log of the failed steps of workflow run id: every job of
+// the run. A check's own failure is FailedJobLog.
 func (g GH) FailedLog(runID string) (string, error) {
 	out, err := g.gh(nil, "run", "view", runID, "--log-failed")
 	return string(out), err
+}
+
+// FailedJobLog is the log of the failed steps of one job, the job a check's
+// link names: a run holds several jobs, and each check shows its own.
+func (g GH) FailedJobLog(jobID string) (string, error) {
+	out, err := g.gh(nil, "run", "view", "--job", jobID, "--log-failed")
+	return string(out), err
+}
+
+// Run is a workflow run as `gh run list --json headSha,status` reports it.
+type Run struct {
+	HeadSHA string `json:"headSha"`
+	Status  string `json:"status"` // queued, in_progress, waiting, completed ...
+}
+
+// Open reports whether the run has not concluded.
+func (r Run) Open() bool { return !strings.EqualFold(r.Status, "completed") }
+
+// PullRequestRuns lists the newest pull_request workflow runs of branch.
+func (g GH) PullRequestRuns(branch string) ([]Run, error) {
+	out, err := g.gh(nil, "run", "list", "--branch", branch, "--event", "pull_request", "--limit", "30", "--json", "headSha,status")
+	if err != nil {
+		return nil, err
+	}
+	var runs []Run
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return nil, fmt.Errorf("host: reading gh run list: %w", err)
+	}
+	return runs, nil
 }
 
 // ErrNoPR is what PRView reports for a branch with no pull request.
@@ -197,9 +233,11 @@ func (g GH) PRView(branch string) (PRState, error) {
 }
 
 // CreatePR opens a pull request from the current branch of Dir into base,
-// titled and described from its commits, and returns the URL gh prints.
+// titled and described from its first commit, and returns the URL gh prints.
+// --fill alone would make a title of the branch name for a branch of several
+// commits, and a squash merge takes the title as its subject.
 func (g GH) CreatePR(base string) (string, error) {
-	out, err := g.gh(nil, "pr", "create", "--fill", "--base", base)
+	out, err := g.gh(nil, "pr", "create", "--fill-first", "--base", base)
 	return string(trimNL(out)), err
 }
 
@@ -213,10 +251,24 @@ func (g GH) WatchChecks(number int) (string, error) {
 	return string(trimNL(out)), err
 }
 
-// Ready is nil when gh is installed and logged in.
+// ErrNotInstalled and ErrNotLoggedIn are what Ready reports.
+var (
+	ErrNotInstalled = errors.New("host: gh is not installed")
+	ErrNotLoggedIn  = errors.New("host: gh is not logged in")
+)
+
+// Ready is nil when gh is installed and logged in; else an error wrapping
+// ErrNotInstalled (no gh on PATH) or ErrNotLoggedIn (gh could not read the
+// user).
 func (g GH) Ready() error {
-	_, err := g.gh(nil, "auth", "status")
-	return err
+	_, err := g.gh(nil, "api", "user")
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, exec.ErrNotFound):
+		return fmt.Errorf("%w: %w", ErrNotInstalled, err)
+	}
+	return fmt.Errorf("%w: %w", ErrNotLoggedIn, err)
 }
 
 // MergeMethod is how gh lands a pull request: its gh flag.
@@ -228,9 +280,31 @@ const (
 	MergeRebase MergeMethod = "--rebase"
 )
 
-// MergePR merges pull request number by method and deletes its branch.
-func (g GH) MergePR(number int, method MergeMethod) error {
-	_, err := g.gh(nil, "pr", "merge", strconv.Itoa(number), string(method), "--delete-branch")
+// ErrHeadModified is what MergePR reports when GitHub refuses the merge because
+// the head of the pull request is no longer the commit the merge was bound to.
+var ErrHeadModified = errors.New("host: the head branch was modified after the merge was bound to it")
+
+// MergeOption changes a MergePR.
+type MergeOption func(*[]string)
+
+// MatchHead binds the merge to the commit sha: GitHub refuses it when the
+// pull request's head is any other by then.
+func MatchHead(sha string) MergeOption {
+	return func(args *[]string) { *args = append(*args, "--match-head-commit", sha) }
+}
+
+// MergePR merges pull request number by method. It leaves the branch alone:
+// gh's --delete-branch first checks the default branch out, which a tree cannot
+// do while the primary checkout holds it, and then never reaches the remote.
+func (g GH) MergePR(number int, method MergeMethod, opts ...MergeOption) error {
+	args := []string{"pr", "merge", strconv.Itoa(number), string(method)}
+	for _, opt := range opts {
+		opt(&args)
+	}
+	_, err := g.gh(nil, args...)
+	if ghSays(err, ghHeadModified) {
+		return fmt.Errorf("%w: %w", ErrHeadModified, err)
+	}
 	return err
 }
 

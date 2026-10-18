@@ -2,7 +2,9 @@ package host
 
 import (
 	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,9 +134,9 @@ func TestGH_CreateWatchAndMergeArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"pr", "create", "--fill", "--base", "main"},
+		{"pr", "create", "--fill-first", "--base", "main"},
 		{"pr", "checks", "7", "--watch"},
-		{"pr", "merge", "7", "--rebase", "--delete-branch"},
+		{"pr", "merge", "7", "--rebase"},
 	}
 	for i, s := range r.Specs() {
 		if !reflect.DeepEqual(s.Args, want[i]) {
@@ -229,5 +231,112 @@ func TestGH_ListIssuesWithoutASearchPassesNone(t *testing.T) {
 	want := []string{"issue", "list", "--repo", "o/r", "--state", "all", "--limit", "500", "--json", "number,title,body,createdAt"}
 	if got := r.Specs()[0].Args; !reflect.DeepEqual(got, want) {
 		t.Errorf("argv = %v, want %v", got, want)
+	}
+}
+
+func TestGH_MergeBoundToTheJudgedHeadNeverDeletesTheBranchItself(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("")}
+	g := GH{Runner: r}
+
+	if err := g.MergePR(7, MergeSquash, MatchHead("0123abc")); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"pr", "merge", "7", "--squash", "--match-head-commit", "0123abc"}
+	if got := r.Specs()[0].Args; !reflect.DeepEqual(got, want) {
+		t.Errorf("argv = %v, want %v", got, want)
+	}
+}
+
+func TestGH_MergeRefusedForAMovedHeadIsErrHeadModified(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("gh: exit status 1: pull request o/r#7: head branch was modified, review and try the merge again")
+	}}
+
+	err := GH{Runner: r}.MergePR(7, MergeSquash, MatchHead("0123abc"))
+
+	if !errors.Is(err, ErrHeadModified) {
+		t.Errorf("err = %v, want ErrHeadModified", err)
+	}
+	r = &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("exit status 1: GraphQL: Pull request is in clean status")
+	}}
+	if err := (GH{Runner: r}).MergePR(7, MergeSquash); errors.Is(err, ErrHeadModified) || err == nil {
+		t.Errorf("err = %v, want a plain failure", err)
+	}
+}
+
+func TestGH_ReadyTellsNotInstalledFromNotLoggedIn(t *testing.T) {
+	missing := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{}, &exec.Error{Name: "gh", Err: exec.ErrNotFound}
+	}}
+	if err := (GH{Runner: missing}).Ready(); !errors.Is(err, ErrNotInstalled) || errors.Is(err, ErrNotLoggedIn) {
+		t.Errorf("gh missing: err = %v, want ErrNotInstalled only", err)
+	}
+	loggedOut := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 4}, errors.New("exit status 4: gh: To use GitHub CLI, run: gh auth login")
+	}}
+	if err := (GH{Runner: loggedOut}).Ready(); !errors.Is(err, ErrNotLoggedIn) || errors.Is(err, ErrNotInstalled) {
+		t.Errorf("gh logged out: err = %v, want ErrNotLoggedIn only", err)
+	}
+	if got, want := loggedOut.Specs()[0].Args, []string{"api", "user"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("probe argv = %v, want %v", got, want)
+	}
+	ok := &testsupport.FakeRunner{Answer: testsupport.Stdout("{}")}
+	if err := (GH{Runner: ok}).Ready(); err != nil {
+		t.Errorf("Ready = %v, want nil", err)
+	}
+}
+
+func TestGH_RunsOnTheBranchReadsHeadAndStatus(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"headSha":"aaa","status":"queued"},{"headSha":"bbb","status":"completed"}]`)}
+
+	got, err := GH{Runner: r}.PullRequestRuns("feat/a")
+
+	want := []Run{{HeadSHA: "aaa", Status: "queued"}, {HeadSHA: "bbb", Status: "completed"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("runs = %+v, %v; want %+v", got, err, want)
+	}
+	wantArgs := []string{"run", "list", "--branch", "feat/a", "--event", "pull_request", "--limit", "30", "--json", "headSha,status"}
+	if !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
+		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, wantArgs)
+	}
+}
+
+func TestGH_FailedJobLogAsksForTheJobNotTheRun(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("log")}
+
+	out, err := GH{Runner: r}.FailedJobLog("55")
+
+	want := []string{"run", "view", "--job", "55", "--log-failed"}
+	if err != nil || out != "log" || !reflect.DeepEqual(r.Specs()[0].Args, want) {
+		t.Errorf("out %q err %v argv %v; want log and %v", out, err, r.Specs()[0].Args, want)
+	}
+}
+
+func TestGH_ATimeoutNamesTheCommandAndTheDeadline(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{}, errors.Join(run.ErrTimeout, errors.New("signal: killed"))
+	}}
+
+	_, err := GH{Runner: r}.Checks(7)
+
+	if err == nil || !strings.Contains(err.Error(), "gh pr checks: timed out after 60s") {
+		t.Errorf("err = %v, want it to say gh pr checks: timed out after 60s", err)
+	}
+	if !errors.Is(err, run.ErrTimeout) {
+		t.Errorf("err = %v, want it to still wrap run.ErrTimeout", err)
+	}
+}
+
+func TestGH_ReadyOfflineIsNeitherNotInstalledNorAnAnswerOfGitHub(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("exit status 1: error connecting to api.github.com\ncheck your internet connection")
+	}}
+
+	err := GH{Runner: r}.Ready()
+
+	if errors.Is(err, ErrNotInstalled) || !Transient(err) {
+		t.Errorf("err = %v, want a transient failure that is not ErrNotInstalled", err)
 	}
 }

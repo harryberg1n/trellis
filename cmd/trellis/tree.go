@@ -17,18 +17,22 @@ import (
 const treeUsage = `usage: trellis tree <verb>
 
 verbs:
-  new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory
-  sync                    fetch origin and rebase this tree onto its default branch
+  new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory;
+                          refuses a name git cannot use as a branch, and one that is already a branch on origin
+  sync                    fetch origin and rebase this tree onto its default branch; refuses uncommitted changes
   merge [--check CMD] [--rebase]
                           push, open or find the pull request, wait for its checks, squash-merge it (one commit
-                          per PR, its number in the subject, the usual norm), remove the tree; --rebase keeps
-                          the tree's commits instead
+                          per PR, its number in the subject, the usual norm) bound to the head the checks judged,
+                          delete the branch on origin, remove the tree; --rebase keeps the tree's commits instead;
+                          the output of --check is shown as it is written
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
 
 exit codes of merge and sync: 0 done; 130 interrupted; 2 when you can fix it and run it again (red or cancelled
-checks, a conflict, a branch that is behind or blocked, a head that moved); 1 anything else.
+checks, a conflict, a branch that is behind or blocked, a head that moved after the checks judged it, a run of
+the head still queued after 30 minutes, uncommitted changes (sync), commits on origin the tree lacks (a refused
+push)); 1 anything else.
 `
 
 // treeUsageLine is the usage line of a tree verb.

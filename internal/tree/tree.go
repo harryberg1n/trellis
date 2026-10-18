@@ -5,6 +5,7 @@
 package tree
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -32,10 +33,10 @@ const checkTimeout = 30 * time.Minute
 type Env struct {
 	Dir    string     // the working directory the verb was started in
 	Runner run.Runner // starts every child; the verbs mark their git children Direct
-	Out    io.Writer  // one line per step
+	Out    io.Writer  // one line per step, and the output of a --check as it is written
 	Err    io.Writer  // warnings; nil discards them
 	Record func(kernel.Event) error
-	Clock  clock.Clock // paces the mergeable poll; nil is the wall clock
+	Clock  clock.Clock // paces the polls and stamps the wait lines; nil is the wall clock
 	// Leave is called with the primary checkout before a tree the process
 	// stands in is removed, so the process can step out of it. May be nil.
 	Leave func(primary string) error
@@ -102,9 +103,14 @@ func (e Env) wait(d time.Duration) {
 // Fixable is a failure the operator can fix and run the verb again: red CI, a
 // conflict, a branch that is behind, a head that moved. The command exits 2
 // for it and 1 for any other error.
-type Fixable struct{ Msg string }
+type Fixable struct {
+	Msg string
+	Err error // the cause, when callers should be able to tell it (a timeout); may be nil
+}
 
 func (f *Fixable) Error() string { return f.Msg }
+
+func (f *Fixable) Unwrap() error { return f.Err }
 
 func (e Env) say(format string, a ...any) { _, _ = fmt.Fprintf(e.Out, format+"\n", a...) }
 
@@ -127,7 +133,7 @@ func (e Env) record(ev kernel.Event) {
 
 // runGit runs git in dir and returns its trimmed standard output.
 func (e Env) runGit(dir string, args ...string) (string, error) {
-	out, err := objects.Git(e.git(), dir, nil, args...)
+	out, err := objects.GitFor(e.git(), dir, nil, args...)
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -181,9 +187,17 @@ func newTree(env Env, name, path string) error {
 	if strings.Trim(name, "0123456789") == "" {
 		return errors.New("tree new: a tree name cannot be only digits")
 	}
+	if strings.HasPrefix(name, "-") || name == "@" { // a lone @ is HEAD; check-ref-format --branch lets it through (git 2.53)
+		return invalidName(name)
+	}
 	w, err := env.locate("new")
 	if err != nil {
 		return err
+	}
+	// git's own rules for a branch name; it prints the name back, so a form it
+	// would expand (@{-1} is the previous branch) is no name either
+	if out, err := env.runGit(w.Primary, "check-ref-format", "--branch", name); err != nil || out != name {
+		return invalidName(name)
 	}
 	switch {
 	case path == "":
@@ -200,8 +214,11 @@ func newTree(env Env, name, path string) error {
 		return fmt.Errorf("tree new: path %s exists", path)
 	}
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "fetch", "origin"); err != nil {
+		if _, err := env.runGit(w.Primary, "fetch", "--prune", "origin"); err != nil {
 			return fmt.Errorf("tree new: %w", err)
+		}
+		if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name); err == nil {
+			return fmt.Errorf("tree new: branch %q exists on origin: git worktree add --track -b %s %s origin/%s", name, name, path, name)
 		}
 	}
 	if _, err := env.runGit(w.Primary, "worktree", "add", "-b", name, path, baseOf(w.Repo)); err != nil {
@@ -210,6 +227,11 @@ func newTree(env Env, name, path string) error {
 	env.record(openedEvent(name))
 	env.say("%s", path)
 	return nil
+}
+
+// invalidName is the refusal of a name git cannot use as a branch.
+func invalidName(name string) error {
+	return fmt.Errorf("tree new: %q is not a valid branch name", name)
 }
 
 // baseOf is the ref a tree is cut from and rebased onto: origin's default
@@ -229,6 +251,14 @@ func syncTree(env Env) error {
 	w, err := env.locate("sync")
 	if err != nil {
 		return err
+	}
+	// a rebase would stop on tracked changes after the fetch has been made
+	dirty, err := walls.Dirty(env.git(), w.Repo.Root, walls.IgnoreUntracked())
+	if err != nil {
+		return fmt.Errorf("tree sync: %w", err)
+	}
+	if dirty != "" {
+		return &Fixable{Msg: "tree sync: uncommitted changes: commit or stash, then sync again"}
 	}
 	if w.Repo.Remote != "" {
 		if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
@@ -291,10 +321,14 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 		}
 	}
 	if err := (host.GH{Runner: env.runner(), Dir: repo.Root}).Ready(); err != nil {
-		return errors.New("tree merge: gh is not installed or not authenticated")
+		return ghUnusable(err)
 	}
-	if _, err := env.runGit(repo.Root, "push", "--force-with-lease", "-u", "origin", name); err != nil {
-		return fmt.Errorf("tree merge: push failed: %s", firstLine(err))
+	head, err := env.runGit(repo.Root, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	if err := push(env, repo, name); err != nil {
+		return err
 	}
 	env.say("pushed %s", name)
 	gh := host.GH{Runner: env.runner(), Dir: repo.Root}
@@ -306,7 +340,7 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
 	pr := st.Number
-	env.say("pull request #%d", pr)
+	env.sayWait("pull request #%d", pr)
 	switch {
 	case st.IsConflicting():
 		return conflictError(env, repo)
@@ -315,21 +349,25 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	case st.MergeUnknown():
 		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
-	seen, err := awaitChecks(env, gh, pr, name)
+	seen, err := awaitChecks(env, gh, pr, name, head)
 	if err != nil {
 		return err
 	}
 	if !seen {
-		env.say("no checks on this PR")
+		env.sayWait("no checks on this PR")
 	}
-	if err := watchAndReady(env, gh, repo, name, pr, seen); err != nil {
+	judged, err := watchAndReady(env, gh, repo, name, pr, seen)
+	if err != nil {
 		return err
 	}
 	method := host.MergeSquash
 	if o.rebase {
 		method = host.MergeRebase
 	}
-	if err := gh.MergePR(pr, method); err != nil {
+	if err := gh.MergePR(pr, method, host.MatchHead(judged)); err != nil {
+		if errors.Is(err, host.ErrHeadModified) {
+			return &Fixable{Msg: fmt.Sprintf("tree merge: the PR head moved after it was judged (merge bound to %s): run trellis tree merge again to judge the new head", short(judged))}
+		}
 		// gh merges first and then tries to move this checkout off the branch,
 		// which it cannot while the default branch is checked out elsewhere.
 		if st, verr := gh.PRView(name); verr != nil || st.State != "MERGED" {
@@ -344,16 +382,111 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	}
 	env.record(mergedEvent(name, pr, sha))
 	env.say("merged #%d", pr)
+	deleteRemoteBranch(env, repo.Root, name)
 	return removeTree(env, w, repo.Root, name, false)
 }
 
-// runCheck runs cmd in dir, records its verdict, and fails on red.
+// ghUnusable is the one line for a gh that Ready refused.
+func ghUnusable(err error) error {
+	switch {
+	case errors.Is(err, host.ErrNotInstalled):
+		return errors.New("tree merge: gh is not installed: install it from https://cli.github.com")
+	case host.Transient(err):
+		return fmt.Errorf("tree merge: gh could not reach GitHub: %s", firstLine(err))
+	}
+	return errors.New("tree merge: gh is not logged in: run gh auth login")
+}
+
+// push publishes the branch. The lease alone only compares origin with the
+// remote-tracking ref, which a fetch refreshes without the tree having the
+// commits it fetched; --force-if-includes also requires that the tree holds
+// them. A refusal because origin has commits the tree lacks says how many and
+// what to do. Source: aphrollo-tools internal/workspace/judgedhead.go at
+// 12b3724e (laneDriftLine); incident #1174, a merge that took a head other
+// than the one judged.
+func push(env Env, repo objects.Repo, name string) error {
+	_, err := env.runGit(repo.Root, "push", "--force-with-lease", "--force-if-includes", "-u", "origin", name)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, run.ErrTimeout) && !env.cancelled() {
+		if fx := refusedPush(env, repo.Root, name); fx != nil {
+			return fx
+		}
+	}
+	return fmt.Errorf("tree merge: push failed: %s", firstLine(err))
+}
+
+// refusedPush is the Fixable for a push origin turned down because its branch
+// holds commits the tree lacks, nil when that is not the reason. It fetches the
+// branch first (best effort) so the count is origin's now; the next push is
+// still refused by --force-if-includes until the tree holds what was fetched.
+func refusedPush(env Env, dir, name string) error {
+	_, _ = env.runGit(dir, "fetch", "origin", name)
+	out, err := env.runGit(dir, "rev-list", "--left-right", "--count", "HEAD...origin/"+name)
+	if err != nil {
+		return nil
+	}
+	var ahead, behind int
+	if _, err := fmt.Sscanf(out, "%d %d", &ahead, &behind); err != nil || behind == 0 {
+		return nil
+	}
+	local := ""
+	if ahead > 0 {
+		local = fmt.Sprintf(" (%d local not pushed)", ahead)
+	}
+	return &Fixable{Msg: fmt.Sprintf("tree merge: push refused: origin/%s has %d %s this tree lacks%s: git pull --rebase origin %s, then merge again",
+		name, behind, commitNoun(behind), local, name)}
+}
+
+func commitNoun(n int) string {
+	if n == 1 {
+		return "commit"
+	}
+	return "commits"
+}
+
+// remoteGone are the fragments of git's answer to `push --delete` on a branch
+// that is not on the remote any more: git's own "remote ref does not exist",
+// and the "unable to resolve reference" a repository with auto-delete-head-
+// branch gives when its reaper won the race (cannot lock ref 'refs/heads/x':
+// unable to resolve reference 'refs/heads/x'). Source: aphrollo-tools
+// internal/workspace/merge.go at 12b3724e (remoteBranchAlreadyGone); incident
+// #410.
+var remoteGone = []string{"does not exist", "unable to resolve reference"}
+
+// deleteRemoteBranch deletes the merged branch on origin. gh's --delete-branch
+// cannot: it first checks the default branch out, which the primary checkout
+// holds, and stops before it reaches the remote. The merge is done by now, so a
+// refusal is a warning.
+func deleteRemoteBranch(env Env, dir, name string) {
+	_, err := env.runGit(dir, "push", "origin", "--delete", "--", name)
+	if err == nil {
+		env.say("deleted origin/%s", name)
+		return
+	}
+	for _, text := range remoteGone {
+		if strings.Contains(err.Error(), text) {
+			env.say("origin/%s is already gone", name)
+			return
+		}
+	}
+	env.warn("origin/%s was not deleted: %s", name, firstLine(err))
+}
+
+// runCheck runs cmd in dir, records its verdict, and fails on red. Its output
+// goes to the verb's output as the command writes it; the last line of it is
+// what a failure says.
 func runCheck(env Env, dir, name, cmd string) error {
 	prog, args := shellCommand(cmd)
-	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
+	tail := &lastLine{out: env.Out}
+	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout, Stdout: tail, Stderr: tail})
 	if err != nil {
 		env.record(checkEvent(name, "red"))
-		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLine(res, err))}
+		if errors.Is(err, run.ErrTimeout) {
+			return &Fixable{Msg: fmt.Sprintf("tree merge: check %q timed out after %ds", cmd, int(checkTimeout.Seconds())), Err: err}
+		}
+		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLineOf(tail, res, err))}
 	}
 	env.record(checkEvent(name, "green"))
 	env.say("check passed")
@@ -369,7 +502,12 @@ func runCheck(env Env, dir, name, cmd string) error {
 	return nil
 }
 
-func lastLine(res run.Result, err error) string {
+// lastLineOf is the line a failed check ends with: the last one it wrote, else
+// the last of what the runner returned, else the first line of the error.
+func lastLineOf(tail *lastLine, res run.Result, err error) string {
+	if l := plain(tail.Last()); l != "" {
+		return l
+	}
 	for _, b := range [][]byte{res.Stderr, res.Stdout} {
 		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 		if l := plain(strings.TrimSpace(lines[len(lines)-1])); l != "" {
@@ -398,34 +536,35 @@ func ensurePullRequest(gh host.GH, branch, base string) error {
 // Fixable unless gh would merge it: the head must still be the commit this
 // tree is on (the checks judged it), and the merge state must be clean. A
 // state that is not clean only because a check is still pending is no verdict:
-// pending is true and the error nil.
-func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) (pending bool, err error) {
+// pending is true and the error nil. When it is ready it returns the head it
+// judged, the commit the merge is bound to.
+func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) (judged string, pending bool, err error) {
 	st, err := gh.PRView(branch)
 	if err != nil {
-		return false, fmt.Errorf("tree merge: %w", err)
+		return "", false, fmt.Errorf("tree merge: %w", err)
 	}
 	local, err := env.runGit(repo.Root, "rev-parse", "HEAD")
 	if err != nil {
-		return false, fmt.Errorf("tree merge: %w", err)
+		return "", false, fmt.Errorf("tree merge: %w", err)
 	}
 	notClean := strings.EqualFold(st.MergeStateStatus, "BLOCKED") || strings.EqualFold(st.MergeStateStatus, "UNSTABLE")
 	if notClean && anyPending(gh, st.Number) {
-		return true, nil
+		return "", true, nil
 	}
 	switch {
 	case st.HeadSHA != "" && !strings.EqualFold(st.HeadSHA, local):
-		return false, &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
+		return "", false, &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
 	case st.IsConflicting():
-		return false, conflictError(env, repo)
+		return "", false, conflictError(env, repo)
 	case st.IsBehind():
-		return false, &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+		return "", false, &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
 	case strings.EqualFold(st.MergeStateStatus, "BLOCKED"):
-		return false, &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
+		return "", false, &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
 	case strings.EqualFold(st.MergeStateStatus, "UNSTABLE"):
 		// the watch said green, so this is our read being wrong: red all the same
-		return false, unpassedChecks(env, gh, st.Number, "merge state UNSTABLE after a green watch")
+		return "", false, unpassedChecks(env, gh, st.Number, "merge state UNSTABLE after a green watch")
 	}
-	return false, nil
+	return cmp.Or(st.HeadSHA, local), false, nil
 }
 
 // blockReason is ": <why>" for a review decision gh names, else "".

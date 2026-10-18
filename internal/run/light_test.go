@@ -2,6 +2,7 @@ package run
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -272,5 +273,32 @@ func TestLight_AChildThatExitedZeroWhileAGrandchildHoldsThePipesSucceeds(t *test
 
 	if got.err != nil || got.res.ExitCode != 0 {
 		t.Errorf("err = %v, exit %d; want success: the child exited 0", got.err, got.res.ExitCode)
+	}
+}
+
+func TestLight_StreamsOutputToTheWritersAndKeepsNoCopy(t *testing.T) {
+	var out, errw bytes.Buffer
+
+	res, err := Light(clock.Real(), Spec{Name: "git", Args: []string{"--version"}, Timeout: time.Minute, Stdout: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "git version ") {
+		t.Errorf("stdout writer got %q, want git's version line", out.String())
+	}
+	if len(res.Stdout) != 0 {
+		t.Errorf("Result.Stdout = %q, want none when a writer took the output", res.Stdout)
+	}
+
+	res, err = Light(clock.Real(), Spec{Name: "git", Args: []string{"no-such-verb-trellis"}, Direct: true, Timeout: time.Minute, Stderr: &errw})
+
+	if err == nil || res.ExitCode == 0 {
+		t.Fatalf("err = %v, exit %d; want git to fail", err, res.ExitCode)
+	}
+	if !strings.Contains(errw.String(), "no-such-verb-trellis") {
+		t.Errorf("stderr writer got %q, want git's complaint", errw.String())
+	}
+	if len(res.Stderr) != 0 {
+		t.Errorf("Result.Stderr = %q, want none when a writer took the output", res.Stderr)
 	}
 }
