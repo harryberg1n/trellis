@@ -16,7 +16,9 @@ import (
 // allowVerb is `trellis allow <row-id>`: it leaves a one-shot token that waives
 // the next deny of that row in this repository. The hook consumes it and logs
 // wall.overridden. Rows with no override (secrets, undercover, own-git-state)
-// are refused.
+// are refused. The token lasts store.AllowTTL (10 minutes) and is keyed by the
+// repo id: a repo with no origin remote is keyed by its worktree path, so a
+// token minted in the primary checkout is not seen from a lane.
 func allowVerb(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		_, _ = io.WriteString(stderr, "usage: trellis allow <row-id>\n")
