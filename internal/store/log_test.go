@@ -78,7 +78,9 @@ func TestLog_AppendReturnsEventsWithSeq(t *testing.T) {
 
 func TestLog_ReadFromSkipsEarlierEvents(t *testing.T) {
 	s, _, _ := open(t)
-	s.Append(ev("edit", "l"), ev("commit", "l"), ev("merge", "l"))
+	if _, err := s.Append(ev("edit", "l"), ev("commit", "l"), ev("merge", "l")); err != nil {
+		t.Fatal(err)
+	}
 	got, err := s.Read(2)
 	if err != nil || len(got) != 2 || got[0].Seq != 2 || got[1].Seq != 3 {
 		t.Fatalf("Read(2) = %+v, %v", got, err)
@@ -95,7 +97,9 @@ func TestLog_ReadWithNoLogIsEmpty(t *testing.T) {
 
 func TestLog_SecondHandleContinuesTheSequence(t *testing.T) {
 	s, dir, fc := open(t)
-	s.Append(ev("edit", "l"))
+	if _, err := s.Append(ev("edit", "l")); err != nil {
+		t.Fatal(err)
+	}
 	s2, err := Open(dir, fc)
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +336,9 @@ func TestLog_ReadFromTouchesOnlyTheTail(t *testing.T) {
 
 func TestLog_ReadFromPastTheEndIsEmpty(t *testing.T) {
 	s, _, _ := open(t)
-	s.Append(ev("edit", "l"), ev("edit", "l"))
+	if _, err := s.Append(ev("edit", "l"), ev("edit", "l")); err != nil {
+		t.Fatal(err)
+	}
 	got, err := s.Read(3)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("Read(3) = %+v, %v; want none", got, err)

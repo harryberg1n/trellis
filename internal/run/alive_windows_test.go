@@ -10,7 +10,7 @@ func alive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 	ev, err := windows.WaitForSingleObject(h, 0)
 	return err == nil && ev == uint32(windows.WAIT_TIMEOUT)
 }

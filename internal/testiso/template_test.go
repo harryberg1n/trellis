@@ -108,7 +108,9 @@ func TestBuildRepo_IgnoresTheGlobalConfigAndTheRepositoryVariablesOfTheCaller(t 
 	if err := BuildRepo(tmpl, map[string]string{"a.txt": "a\n"}); err != nil {
 		t.Fatalf("the caller's environment reached the build: %v", err)
 	}
-	os.Unsetenv("GIT_DIR") // t.Setenv restores the caller's value at cleanup
+	if err := os.Unsetenv("GIT_DIR"); err != nil { // t.Setenv restores the caller's value at cleanup
+		t.Fatal(err)
+	}
 	if got := templateGit(t, tmpl, "log", "--format=%s"); got != "init" {
 		t.Errorf("log = %q, want the one init commit", got)
 	}

@@ -57,9 +57,13 @@ func TestEngine_CallerArmsAreRecordedAndKept(t *testing.T) {
 	s, _, _ := open(t)
 	first := ev(kernel.EvEdit, "lane/b")
 	first.Arms = map[string]string{"exp1": "control"}
-	Step(s, nil, first, kernel.Context{})
+	if _, err := Step(s, nil, first, kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	s.Shares = map[string]int{"exp1": 100}
-	Step(s, nil, ev(kernel.EvEdit, "lane/b"), kernel.Context{})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/b"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
 	got, _ := s.Read(1)
 	if got[1].Arms["exp1"] != "control" {
 		t.Fatalf("second event Arms = %v, want exp1=control", got[1].Arms)
