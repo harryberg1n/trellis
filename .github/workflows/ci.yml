@@ -31,6 +31,14 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
+      # The linux run never builds the *_windows.go files; lint them too.
+      - name: golangci-lint (windows files)
+        uses: golangci/golangci-lint-action@v8
+        env:
+          GOOS: windows
+        with:
+          version: v2.12.2
+          skip-cache: true
       - run: go test -race ./...
       # The latency tests carry the !race build tag, so the step above skips
       # them: the race detector slows every call and would measure itself.
