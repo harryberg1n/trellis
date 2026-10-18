@@ -1,4 +1,4 @@
-package testsupport
+package testiso
 
 import "strconv"
 

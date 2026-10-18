@@ -145,7 +145,7 @@ func generate(t testing.TB, repo string, n int) []generated {
 	for i := range out {
 		file := filepath.Join(repo, filepath.FromSlash(genDir(i)), fmt.Sprintf("f%04d.go", i))
 		content := text(i, (i*37)%3000+1)
-		testsupport.Write(t, file, content)
+		testiso.Write(t, file, content)
 		v := vars(repo, file, content)
 		v["@SESSION@"] = fmt.Sprintf("00000000-0000-4000-8000-%012d", i%13)
 		out[i] = generated{shape: i % 20, file: file, payload: fill(shapes[i%20], v)}

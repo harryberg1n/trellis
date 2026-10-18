@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -27,13 +26,12 @@ func newWorld(t testing.TB) world {
 	t.Helper()
 	primary := testiso.Repo(t)
 	lane := filepath.Join(filepath.Dir(primary), "lane")
-	testsupport.Git(t, primary, "worktree", "add", "-q", "-b", "lane/x", lane)
-	tree := testsupport.Git(t, primary, "rev-parse", "HEAD^{tree}")
-	c := testsupport.Git(t, primary, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-		"commit-tree", tree, "-p", "HEAD", "-m", "unmerged work")
-	testsupport.Git(t, primary, "branch", "unmerged", c)
-	testsupport.Write(t, filepath.Join(lane, "README.md"), "changed\n")
-	testsupport.Write(t, filepath.Join(lane, "scratch.txt"), "scratch\n")
+	testiso.Git(t, primary, "worktree", "add", "-q", "-b", "lane/x", lane)
+	tree := testiso.Git(t, primary, "rev-parse", "HEAD^{tree}")
+	c := testiso.Git(t, primary, "commit-tree", tree, "-p", "HEAD", "-m", "unmerged work")
+	testiso.Git(t, primary, "branch", "unmerged", c)
+	testiso.Write(t, filepath.Join(lane, "README.md"), "changed\n")
+	testiso.Write(t, filepath.Join(lane, "scratch.txt"), "scratch\n")
 	return world{primary: primary, lane: lane}
 }
 
@@ -85,7 +83,7 @@ func verdicts(actions []kernel.Action, v kernel.Verdict) []kernel.Action {
 
 func quiet(t testing.TB) run.Runner {
 	t.Helper()
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	return testsupport.Recorder()
 }
 
@@ -111,7 +109,7 @@ func TestWalls_EachIncidentFixtureIsDenied(t *testing.T) {
 			if row == "secrets" {
 				leak = 2
 			}
-			testsupport.FakeTool(t, "gitleaks", leak, "leaks found: 1")
+			testiso.FakeTool(t, "gitleaks", leak, "leaks found: 1")
 			actions := decide(t, w.fill(string(raw)), testsupport.Recorder())
 			denies := verdicts(actions, kernel.VerdictDeny)
 			if len(denies) != 1 || denies[0].RowID != row {
@@ -252,12 +250,12 @@ func TestPrimaryWrite_OnlyWhileThePrimaryIsOnTheDefaultBranch(t *testing.T) {
 		t.Errorf("Edit outside every repository: actions %+v, want none", got)
 	}
 	// The primary on another branch is not guarded; origin/HEAD names the default.
-	testsupport.Git(t, w.primary, "checkout", "-q", "-b", "scratch")
+	testiso.Git(t, w.primary, "checkout", "-q", "-b", "scratch")
 	if got := decide(t, edit(w.primary, file), r); len(got) != 0 {
 		t.Errorf("Edit in the primary on scratch: actions %+v, want none", got)
 	}
-	testsupport.Git(t, w.primary, "update-ref", "refs/remotes/origin/scratch", "HEAD")
-	testsupport.Git(t, w.primary, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/scratch")
+	testiso.Git(t, w.primary, "update-ref", "refs/remotes/origin/scratch", "HEAD")
+	testiso.Git(t, w.primary, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/scratch")
 	if d := verdicts(decide(t, edit(w.primary, file), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("Edit in the primary on the default branch origin/HEAD names: denies %+v, want one", d)
 	}
@@ -265,11 +263,7 @@ func TestPrimaryWrite_OnlyWhileThePrimaryIsOnTheDefaultBranch(t *testing.T) {
 
 func TestSecrets_NotApplicableWithoutGitleaks(t *testing.T) {
 	w := newWorld(t)
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(gitPath))
+	testiso.PathWithOnly(t, "git")
 	rec := testsupport.Recorder()
 	got := decide(t, bash(t, w.lane, `git commit -m "fix"`, true), rec)
 	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks not installed"}}
@@ -280,7 +274,7 @@ func TestSecrets_NotApplicableWithoutGitleaks(t *testing.T) {
 
 func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 	w := newWorld(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	rec := testsupport.Recorder()
 	for _, cmd := range []string{"git status", "git push origin HEAD", "echo git commit", "ls"} {
 		decide(t, bash(t, w.lane, cmd, true), rec)
@@ -300,9 +294,9 @@ func TestDiscard_WorktreeRemoveForceWithUnstagedIsDenied(t *testing.T) {
 	// A lane with exactly one unstaged file, and a clean one.
 	dirty := filepath.Join(filepath.Dir(w.primary), "dirty")
 	clean := filepath.Join(filepath.Dir(w.primary), "clean")
-	testsupport.Git(t, w.primary, "worktree", "add", "-q", "-b", "dirty/x", dirty)
-	testsupport.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
-	testsupport.Write(t, filepath.Join(dirty, "README.md"), "edited\n")
+	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "dirty/x", dirty)
+	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
+	testiso.Write(t, filepath.Join(dirty, "README.md"), "edited\n")
 	r := quiet(t)
 
 	got := decide(t, bash(t, w.primary, "git worktree remove --force "+filepath.ToSlash(dirty), true), r)
@@ -317,7 +311,7 @@ func TestDiscard_WorktreeRemoveForceWithUnstagedIsDenied(t *testing.T) {
 
 func TestDiscard_SpawnsOnlyForDiscardForms(t *testing.T) {
 	w := newWorld(t)
-	count := testsupport.CountGitSpawns(t)
+	count := testiso.CountGitSpawns(t)
 	rec := quiet(t).(*run.Recorder)
 	templates := []string{
 		"ls -la", "git status", "git log --oneline -5", "git diff HEAD", "git checkout main", "git checkout -b topic",
@@ -363,13 +357,13 @@ func TestDiscard_MeasuresWhatEachFormWouldDestroy(t *testing.T) {
 	}
 	// A clean tree costs nothing, and a pushed branch is recoverable.
 	clean := filepath.Join(filepath.Dir(w.primary), "clean")
-	testsupport.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
+	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
 	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git checkout -- README.md"} {
 		if got := decide(t, bash(t, clean, cmd, true), r); len(got) != 0 {
 			t.Errorf("%q in a clean lane: actions %+v, want none", cmd, got)
 		}
 	}
-	testsupport.Git(t, w.primary, "update-ref", "refs/remotes/origin/unmerged", "unmerged")
+	testiso.Git(t, w.primary, "update-ref", "refs/remotes/origin/unmerged", "unmerged")
 	if got := decide(t, bash(t, w.lane, "git branch -D unmerged", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a branch a remote has: actions %+v, want none", got)
 	}
@@ -404,7 +398,7 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 		}
 	}
 	file := filepath.Join(w.lane, "msg.txt")
-	testsupport.Write(t, file, with)
+	testiso.Write(t, file, with)
 	if d := verdicts(decide(t, bash(t, w.lane, "git commit -F msg.txt", true), r), kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "undercover" {
 		t.Errorf("-F with a trailer in the file: denies %+v, want one from undercover", d)
 	}
@@ -415,7 +409,7 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 
 func TestWallsWarnPeople_NonAgentGetsWarning(t *testing.T) {
 	w := newWorld(t)
-	testsupport.FakeTool(t, "gitleaks", 2, "leaks found: 1")
+	testiso.FakeTool(t, "gitleaks", 2, "leaks found: 1")
 	rec := testsupport.Recorder()
 
 	// main-commit, as an agent: a deny. Without a session_id: a warn.
@@ -462,7 +456,7 @@ func TestMatch_RowWithNothingToSayDoesNotMatch(t *testing.T) {
 
 func TestSecrets_OnlyExitCodeTwoIsAFinding(t *testing.T) {
 	w := newWorld(t)
-	testsupport.FakeTool(t, "gitleaks", 1, "fatal: not a git repository")
+	testiso.FakeTool(t, "gitleaks", 1, "fatal: not a git repository")
 	got := decide(t, bash(t, w.lane, `git commit -m "x"`, true), testsupport.Recorder())
 	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks failed (exit 1)"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -487,7 +481,7 @@ func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
 		{`git add -A && git commit -m x`, []string{staged, tree}},
 		{`git add . ; git commit -m x`, []string{staged, tree}},
 	} {
-		testsupport.FakeTool(t, "gitleaks", 0, "")
+		testiso.FakeTool(t, "gitleaks", 0, "")
 		rec := testsupport.Recorder()
 		decide(t, bash(t, w.lane, c.cmd, true), rec)
 		var got []string
@@ -522,15 +516,15 @@ func TestDiscard_BranchDeleteCountsCommitsNoOtherRefReaches(t *testing.T) {
 	w := newWorld(t)
 	r := quiet(t)
 	// merged: the tip is HEAD's. A second local branch holds the same commits as feat.
-	testsupport.Git(t, w.primary, "branch", "merged")
-	testsupport.Git(t, w.primary, "branch", "feat", "unmerged")
+	testiso.Git(t, w.primary, "branch", "merged")
+	testiso.Git(t, w.primary, "branch", "feat", "unmerged")
 	if got := decide(t, bash(t, w.lane, "git branch -D merged", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a merged branch: actions %+v, want none", got)
 	}
 	if got := decide(t, bash(t, w.lane, "git branch -D feat", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a branch another local branch holds: actions %+v, want none", got)
 	}
-	testsupport.Git(t, w.primary, "branch", "-D", "feat")
+	testiso.Git(t, w.primary, "branch", "-D", "feat")
 	if d := verdicts(decide(t, bash(t, w.lane, "git branch -D unmerged", true), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("branch -D of the only holder of a commit: denies %+v, want one", d)
 	}

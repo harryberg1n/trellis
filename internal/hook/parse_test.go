@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/harryberg1n/trellis/internal/testsupport"
+	"github.com/harryberg1n/trellis/internal/testiso"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
@@ -90,7 +90,7 @@ func TestParse_EventsAndContext(t *testing.T) {
 func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 	e := newEnv(t)
 	file := filepath.Join(e.repo, "a.txt")
-	testsupport.Write(t, file, "a\n")
+	testiso.Write(t, file, "a\n")
 	payload := fill(readShape(t, "edit_01_full"), vars(e.repo, file, ""))
 	laneOf := func(t *testing.T, payload []byte) string {
 		t.Helper()
@@ -101,7 +101,7 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 		return ev.Lane
 	}
 
-	testsupport.Git(t, e.repo, "checkout", "-q", "-b", "feature/deep/x")
+	testiso.Git(t, e.repo, "checkout", "-q", "-b", "feature/deep/x")
 	if got := laneOf(t, payload); got != "feature/deep/x" {
 		t.Errorf("branch lane %q, want feature/deep/x", got)
 	}
@@ -116,8 +116,8 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 
 	// A linked worktree has its own HEAD in .git/worktrees/<name>.
 	wt := filepath.Join(filepath.Dir(e.repo), "wt")
-	testsupport.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
-	testsupport.Write(t, filepath.Join(wt, "w.txt"), "w\n")
+	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	testiso.Write(t, filepath.Join(wt, "w.txt"), "w\n")
 	wp := fill(readShape(t, "edit_01_full"), vars(wt, filepath.Join(wt, "w.txt"), ""))
 	ev, ctx, err := Parse("PostToolUse", wp)
 	if err != nil {
@@ -127,8 +127,8 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 		t.Errorf("worktree: lane %q path %q repo %q, want side/lane w.txt %s", ev.Lane, ev.Detail["path"], ctx.Args["repo"], wt)
 	}
 
-	testsupport.Git(t, e.repo, "checkout", "-q", "--detach")
-	if want := "detached-" + testsupport.Git(t, e.repo, "rev-parse", "--short=12", "HEAD"); laneOf(t, payload) != want {
+	testiso.Git(t, e.repo, "checkout", "-q", "--detach")
+	if want := "detached-" + testiso.Git(t, e.repo, "rev-parse", "--short=12", "HEAD"); laneOf(t, payload) != want {
 		t.Errorf("detached HEAD lane %q, want %q", laneOf(t, payload), want)
 	}
 }

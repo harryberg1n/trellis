@@ -55,22 +55,21 @@ func repoWithHistory(t *testing.T) string {
 	repo := testiso.Repo(t)
 	commit := func(author, committer, subject, body string) string {
 		t.Setenv("GIT_COMMITTER_DATE", committer)
-		testsupport.Git(t, repo, "add", "-A")
+		testiso.Git(t, repo, "add", "-A")
 		msg := subject
 		if body != "" {
 			msg += "\n\n" + body
 		}
-		testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-			"commit", "-q", "--date="+author, "-m", msg)
-		return testsupport.Git(t, repo, "rev-parse", "HEAD")
+		testiso.Git(t, repo, "commit", "-q", "--date="+author, "-m", msg)
+		return testiso.Git(t, repo, "rev-parse", "HEAD")
 	}
-	testsupport.Write(t, filepath.Join(repo, "a.go"), "package a\n\nvar A = 1\n")
+	testiso.Write(t, filepath.Join(repo, "a.go"), "package a\n\nvar A = 1\n")
 	first := commit("2026-10-01T09:00:00Z", "2026-10-01T09:00:00Z", "add a (#1)", "")
-	testsupport.Write(t, filepath.Join(repo, "a.go"), "package a\n")
+	testiso.Write(t, filepath.Join(repo, "a.go"), "package a\n")
 	commit("2026-10-02T09:00:00Z", "2026-10-02T09:00:00Z", `Revert "add a (#1)"`, "This reverts commit "+first+".")
-	testsupport.Write(t, filepath.Join(repo, "b.go"), "package b\n")
+	testiso.Write(t, filepath.Join(repo, "b.go"), "package b\n")
 	commit("2026-10-03T09:00:00Z", "2026-10-03T09:00:00Z", "add b (#2)", "")
-	testsupport.Write(t, filepath.Join(repo, "c.go"), "package c\n")
+	testiso.Write(t, filepath.Join(repo, "c.go"), "package c\n")
 	// Rebased: authored ten days before it landed on the 7th.
 	commit("2026-09-27T09:00:00Z", "2026-10-07T09:00:00Z", "add c (#3)", "")
 	return repo
@@ -92,7 +91,7 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 		t.Fatal(err)
 	}
 	transcript := filepath.Join(t.TempDir(), "session.jsonl")
-	testsupport.Write(t, transcript, `{"type":"user","timestamp":"2026-10-01T09:00:00Z","message":{"content":"`+sentinel+`"}}`+"\n"+
+	testiso.Write(t, transcript, `{"type":"user","timestamp":"2026-10-01T09:00:00Z","message":{"content":"`+sentinel+`"}}`+"\n"+
 		`{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"`+sentinel+`"}],"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}`+"\n")
 	at := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
 	_, err = st.Append(
@@ -229,7 +228,7 @@ func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing
 	env, _, _ := reportFixture(t)
 	// The hook reads the repo's own config file only. A remote that only the
 	// user's global config names must not move the report to another store.
-	testsupport.Git(t, env.Repo, "config", "--global", "remote.origin.url", "https://example.invalid/global.git")
+	testiso.Git(t, env.Repo, "config", "--global", "remote.origin.url", "https://example.invalid/global.git")
 	var out, errb bytes.Buffer
 
 	code := reportCmd(nil, &out, &errb, env)

@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 // foreignSettings has two foreign hook entries, odd spacing, a numeric 1.0,
@@ -34,7 +33,7 @@ func newFixture(t *testing.T) fixture {
 	t.Helper()
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "src", "trellis")
-	testsupport.Write(t, exe, "binary-bytes")
+	testiso.Write(t, exe, "binary-bytes")
 	return fixture{repo: testiso.Repo(t), root: filepath.Join(dir, "state"), exe: exe}
 }
 
@@ -79,7 +78,7 @@ func hashTree(t *testing.T, dirs ...string) map[string][32]byte {
 
 func TestInstall_AddsTrellisEntriesOnly(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), foreignSettings)
+	testiso.Write(t, f.settings(), foreignSettings)
 
 	actions, err := Install(f.opts("v0.0.2", false))
 	if err != nil {
@@ -163,8 +162,8 @@ func TestInstall_CreatesSettingsWhenAbsent(t *testing.T) {
 
 func TestInstall_DryChangesNothing(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), foreignSettings)
-	testsupport.Write(t, filepath.Join(f.repo, ".claude", "other.json"), "{}")
+	testiso.Write(t, f.settings(), foreignSettings)
+	testiso.Write(t, filepath.Join(f.repo, ".claude", "other.json"), "{}")
 	before := hashTree(t, f.repo, f.root)
 
 	actions, err := Install(f.opts("v0.0.2", true))
@@ -199,7 +198,7 @@ func TestInstall_DryOnAbsentSettingsCreatesNoDirectory(t *testing.T) {
 
 func TestInstall_RefusesBadSettingsBeforeCopyingAnything(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), `{"hooks":`)
+	testiso.Write(t, f.settings(), `{"hooks":`)
 	if _, err := Install(f.opts("v0.0.2", false)); err == nil {
 		t.Fatal("no error for invalid JSON")
 	}
@@ -222,7 +221,7 @@ func TestInstall_RefusesAVersionThatIsNotADirectoryName(t *testing.T) {
 
 func TestInstall_SecondRunKeepsAndANewVersionRepins(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), foreignSettings)
+	testiso.Write(t, f.settings(), foreignSettings)
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +250,7 @@ func TestInstall_SecondRunKeepsAndANewVersionRepins(t *testing.T) {
 
 func TestEject_LeavesOnlyForeignEntries(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), foreignSettings)
+	testiso.Write(t, f.settings(), foreignSettings)
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +268,7 @@ func TestEject_LeavesOnlyForeignEntries(t *testing.T) {
 
 func TestEject_AfterInstallOnAnEmptyObjectLeavesTheObject(t *testing.T) {
 	f := newFixture(t)
-	testsupport.Write(t, f.settings(), "{}\n")
+	testiso.Write(t, f.settings(), "{}\n")
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +294,7 @@ func TestEject_NoSettingsFileIsNothingToDo(t *testing.T) {
 func TestEject_IgnoresATrellisLookalikeOutsideTheStateRoot(t *testing.T) {
 	f := newFixture(t)
 	const own = `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\"/elsewhere/bin/v1/trellis\" hook Stop"}]}]}}`
-	testsupport.Write(t, f.settings(), own)
+	testiso.Write(t, f.settings(), own)
 	actions, err := Eject(f.opts("v0.0.2", false))
 	if err != nil || len(actions) != 0 || readFile(t, f.settings()) != own {
 		t.Errorf("actions %q, err %v, settings %q", actions, err, readFile(t, f.settings()))
@@ -309,7 +308,7 @@ func writeInstalled(t *testing.T, f fixture, version string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	testsupport.Write(t, f.settings(), `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":`+string(cmd)+`}]}]}}`)
+	testiso.Write(t, f.settings(), `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":`+string(cmd)+`}]}]}}`)
 }
 
 func TestDoctor_ReportsVersionMismatchAndUnwritableRoot(t *testing.T) {
@@ -322,7 +321,7 @@ func TestDoctor_ReportsVersionMismatchAndUnwritableRoot(t *testing.T) {
 
 	// A regular file where the state root should be.
 	blocked := filepath.Join(t.TempDir(), "blocked")
-	testsupport.Write(t, blocked, "x")
+	testiso.Write(t, blocked, "x")
 	o := f.opts("v0.0.2", false)
 	o.Root = blocked
 	if got := Doctor(o); !contains(got, "state root not writable: "+blocked) {
@@ -370,7 +369,7 @@ func TestInstall_RefusesAnUnversionedBuildUnlessAllowed(t *testing.T) {
 func TestInstall_KeepsAnExistingPinnedBinaryWhateverItHolds(t *testing.T) {
 	f := newFixture(t)
 	bin := filepath.Join(f.root, "bin", "v0.0.2", "trellis")
-	testsupport.Write(t, bin, "held open by a running hook")
+	testiso.Write(t, bin, "held open by a running hook")
 	actions, err := Install(f.opts("v0.0.2", false))
 	if err != nil || actions[0] != "keep binary "+bin {
 		t.Fatalf("%q, %v", actions, err)

@@ -7,18 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
-
-func templateGit(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
 
 // A template is built once and handed out by copy: each copy must be a repo of
 // its own, on main, with the committed files and an identity, and a commit in
@@ -35,22 +25,22 @@ func TestRepoTemplate_CopiesAreIndependentCommittedRepos(t *testing.T) {
 		}
 	}
 
-	if got := templateGit(t, one, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+	if got := Git(t, one, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Errorf("branch = %q, want main", got)
 	}
-	if got := templateGit(t, one, "status", "--porcelain"); got != "" {
+	if got := Git(t, one, "status", "--porcelain"); got != "" {
 		t.Errorf("a fresh copy is dirty:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(one, "sub", "a.txt")); err != nil {
 		t.Errorf("committed file missing from the copy: %v", err)
 	}
-	before := templateGit(t, two, "rev-parse", "HEAD")
+	before := Git(t, two, "rev-parse", "HEAD")
 	if err := os.WriteFile(filepath.Join(one, "b.txt"), []byte("b\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	templateGit(t, one, "add", ".")
-	templateGit(t, one, "commit", "-qm", "second")
-	if after := templateGit(t, two, "rev-parse", "HEAD"); after != before {
+	Git(t, one, "add", ".")
+	Git(t, one, "commit", "-qm", "second")
+	if after := Git(t, two, "rev-parse", "HEAD"); after != before {
 		t.Errorf("a commit in one copy moved another's HEAD: %s -> %s", before, after)
 	}
 }
@@ -78,13 +68,13 @@ func TestBuildRepo_WithNoFilesLeavesARepoWithNoCommit(t *testing.T) {
 	if err := BuildRepo(tmpl, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := templateGit(t, tmpl, "symbolic-ref", "--short", "HEAD"); got != "main" {
+	if got := Git(t, tmpl, "symbolic-ref", "--short", "HEAD"); got != "main" {
 		t.Errorf("HEAD points at %q, want main", got)
 	}
 	if out, err := exec.Command("git", "-C", tmpl, "rev-parse", "--verify", "-q", "HEAD").CombinedOutput(); err == nil {
 		t.Errorf("a repo built from no files has a commit: %s", out)
 	}
-	if got := templateGit(t, tmpl, "config", "user.name"); got != "t" {
+	if got := Git(t, tmpl, "config", "user.name"); got != "t" {
 		t.Errorf("user.name = %q, want t", got)
 	}
 }
@@ -111,7 +101,7 @@ func TestBuildRepo_IgnoresTheGlobalConfigAndTheRepositoryVariablesOfTheCaller(t 
 	if err := os.Unsetenv("GIT_DIR"); err != nil { // t.Setenv restores the caller's value at cleanup
 		t.Fatal(err)
 	}
-	if got := templateGit(t, tmpl, "log", "--format=%s"); got != "init" {
+	if got := Git(t, tmpl, "log", "--format=%s"); got != "init" {
 		t.Errorf("log = %q, want the one init commit", got)
 	}
 }
@@ -127,7 +117,7 @@ func TestBuildRepo_TemplateKeepsAutoMaintenanceOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{"maintenance.auto": "false", "gc.auto": "0"} {
-		if got := templateGit(t, tmpl, "config", "--local", "--get", key); got != want {
+		if got := Git(t, tmpl, "config", "--local", "--get", key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
