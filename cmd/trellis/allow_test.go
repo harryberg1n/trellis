@@ -2,12 +2,11 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -15,16 +14,10 @@ func TestAllow_WaivesTheNextDenyOnce(t *testing.T) {
 	bin := build(t)
 	repo := testiso.Repo(t)
 	state := filepath.Join(t.TempDir(), "state")
-	payload := `{"session_id":"s-1","cwd":` + quote(repo) + `,"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"}}`
+	payload := string(testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolBash, repo,
+		map[string]string{"command": "git push origin main"}, testiso.WithSession("s-1")))
 	run := func(stdin string, args ...string) (int, string, string) {
-		cmd := exec.Command(bin, args...)
-		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "TRELLIS_STATE="+state)
-		cmd.Stdin = strings.NewReader(stdin)
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		_ = cmd.Run()
-		return cmd.ProcessState.ExitCode(), out.String(), errb.String()
+		return runBin(t, bin, state, stdin, args, inDir(repo))
 	}
 
 	if code, _, errs := run(payload, "hook", "PreToolUse"); code != 2 || !strings.Contains(errs, "trellis: main-commit: ") {

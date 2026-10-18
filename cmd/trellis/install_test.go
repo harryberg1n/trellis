@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -106,22 +106,16 @@ func TestInstall_PinnedBinaryRunsTheHook(t *testing.T) {
 	repo := testiso.Repo(t)
 	state := filepath.Join(t.TempDir(), "state")
 
-	cmd := exec.Command(bin, "install", "--allow-dev", "--repo", repo)
-	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+state)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("install: %v\n%s", err, out)
+	if code, out, errs := runBin(t, bin, state, "", []string{"install", "--allow-dev", "--repo", repo}); code != 0 {
+		t.Fatalf("install: exit %d\n%s%s", code, out, errs)
 	}
 	ext := filepath.Ext(bin)
 	pinned := filepath.Join(state, "bin", "dev", "trellis"+ext)
-	hook := exec.Command(pinned, "hook", "SessionStart")
-	hook.Env = append(os.Environ(), "TRELLIS_STATE="+state)
-	hook.Stdin = strings.NewReader(`{"session_id":"s","cwd":` + quote(repo) + `}`)
-	if out, err := hook.CombinedOutput(); err != nil || len(out) != 0 {
-		t.Errorf("pinned hook: %v %q", err, out)
+	hookIn := string(testiso.HookPayload(t, kernel.HookSessionStart, "", repo, nil, testiso.WithSession("s")))
+	if code, out, errs := runBin(t, pinned, state, hookIn, []string{"hook", "SessionStart"}); code != 0 || out != "" || errs != "" {
+		t.Errorf("pinned hook: exit %d, stdout %q, stderr %q", code, out, errs)
 	}
-	doctor := exec.Command(pinned, "doctor", "--repo", repo)
-	doctor.Env = append(os.Environ(), "TRELLIS_STATE="+state)
-	if out, err := doctor.CombinedOutput(); err != nil || string(out) != "doctor: ok\n" {
-		t.Errorf("doctor from the pinned copy: %v %q", err, out)
+	if code, out, errs := runBin(t, pinned, state, "", []string{"doctor", "--repo", repo}); code != 0 || out != "doctor: ok\n" || errs != "" {
+		t.Errorf("doctor from the pinned copy: exit %d, stdout %q, stderr %q", code, out, errs)
 	}
 }

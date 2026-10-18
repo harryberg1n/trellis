@@ -18,14 +18,11 @@ import (
 // printed.
 func (e *env) pre(t testing.TB, cwd, command string, session bool) (code int, stdout, stderr string) {
 	t.Helper()
-	m := map[string]any{"cwd": cwd, "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]string{"command": command}}
+	var opts []testiso.PayloadOption
 	if session {
-		m["session_id"] = "s-1"
+		opts = append(opts, testiso.WithSession("s-1"))
 	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolBash, cwd, map[string]string{"command": command}, opts...)
 	var out, errb bytes.Buffer
 	code = Run("PreToolUse", bytes.NewReader(raw), &out, &errb, e.deps)
 	return code, out.String(), errb.String()
@@ -145,7 +142,7 @@ func TestPreToolUse_WarnGoesToTheAgentAsContextAndRecordsNothing(t *testing.T) {
 	testiso.FakeTool(t, "gitleaks", 0, "")
 	code, stdout, stderr := e.pre(t, e.repo, "git commit -m wip", false)
 	line := "trellis: main-commit: git commit in the primary checkout, which is on main. Override: trellis allow main-commit."
-	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":` + strconv.Quote(line) + `}}` + "\n"
+	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":` + testiso.JSONString(line) + `}}` + "\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Errorf("exit %d, stdout %q, stderr %q; want 0, %q, empty", code, stdout, stderr, want)
 	}

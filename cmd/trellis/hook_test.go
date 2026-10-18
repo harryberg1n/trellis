@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,23 +14,15 @@ func TestHook_RecordsAnEditAndPrintsNothing(t *testing.T) {
 	bin := build(t)
 	repo := testiso.Repo(t)
 	state := filepath.Join(t.TempDir(), "state")
-	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	payload := `{"session_id":"s-1","cwd":` + quote(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Edit",` +
-		`"tool_input":{"file_path":` + quote(filepath.Join(repo, "hello.txt")) + `,"old_string":"a","new_string":"b"}}`
+	payload := helloEdit(t, repo)
 
-	cmd := exec.Command(bin, "hook", "PostToolUse")
-	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+state)
-	cmd.Stdin = strings.NewReader(payload)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("trellis hook: %v (stderr %q)", err, errb.String())
+	code, stdout, stderr := runBin(t, bin, state, string(payload), []string{"hook", "PostToolUse"})
+	if code != 0 {
+		t.Fatalf("trellis hook: exit %d (stderr %q)", code, stderr)
 	}
 
-	if out.Len() != 0 || errb.Len() != 0 {
-		t.Errorf("stdout %q stderr %q, want both empty", out.String(), errb.String())
+	if stdout != "" || stderr != "" {
+		t.Errorf("stdout %q stderr %q, want both empty", stdout, stderr)
 	}
 	logs, _ := filepath.Glob(filepath.Join(state, "repos", "*", "events.jsonl"))
 	if len(logs) != 1 {
@@ -50,16 +41,9 @@ func TestHook_RecordsAnEditAndPrintsNothing(t *testing.T) {
 
 func TestHook_GarbageStillExitsZero(t *testing.T) {
 	bin := build(t)
-	cmd := exec.Command(bin, "hook", "Stop")
-	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+filepath.Join(t.TempDir(), "state"))
-	cmd.Stdin = strings.NewReader("this is not json")
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("trellis hook on garbage: %v (stderr %q)", err, errb.String())
-	}
-	if out.Len() != 0 || errb.Len() != 0 {
-		t.Errorf("stdout %q stderr %q, want both empty", out.String(), errb.String())
+	code, stdout, stderr := runBin(t, bin, filepath.Join(t.TempDir(), "state"), "this is not json", []string{"hook", "Stop"})
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Errorf("trellis hook on garbage: exit %d, stdout %q stderr %q; want 0, both empty", code, stdout, stderr)
 	}
 }
 
@@ -71,11 +55,6 @@ func TestHook_NoEventIsAUsageErrorThatDoesNotBlock(t *testing.T) {
 	}
 }
 
-// quote is s as a JSON string.
-func quote(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
-
 func TestHook_FallbackLivesInTheUserCacheDir(t *testing.T) {
 	bin := build(t)
 	repo := testiso.Repo(t)
@@ -84,19 +63,12 @@ func TestHook_FallbackLivesInTheUserCacheDir(t *testing.T) {
 	if err := os.WriteFile(badRoot, []byte("a file, not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	payload := `{"session_id":"s-1","cwd":` + quote(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Edit",` +
-		`"tool_input":{"file_path":` + quote(filepath.Join(repo, "hello.txt")) + `}}`
+	payload := helloEdit(t, repo)
 
-	cmd := exec.Command(bin, "hook", "PostToolUse")
-	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+badRoot, "LocalAppData="+cache, "XDG_CACHE_HOME="+cache, "HOME="+cache)
-	cmd.Stdin = strings.NewReader(payload)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil || out.Len() != 0 || errb.Len() != 0 {
-		t.Fatalf("exit %v, stdout %q, stderr %q; want 0, empty, empty", err, out.String(), errb.String())
+	code, stdout, stderr := runBin(t, bin, badRoot, string(payload), []string{"hook", "PostToolUse"},
+		withEnv("LocalAppData="+cache, "XDG_CACHE_HOME="+cache, "HOME="+cache))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %q; want 0, empty, empty", code, stdout, stderr)
 	}
 
 	m, _ := filepath.Glob(filepath.Join(cache, "*", "trellis", "fallback", "events.pending", "*.json"))
