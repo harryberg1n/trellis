@@ -362,3 +362,21 @@ func TestIsolate_StartsTheMSYSAnchorBeforeMovingTheTempDir(t *testing.T) {
 		t.Fatal("Isolate must have called anchor")
 	}
 }
+
+// A fixture's bare `git init` and `git commit` work as on an ordinary box:
+// the sealed global config carries an identity and the default branch.
+func TestIsolate_SealedConfigGivesAnIdentityAndMainAsTheDefaultBranch(t *testing.T) {
+	dir := t.TempDir()
+	Git(t, dir, "init", "-q")
+	Write(t, filepath.Join(dir, "f.txt"), "x\n")
+	Git(t, dir, "add", "-A")
+
+	Git(t, dir, "commit", "-qm", "first")
+
+	if got := Git(t, dir, "symbolic-ref", "--short", "HEAD"); got != "main" {
+		t.Errorf("default branch = %q, want main", got)
+	}
+	if got := Git(t, dir, "log", "-1", "--format=%an <%ae>"); got != "trellis-test <test@trellis.invalid>" {
+		t.Errorf("commit identity = %q, want trellis-test <test@trellis.invalid>", got)
+	}
+}

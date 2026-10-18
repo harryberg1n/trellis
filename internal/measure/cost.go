@@ -26,13 +26,36 @@ type price struct{ Input, Output, CacheRead, CacheWrite float64 }
 var modelPrices = []struct {
 	prefix string
 	price  price
+	family string // the id segment that names the family
+	size   string // the size label a published report shows
 }{
-	{"claude-fable-5", price{10, 50, 1, 12.5}},
-	{"claude-opus-5", price{5, 25, 0.5, 6.25}},
-	{"claude-opus-4-8", price{5, 25, 0.5, 6.25}},
-	{"claude-sonnet-5", price{3, 15, 0.3, 3.75}},
-	{"claude-sonnet-4-6", price{3, 15, 0.3, 3.75}},
-	{"claude-haiku-4-5", price{1, 5, 0.1, 1.25}},
+	{"claude-fable-5", price{10, 50, 1, 12.5}, "fable", "large model"},
+	{"claude-opus-5", price{5, 25, 0.5, 6.25}, "opus", "large model"},
+	{"claude-opus-4-8", price{5, 25, 0.5, 6.25}, "opus", "large model"},
+	{"claude-sonnet-5", price{3, 15, 0.3, 3.75}, "sonnet", "medium model"},
+	{"claude-sonnet-4-6", price{3, 15, 0.3, 3.75}, "sonnet", "medium model"},
+	{"claude-haiku-4-5", price{1, 5, 0.1, 1.25}, "haiku", "small model"},
+}
+
+// otherModel is the label of an id whose family the price table does not know.
+const otherModel = "other model"
+
+// SizeLabel is the published name of a model id: the size of its family, read
+// from the price table by the id's segments, so a new member of a known family
+// ("claude-opus-9") is labelled before it is priced. An id of no known family
+// is "other model".
+//
+// Adapted from aphrollo-tools internal/report/publish.go:28-60 at 12b3724e.
+// Incident: a report filed on a public repository must not print ids that name
+// the model's maker.
+func SizeLabel(id string) string {
+	segs := strings.FieldsFunc(strings.ToLower(id), func(r rune) bool { return r == '-' || r == '[' || r == ']' })
+	for _, m := range modelPrices {
+		if slices.Contains(segs, m.family) {
+			return m.size
+		}
+	}
+	return otherModel
 }
 
 // atFamily reports whether model is the family prefix, or the prefix followed
@@ -130,9 +153,10 @@ func readLine(r *bufio.Reader) (line []byte, tooLong bool, err error) {
 }
 
 // parseTurns reads the replies of a JSONL transcript, once per requestId, in
-// time order. A line that is not a reply is skipped; no text of the
-// transcript is kept.
-func parseTurns(raw []byte) []turn {
+// time order. A line that is not a reply is passed over; a line that is over
+// maxLineBytes, is not JSON or has no readable time is passed over and counted
+// in skipped. No text of the transcript is kept.
+func parseTurns(raw []byte) (turns []turn, skipped int) {
 	byReq := map[string]turn{}
 	var order []string
 	var loose []turn
@@ -143,14 +167,23 @@ func parseTurns(raw []byte) []turn {
 			break
 		}
 		if tooLong {
+			skipped++
+			continue
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var l transcriptLine
-		if json.Unmarshal(line, &l) != nil || l.Type != "assistant" || l.Message == nil || l.Message.Usage == nil || l.Message.Model == syntheticModel {
+		if json.Unmarshal(line, &l) != nil {
+			skipped++
+			continue
+		}
+		if l.Type != "assistant" || l.Message == nil || l.Message.Usage == nil || l.Message.Model == syntheticModel {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if err != nil {
+			skipped++
 			continue
 		}
 		u := l.Message.Usage
@@ -179,7 +212,7 @@ func parseTurns(raw []byte) []turn {
 		out = append(out, byReq[id])
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].at.Before(out[j].at) })
-	return out
+	return out, skipped
 }
 
 // treeOf is the tree a reply at t belongs to in usage u.
@@ -202,18 +235,19 @@ type marked struct {
 	tree string
 }
 
-// turns are the replies of the usage's transcript, each with its tree.
-func (u Usage) turns() []marked {
-	ts := parseTurns(u.Transcript)
+// turns are the replies of the usage's transcript, each with its tree, and
+// the lines of it that were skipped.
+func (u Usage) turns() (out []marked, skipped int) {
+	ts, skipped := parseTurns(u.Transcript)
 	// The log is in append order, not time order: an event folded from the
 	// fallback store carries an old time and lands at the end.
 	marks := slices.Clone(u.Marks)
 	sort.SliceStable(marks, func(i, j int) bool { return marks[i].At.Before(marks[j].At) })
-	out := make([]marked, len(ts))
+	out = make([]marked, len(ts))
 	for i, t := range ts {
 		out[i] = marked{t, u.treeOf(marks, t.at)}
 	}
-	return out
+	return out, skipped
 }
 
 // Unpriced counts the tokens whose model has no price, so a cost of 0 for them
@@ -231,11 +265,23 @@ func TreeCosts(f Facts) map[string]float64 {
 
 // Costs is TreeCosts and the tokens it could not price.
 func Costs(f Facts) (map[string]float64, Unpriced) {
-	out := map[string]float64{}
-	var un Unpriced
+	out, un, _ := costsAndSkips(f)
+	return out, un
+}
+
+// costsAndSkips is Costs and the transcript lines skipped on the way, counted in the
+// pass that parses them.
+//
+// The count is adapted from aphrollo-tools internal/report/usage_scan.go:26,77-80,199,236
+// at 12b3724e. Incident: a scan that drops a line silently under-reports cost
+// with no sign that it did.
+func costsAndSkips(f Facts) (out map[string]float64, un Unpriced, skipped int) {
+	out = map[string]float64{}
 	models := map[string]bool{}
 	for _, u := range f.Usage {
-		for _, t := range u.turns() {
+		ts, s := u.turns()
+		skipped += s
+		for _, t := range ts {
 			if _, ok := priceFor(t.model); !ok {
 				n := t.tok.Fresh + t.tok.Output
 				un.Tokens += n
@@ -247,7 +293,7 @@ func Costs(f Facts) (map[string]float64, Unpriced) {
 		}
 	}
 	un.Models = sortedKeys(models)
-	return out, un
+	return out, un, skipped
 }
 
 // RowCost is the net_cost inputs of one table row: what its denies injected
@@ -275,7 +321,8 @@ type RowCost struct {
 func RowCosts(f Facts) []RowCost {
 	times := map[string][]time.Time{}
 	for _, u := range f.Usage {
-		for _, t := range u.turns() {
+		ts, _ := u.turns()
+		for _, t := range ts {
 			times[t.tree] = append(times[t.tree], t.at)
 		}
 	}

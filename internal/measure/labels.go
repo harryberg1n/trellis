@@ -82,7 +82,13 @@ type Facts struct {
 	Usage  []Usage
 	// MissingTranscripts is how many sessions had no readable transcript.
 	MissingTranscripts int
-	Now                time.Time
+	// SkippedFiles is how many transcript files (a session's or a subagent's)
+	// could not be read.
+	SkippedFiles int
+	// NotRead names the facts the caller could not gather, each in a few words,
+	// so the report says what it lacks.
+	NotRead []string
+	Now     time.Time
 }
 
 // linked is the merges with a tree filled in for each squash or rebase merge

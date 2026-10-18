@@ -233,7 +233,7 @@ func Isolate(root string) (home string, err error) {
 		env[name] = path
 	}
 	gitconfig := filepath.Join(home, ".gitconfig")
-	if err := os.WriteFile(gitconfig, []byte("[core]\n\tlongpaths = true\n"), 0o644); err != nil {
+	if err := os.WriteFile(gitconfig, []byte(sealedConfigText), 0o644); err != nil {
 		return "", err
 	}
 	cwd, _ := os.Getwd()
@@ -315,3 +315,12 @@ func dropGit(env []string) []string {
 	}
 	return out
 }
+
+// sealedConfigText is the sealed global git config: long paths, a fixed
+// neutral identity and the default branch, so a fixture that commits without
+// setting an identity behaves as on an ordinary box without reaching the
+// operator's config.
+//
+// Adapted from aphrollo-tools internal/gitenv/sealed.go:31-37 at 12b3724e.
+// Incident #1043: tests wrote into the real global git config.
+const sealedConfigText = "[core]\n\tlongpaths = true\n[user]\n\tname = trellis-test\n\temail = test@trellis.invalid\n[init]\n\tdefaultBranch = main\n"

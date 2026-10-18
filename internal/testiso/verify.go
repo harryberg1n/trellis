@@ -74,7 +74,7 @@ func Probe(t *testing.T) {
 		{"add", "-A"},
 		{"commit", "-q", "-m", "probe"},
 		{"remote", "add", "dest", filepath.Join(base, "dest")},
-		{"config", "--global", "user.name", "Probe Person"},
+		{"config", "--global", "probe.written", "yes"}, // a key of its own: the sealed identity stays what Isolate wrote
 	} {
 		if err := git(work, args...); err != nil {
 			t.Fatalf("git %v: %v", args, err)

@@ -46,7 +46,7 @@ func TestTestiso_GlobalConfigWriteStaysInTheSandbox(t *testing.T) {
 	}
 	before := fileDigest(t, gitconfig)
 
-	out, err := exec.Command("git", "config", "--global", "user.name", "sandbox").CombinedOutput()
+	out, err := exec.Command("git", "config", "--global", "sandbox.written", "yes").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git config --global: %v\n%s", err, out)
 	}
@@ -54,8 +54,8 @@ func TestTestiso_GlobalConfigWriteStaysInTheSandbox(t *testing.T) {
 	if after := fileDigest(t, gitconfig); after != before {
 		t.Errorf("the real %s changed: sha256 %s -> %s", gitconfig, before, after)
 	}
-	got, err := exec.Command("git", "config", "--global", "--get", "user.name").Output() // stderr-ok: the value is asserted below
-	if err != nil || strings.TrimSpace(string(got)) != "sandbox" {
+	got, err := exec.Command("git", "config", "--global", "--get", "sandbox.written").Output() // stderr-ok: the value is asserted below
+	if err != nil || strings.TrimSpace(string(got)) != "yes" {
 		t.Errorf("the sandbox config lacks the write: %q, %v", got, err)
 	}
 }

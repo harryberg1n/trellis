@@ -24,6 +24,7 @@ type ghFake struct {
 	*testsupport.FakeRunner
 	issues string
 	prs    string
+	fail   func(runpkg.Spec) error // an error to answer a spec with, or nil
 }
 
 func newGHFake(issues, prs string) *ghFake {
@@ -33,6 +34,11 @@ func newGHFake(issues, prs string) *ghFake {
 }
 
 func (g *ghFake) answer(s runpkg.Spec) (runpkg.Result, error) {
+	if g.fail != nil {
+		if err := g.fail(s); err != nil {
+			return runpkg.Result{}, err
+		}
+	}
 	switch s.Args[1] {
 	case "list":
 		if s.Args[0] == "pr" {
