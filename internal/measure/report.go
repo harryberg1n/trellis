@@ -56,7 +56,7 @@ func render(f Facts, mask bool) []byte {
 
 	p("")
 	p("cost: agent dollars at list price")
-	costs, unpriced := Costs(f)
+	costs, unpriced, skipped := costsAndSkips(f)
 	trees := sortedKeys(costs)
 	dollars := make([]float64, 0, len(trees))
 	var total float64
@@ -74,7 +74,7 @@ func render(f Facts, mask bool) []byte {
 	if n := f.SkippedFiles; n > 0 {
 		p("  transcript files not read: %d", n)
 	}
-	if n := SkippedLines(f); n > 0 {
+	if n := skipped; n > 0 {
 		p("  transcript lines skipped: %d", n)
 	}
 	if len(dollars) < MinIntervalSamples {

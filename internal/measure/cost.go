@@ -235,18 +235,19 @@ type marked struct {
 	tree string
 }
 
-// turns are the replies of the usage's transcript, each with its tree.
-func (u Usage) turns() []marked {
-	ts, _ := parseTurns(u.Transcript)
+// turns are the replies of the usage's transcript, each with its tree, and
+// the lines of it that were skipped.
+func (u Usage) turns() (out []marked, skipped int) {
+	ts, skipped := parseTurns(u.Transcript)
 	// The log is in append order, not time order: an event folded from the
 	// fallback store carries an old time and lands at the end.
 	marks := slices.Clone(u.Marks)
 	sort.SliceStable(marks, func(i, j int) bool { return marks[i].At.Before(marks[j].At) })
-	out := make([]marked, len(ts))
+	out = make([]marked, len(ts))
 	for i, t := range ts {
 		out[i] = marked{t, u.treeOf(marks, t.at)}
 	}
-	return out
+	return out, skipped
 }
 
 // Unpriced counts the tokens whose model has no price, so a cost of 0 for them
@@ -264,11 +265,23 @@ func TreeCosts(f Facts) map[string]float64 {
 
 // Costs is TreeCosts and the tokens it could not price.
 func Costs(f Facts) (map[string]float64, Unpriced) {
-	out := map[string]float64{}
-	var un Unpriced
+	out, un, _ := costsAndSkips(f)
+	return out, un
+}
+
+// costsAndSkips is Costs and the transcript lines skipped on the way, counted in the
+// pass that parses them.
+//
+// The count is adapted from aphrollo-tools internal/report/usage_scan.go:26,77-80,199,236
+// at 12b3724e. Incident: a scan that drops a line silently under-reports cost
+// with no sign that it did.
+func costsAndSkips(f Facts) (out map[string]float64, un Unpriced, skipped int) {
+	out = map[string]float64{}
 	models := map[string]bool{}
 	for _, u := range f.Usage {
-		for _, t := range u.turns() {
+		ts, s := u.turns()
+		skipped += s
+		for _, t := range ts {
 			if _, ok := priceFor(t.model); !ok {
 				n := t.tok.Fresh + t.tok.Output
 				un.Tokens += n
@@ -280,7 +293,7 @@ func Costs(f Facts) (map[string]float64, Unpriced) {
 		}
 	}
 	un.Models = sortedKeys(models)
-	return out, un
+	return out, un, skipped
 }
 
 // RowCost is the net_cost inputs of one table row: what its denies injected
@@ -308,7 +321,8 @@ type RowCost struct {
 func RowCosts(f Facts) []RowCost {
 	times := map[string][]time.Time{}
 	for _, u := range f.Usage {
-		for _, t := range u.turns() {
+		ts, _ := u.turns()
+		for _, t := range ts {
 			times[t.tree] = append(times[t.tree], t.at)
 		}
 	}
@@ -397,19 +411,4 @@ func nextGreen(evs []kernel.Event, deny kernel.Event) (time.Time, bool) {
 		}
 	}
 	return best, found
-}
-
-// SkippedLines is how many lines of the transcripts were over the line limit,
-// not JSON, or a reply with no readable time: counted, never hidden.
-//
-// Adapted from aphrollo-tools internal/report/usage_scan.go:26,77-80,199,236
-// at 12b3724e. Incident: a scan that drops a line silently under-reports cost
-// with no sign that it did.
-func SkippedLines(f Facts) int {
-	n := 0
-	for _, u := range f.Usage {
-		_, s := parseTurns(u.Transcript)
-		n += s
-	}
-	return n
 }

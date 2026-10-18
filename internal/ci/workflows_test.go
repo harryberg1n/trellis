@@ -92,11 +92,13 @@ func TestNightlyFlakeHunt_KeepsTheJSONStreamAndNamesAnEmptyOne(t *testing.T) {
 	text := workflow(t, "nightly-flake-hunt.yml")
 
 	run := step(t, text, "the suite under -race -shuffle=on -count=5")
-	upload := step(t, text, "keep the transcripts")
+	upload := step(t, text, "keep the test streams")
 
 	for _, want := range []string{
 		`go test -race -shuffle=on -count=5 -timeout=3000s -json ./... > test.json`,
-		`jq -rj 'select(.Action=="output") | .Output' test.json > test.log`,
+		`if ! jq -rj 'select(.Action=="output") | .Output' test.json > test.log; then`,
+		`::error::the JSON stream could not be turned into a log (jq missing, or the stream is cut off)`,
+		`tail -n 200 test.log`,
 		`if [ "$code" != 0 ] && ! grep -q . test.json; then`,
 		`::error::go test exited $code with an empty JSON stream: an infrastructure failure, not a flake`,
 		`exit "$code"`,
@@ -109,6 +111,9 @@ func TestNightlyFlakeHunt_KeepsTheJSONStreamAndNamesAnEmptyOne(t *testing.T) {
 		if !strings.Contains(upload, want) {
 			t.Errorf("the upload step lacks %q", want)
 		}
+	}
+	if strings.Contains(run, "|| true") || strings.Contains(run, "cat test.log") {
+		t.Errorf("the suite step hides a jq failure or prints the whole log:\n%s", run)
 	}
 	if strings.Contains(text, "flakehunt") || strings.Contains(text, "gh issue") {
 		t.Errorf("the flake hunt files issues; a red night is read by a person")

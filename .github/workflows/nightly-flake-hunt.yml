@@ -44,9 +44,6 @@ jobs:
           set +e
           go test -race -shuffle=on -count=5 -timeout=3000s -json ./... > test.json
           code=$?
-          # the plain log, as `go test` prints it, for a person reading a red night
-          jq -rj 'select(.Action=="output") | .Output' test.json > test.log || true
-          cat test.log
           # A `go test` that exited non-zero with an empty stream died before it
           # wrote one event (an out-of-memory kill, a hard process kill): no
           # test failed, so nothing else would call the night red.
@@ -54,8 +51,17 @@ jobs:
             echo "::error::go test exited $code with an empty JSON stream: an infrastructure failure, not a flake"
             exit 1
           fi
+          # The plain log, as `go test` prints it, goes to the artifact with the JSON
+          # stream. The step prints only its last 200 lines: a -count=5 run of the
+          # whole suite is far longer than a person reads in the job log. A jq
+          # that is missing, or a stream cut off, fails the step.
+          if ! jq -rj 'select(.Action=="output") | .Output' test.json > test.log; then
+            echo "::error::the JSON stream could not be turned into a log (jq missing, or the stream is cut off)"
+            exit 1
+          fi
+          tail -n 200 test.log
           exit "$code"
-      - name: keep the transcripts
+      - name: keep the test streams
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

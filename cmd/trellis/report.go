@@ -187,7 +187,11 @@ func readUsage(facts *measure.Facts, stderr io.Writer) {
 		for _, p := range s.paths {
 			raw, err := os.ReadFile(p)
 			if err != nil {
+				// A file that cannot be read is counted in SkippedFiles; the
+				// session is counted in MissingTranscripts only when nothing
+				// of it was read, its subagents included.
 				_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
+				facts.SkippedFiles++
 			} else {
 				read++
 			}

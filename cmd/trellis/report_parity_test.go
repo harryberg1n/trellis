@@ -169,3 +169,38 @@ func appendTranscript(t *testing.T, env reportEnv, session, tree, path string) {
 		At: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), Detail: map[string]string{"transcript": path},
 	})
 }
+
+func TestReport_ANonJSONSubagentFileCountsItsLines(t *testing.T) {
+	env, _, transcript := reportFixture(t)
+	sub := filepath.Join(strings.TrimSuffix(transcript, ".jsonl"), "subagents")
+	testiso.Write(t, filepath.Join(sub, "agent-junk.jsonl"), "this is not json\n")
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	if want := "  transcript lines skipped: 1\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), "files not read") {
+		t.Errorf("a readable file is counted as not read:\n%s", out.String())
+	}
+}
+
+func TestReport_AMissingSessionFileIsCountedAsAFileAndAsAMissingSession(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	gone := filepath.Join(t.TempDir(), "gone.jsonl")
+	appendTranscript(t, env, "killed", "B", gone)
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	for _, want := range []string{"  transcripts missing: 1\n", "  transcript files not read: 1\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, out.String())
+		}
+	}
+}

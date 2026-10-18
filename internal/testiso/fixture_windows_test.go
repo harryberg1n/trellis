@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// This measures git for Windows 2.53: a git upgrade can move the limit without
+// a trellis regression.
+//
 // Git for Windows refuses a worktree at a path of 216 characters with
 // "fatal: '$GIT_DIR' too big" and takes 215, whatever core.longpaths says
 // (measured with 2.53.0.windows.2). gitPathLimit must stay under the last

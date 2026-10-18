@@ -43,19 +43,29 @@ func TestReport_NoSamplesSaysNZero(t *testing.T) {
 	}
 }
 
-func TestReport_TenSamplesGetTheInterval(t *testing.T) {
-	var f Facts
-	f.Now = day(20)
-	for i := range 10 {
-		tree := "T" + strconv.Itoa(i)
-		f.Usage = append(f.Usage, Usage{Tree: tree, Transcript: []byte(
-			`{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000,"output_tokens":0}}}` + "\n")})
+// usageOfTrees is n trees whose costs differ: tree i spends (i+1) million fresh
+// input tokens, $5 each at the list price, so $5, $10, ... $5n.
+func usageOfTrees(n int) Facts {
+	f := Facts{Now: day(20)}
+	for i := range n {
+		tr := `{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"claude-opus-5-5","usage":{"input_tokens":` + strconv.Itoa((i+1)*1000000) + `,"output_tokens":0}}}` + "\n"
+		f.Usage = append(f.Usage, Usage{Tree: "T" + strconv.Itoa(i), Transcript: []byte(tr)})
 	}
+	return f
+}
 
-	out := string(Report(f))
+func TestReport_NineSamplesGetNoInterval(t *testing.T) {
+	out := string(Report(usageOfTrees(9)))
 
-	want := "  per tree: mean $5.00000, 90% interval [$5.00000, $5.00000]\n"
-	if !strings.Contains(out, want) {
+	if want := "  per tree: mean $25.00000, n=9, no interval\n"; !strings.Contains(out, want) {
+		t.Errorf("report lacks %q:\n%s", want, out)
+	}
+}
+
+func TestReport_TenSamplesGetTheInterval(t *testing.T) {
+	out := string(Report(usageOfTrees(10)))
+
+	if want := "  per tree: mean $27.50000, 90% interval [$20.00000, $35.00000]\n"; !strings.Contains(out, want) {
 		t.Errorf("report lacks %q:\n%s", want, out)
 	}
 }
@@ -77,12 +87,13 @@ func TestReport_NotReadLinesInTheBody(t *testing.T) {
 func TestReport_SkippedLinesAndFilesAreSaid(t *testing.T) {
 	rec := `{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"a","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
 	huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 9<<20) + `"}}` + "\n"
-	tr := rec + "not json at all\n" + huge + "\n" + `{"type":"user"}` + "\n"
+	badTime := `{"type":"assistant","timestamp":"yesterday","requestId":"b","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
+	tr := rec + "not json at all\n" + huge + "\n" + badTime + `{"type":"user"}` + "\n"
 	f := Facts{Now: day(20), SkippedFiles: 2, Usage: []Usage{{Tree: "A", Transcript: []byte(tr)}}}
 
 	out := string(Report(f))
 
-	for _, want := range []string{"  transcript lines skipped: 2\n", "  transcript files not read: 2\n"} {
+	for _, want := range []string{"  transcript lines skipped: 3\n", "  transcript files not read: 2\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}
