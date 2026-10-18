@@ -406,3 +406,19 @@ func TestRecorder_ObjectToolInputIsSilent(t *testing.T) {
 		t.Errorf("events %v, want none: not our tool, and not an error either", kinds(evs))
 	}
 }
+
+func TestRecorder_UsesTheRepoTheCallerLocated(t *testing.T) {
+	e := newEnv(t)
+	loc, err := Locate(e.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.deps.Repo = &loc
+	f := filepath.Join(e.repo, "k.txt")
+	testsupport.Write(t, f, "k\n")
+	// The payload's cwd is nowhere near a repo; only the caller's Repo can place the edit.
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(t.TempDir(), f, "k\n")))
+	if evs := e.events(t); len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Detail["path"] != "k.txt" {
+		t.Errorf("events %+v, want one edit of k.txt", evs)
+	}
+}

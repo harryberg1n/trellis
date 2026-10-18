@@ -51,6 +51,9 @@ func timeEdits(t testing.TB, n int) []time.Duration {
 }
 
 func TestHookLatency_EditP95Under20ms(t *testing.T) {
+	if testing.Short() {
+		t.Skip("latency test: skipped by -short")
+	}
 	got := p95(timeEdits(t, samples))
 	t.Logf("edit p95 = %v", got)
 	if got > editP95Limit {
@@ -59,6 +62,9 @@ func TestHookLatency_EditP95Under20ms(t *testing.T) {
 }
 
 func TestHookLatency_StopP95Under300ms(t *testing.T) {
+	if testing.Short() {
+		t.Skip("latency test: skipped by -short")
+	}
 	e := newEnv(t)
 	stop := fill(readShape(t, "stop"), vars(e.repo, "", ""))
 	gens := generate(t, e.repo, 8)

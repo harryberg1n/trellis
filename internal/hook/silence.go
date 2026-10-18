@@ -28,6 +28,9 @@ type Deps struct {
 	// that the main store cannot take is parked in Fallback/events.pending, to
 	// be folded in once the real store works again. "" means no fallback.
 	Fallback string
+	// Repo is the repository the caller already located from the payload's
+	// cwd; parse then does not locate it again. nil means locate it.
+	Repo *Repo
 }
 
 // Run reads one payload from stdin and records it. It returns the exit code,
@@ -35,6 +38,11 @@ type Deps struct {
 // It writes nothing to stdout or stderr, which stay with the walls (lane 6).
 // Any failure, a panic included, is appended as an internal.error event, or
 // parked in the fallback store when the main one cannot take it.
+//
+// Durability: edits are written lazily (no fsync). Stop and SessionEnd append
+// and then Sync the log and checkpoint. Blobs, including those AnchorTurn
+// writes, are not fsynced, so a power loss can lose them; the next Stop
+// re-anchors from the working tree, so the loss window is the current turn.
 func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (code int) {
 	var p parsed
 	defer func() {
@@ -48,7 +56,7 @@ func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (co
 		fail(deps, event, p, err)
 		return 0
 	}
-	if p, err = parse(event, raw); err != nil {
+	if p, err = parse(event, raw, deps.Repo); err != nil {
 		fail(deps, event, p, err)
 		return 0
 	}
