@@ -134,8 +134,6 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 func TestParse_Refuses(t *testing.T) {
 	e := newEnv(t)
 	v := vars(e.repo, filepath.Join(e.repo, "a.txt"), "")
-	outside := vars(e.repo, filepath.Join(filepath.Dir(e.repo), "elsewhere.txt"), "")
-	norepo := vars(filepath.Dir(e.repo), filepath.Join(filepath.Dir(e.repo), "a.txt"), "")
 	cases := []struct {
 		name    string
 		event   string
@@ -146,8 +144,6 @@ func TestParse_Refuses(t *testing.T) {
 		{"not json", "PostToolUse", []byte("{nope"), "payload"},
 		{"unknown event", "PreCompactish", fill(readShape(t, "stop"), v), "unknown hook event"},
 		{"no session", "Stop", []byte(`{"cwd":"x"}`), "session_id"},
-		{"file outside the repo", "PostToolUse", fill(readShape(t, "edit_01_full"), outside), "outside"},
-		{"no repo above cwd", "PostToolUse", fill(readShape(t, "edit_01_full"), norepo), "not in a git repository"},
 		{"edit without a path", "PostToolUse", []byte(`{"session_id":"s","cwd":"` + jsonEsc(e.repo) + `","tool_name":"Edit","tool_input":{}}`), "file_path"},
 	}
 	for _, c := range cases {
@@ -155,6 +151,22 @@ func TestParse_Refuses(t *testing.T) {
 			_, _, err := Parse(c.event, c.payload)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("Parse error %v, want one containing %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestParse_NotOursRecordsNothing(t *testing.T) {
+	e := newEnv(t)
+	cases := map[string]map[string]string{
+		"file outside the repo": vars(e.repo, filepath.Join(filepath.Dir(e.repo), "elsewhere.txt"), ""),
+		"no repo above cwd":     vars(filepath.Dir(e.repo), filepath.Join(filepath.Dir(e.repo), "a.txt"), ""),
+	}
+	for name, v := range cases {
+		t.Run(name, func(t *testing.T) {
+			ev, _, err := Parse("PostToolUse", fill(readShape(t, "edit_01_full"), v))
+			if err != nil || ev.Kind != "" {
+				t.Errorf("Parse = kind %q, %v; want no kind and no error", ev.Kind, err)
 			}
 		})
 	}

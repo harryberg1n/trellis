@@ -240,3 +240,42 @@ func TestRecorder_EditIsLazyStopIsDurable(t *testing.T) {
 		t.Errorf("kinds %v, want %v", got, want)
 	}
 }
+
+func fallbackFiles(e *env) []string {
+	m, _ := filepath.Glob(filepath.Join(e.fallback, "events.pending", "*"))
+	return m
+}
+
+func TestRecorder_NonRepoCwdIsSilentNoop(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir() // no .git here or above, inside the sandbox
+	f := filepath.Join(dir, "x.txt")
+	testsupport.Write(t, f, "x\n")
+	for _, c := range []struct{ event, shape string }{
+		{"PostToolUse", "edit_01_full"},
+		{"PostToolUse", "bash_post"},
+		{"Stop", "stop"},
+		{"SessionEnd", "sessionend"},
+	} {
+		e.do(t, c.event, fill(readShape(t, c.shape), vars(dir, f, "x\n")))
+	}
+	if evs := e.events(t); len(evs) != 0 {
+		t.Errorf("events %v, want none", kinds(evs))
+	}
+	if got := fallbackFiles(e); len(got) != 0 {
+		t.Errorf("fallback holds %v, want nothing parked", got)
+	}
+}
+
+func TestRecorder_FileOutsideRepoIsIgnored(t *testing.T) {
+	e := newEnv(t)
+	outside := filepath.Join(t.TempDir(), "elsewhere.txt")
+	testsupport.Write(t, outside, "x\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, outside, "x\n")))
+	if evs := e.events(t); len(evs) != 0 {
+		t.Errorf("events %v, want none", kinds(evs))
+	}
+	if got := fallbackFiles(e); len(got) != 0 {
+		t.Errorf("fallback holds %v, want nothing parked", got)
+	}
+}

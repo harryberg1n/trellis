@@ -1,11 +1,13 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/objects"
 )
 
 // canonical maps a hook event as written on the command line ("PostToolUse",
@@ -123,6 +125,10 @@ func parse(event string, raw []byte) (parsed, error) {
 		out.repo = repo
 		args["repo"] = repo.Root
 		out.ev.Lane = repo.Lane
+	} else if errors.Is(rerr, objects.ErrNotARepo) {
+		// Not a repository: nothing here is ours to record. Silent, not an error.
+		out.ev.Kind, out.ev.Detail = "", nil
+		kind = ""
 	} else if kind != "" {
 		return out, rerr
 	}
@@ -154,7 +160,8 @@ func parse(event string, raw []byte) (parsed, error) {
 	switch {
 	case rerr != nil: // no repo: the context has the file, nothing is recorded
 	case err != nil && kind != "":
-		return out, err
+		// A file outside the repo is not this repo's edit: record nothing.
+		out.ev.Kind, out.ev.Detail = "", nil
 	case err == nil:
 		args["path"] = rel
 		if kind != "" {
