@@ -80,7 +80,17 @@ func Repo(t testing.TB) string {
 	if err := Verify(dst); err != nil {
 		t.Fatal(err)
 	}
-	return dst
+	return canonical(dst)
+}
+
+// canonical is p with symlinks and short names resolved. It repeats
+// store.Canonical on purpose: testiso cannot import store, whose tests run
+// under testiso.Main, so the import would be a cycle in test.
+func canonical(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }
 
 // Verify refuses a root a test may not write to: anything outside the
@@ -94,14 +104,8 @@ func Verify(root string) error {
 	if err != nil {
 		return err
 	}
-	resolve := func(p string) string {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return r
-		}
-		return p
-	}
-	abs = resolve(abs)
-	if inside(resolve(sandboxRoot), abs) {
+	abs = canonical(abs)
+	if inside(canonical(sandboxRoot), abs) {
 		return nil
 	}
 	if repo := enclosingRepo(abs); repo != "" {

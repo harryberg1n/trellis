@@ -76,3 +76,22 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonical_ResolvesAnAliasAndAPathThatDoesNotExistYet(t *testing.T) {
+	dir := Canonical(t.TempDir())
+	alias := testiso.AltSpelling(t, dir)
+	if got := Canonical(alias); got != dir {
+		t.Errorf("Canonical(alias) = %q, want %q", got, dir)
+	}
+	if got, want := Canonical(filepath.Join(alias, "no", "such.txt")), filepath.Join(dir, "no", "such.txt"); got != want {
+		t.Errorf("Canonical(alias/no/such.txt) = %q, want %q", got, want)
+	}
+}
+
+func TestRoot_StateRootThroughAnotherSpellingOfTheRepoIsRefused(t *testing.T) {
+	repo := Canonical(testiso.Repo(t))
+	t.Setenv("TRELLIS_STATE", filepath.Join(testiso.AltSpelling(t, repo), "state"))
+	if root, err := Root(repo); err == nil {
+		t.Fatalf("Root = %s, want an error: the state root is inside the repo under another spelling", root)
+	}
+}

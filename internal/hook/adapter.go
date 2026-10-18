@@ -188,22 +188,12 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 }
 
 // relIn is file relative to root with forward slashes, or an error if file is
-// not inside root. A symlinked or 8.3-shortened prefix is resolved before the
-// answer is "outside".
+// not inside root. Both are put in one spelling first (symlinks and 8.3 short
+// names resolved), as root comes canonical from objects.Open and file from the
+// harness as it wrote it.
 func relIn(root, file string) (string, error) {
-	inside := func(root, file string) (string, bool) {
-		rel, ok := store.Within(root, file)
-		return filepath.ToSlash(rel), ok
-	}
-	if rel, ok := inside(root, file); ok {
-		return rel, nil
-	}
-	if r, err := filepath.EvalSymlinks(root); err == nil {
-		if f, err := filepath.EvalSymlinks(file); err == nil {
-			if rel, ok := inside(r, f); ok {
-				return rel, nil
-			}
-		}
+	if rel, ok := store.Within(store.Canonical(root), store.Canonical(file)); ok {
+		return filepath.ToSlash(rel), nil
 	}
 	return "", fmt.Errorf("hook: %s is outside the repository %s", file, root)
 }

@@ -30,7 +30,7 @@ func Root(repoPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, inside := Within(absRepo, absRoot); inside {
+	if _, inside := Within(Canonical(absRepo), Canonical(absRoot)); inside {
 		return "", fmt.Errorf("state root %s is inside the repo %s", absRoot, absRepo)
 	}
 	return absRoot, nil
