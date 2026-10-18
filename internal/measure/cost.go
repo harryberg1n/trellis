@@ -95,6 +95,31 @@ type transcriptLine struct {
 	} `json:"message"`
 }
 
+// readLine is the next line without its newline. A line past maxLineBytes is
+// read through and dropped (tooLong), so memory stays bounded and the lines
+// after it still count.
+//
+// Copied from aphrollo-tools internal/report/usage_scan.go:212-231 at
+// 12b3724e. Incident: bufio.Scanner stops for good on an over-long line.
+func readLine(r *bufio.Reader) (line []byte, tooLong bool, err error) {
+	for {
+		part, isPrefix, e := r.ReadLine()
+		if e != nil {
+			return line, tooLong, e
+		}
+		if !tooLong {
+			if len(line)+len(part) > maxLineBytes {
+				tooLong, line = true, nil
+			} else {
+				line = append(line, part...)
+			}
+		}
+		if !isPrefix {
+			return line, tooLong, nil
+		}
+	}
+}
+
 // parseTurns reads the replies of a JSONL transcript, once per requestId, in
 // time order. A line that is not a reply is skipped; no text of the
 // transcript is kept.
@@ -102,11 +127,17 @@ func parseTurns(raw []byte) []turn {
 	byReq := map[string]turn{}
 	var order []string
 	var loose []turn
-	sc := bufio.NewScanner(bytes.NewReader(raw))
-	sc.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
-	for sc.Scan() {
+	r := bufio.NewReader(bytes.NewReader(raw))
+	for {
+		line, tooLong, err := readLine(r)
+		if err != nil {
+			break
+		}
+		if tooLong {
+			continue
+		}
 		var l transcriptLine
-		if json.Unmarshal(sc.Bytes(), &l) != nil || l.Type != "assistant" || l.Message == nil || l.Message.Usage == nil || l.Message.Model == syntheticModel {
+		if json.Unmarshal(line, &l) != nil || l.Type != "assistant" || l.Message == nil || l.Message.Usage == nil || l.Message.Model == syntheticModel {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, l.Timestamp)
