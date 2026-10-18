@@ -64,7 +64,12 @@ type tree interface {
 // Light runs a child to completion in the plain environment. When the timeout,
 // read from c, fires first, the child's whole process tree is killed and the
 // error wraps ErrTimeout. A non-zero exit is an error, with the Result filled.
+// A git child that would write a ref outside refs/trellis/ or a lane's index
+// is refused with ErrOwnGitState before it starts.
 func Light(c clock.Clock, spec Spec) (Result, error) {
+	if err := ownGitState(spec); err != nil {
+		return Result{}, err
+	}
 	if spec.Timeout <= 0 {
 		return Result{}, ErrNoTimeout
 	}
