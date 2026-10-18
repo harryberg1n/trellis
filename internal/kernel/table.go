@@ -6,8 +6,11 @@ import (
 	"time"
 )
 
+// Kind says what a row is: a Check reports, a Behaviour steers the agent, a
+// Wall blocks a repeat of a past incident, a Policy enforces an owner decision.
 type Kind int
 
+// The row kinds. Wall rows must name their Incident, Policy rows their Decision.
 const (
 	Check Kind = iota
 	Behaviour
@@ -15,8 +18,11 @@ const (
 	Policy
 )
 
+// Stage is the point in a lane's life at which a row is evaluated.
 type Stage int
 
+// The stages, from the finest grain to the coarsest: a file edit, a commit, a
+// merge, and the end of the agent session.
 const (
 	StageEdit Stage = iota
 	StageCommit
@@ -27,6 +33,8 @@ const (
 // State is the row's admission state. Only Admitted and LiveAB rows act.
 type State int
 
+// The admission states of a row, from proposal to retirement. Only Admitted and
+// LiveAB rows act.
 const (
 	Candidate State = iota
 	Replay
@@ -35,8 +43,11 @@ const (
 	Cut
 )
 
+// Level is how hard a row pushes back when it fires: Warn only tells the
+// agent, Block refuses the action.
 type Level int
 
+// The row levels. Block needs a may-block decision with an owner pin.
 const (
 	Warn Level = iota
 	Block
@@ -46,6 +57,8 @@ const (
 // is defined here; move it there when it does.
 type Class int
 
+// The cost classes: Light rows run inline, Heavy rows take real time, Bulk rows
+// run over the whole tree.
 const (
 	Light Class = iota
 	Heavy
@@ -55,6 +68,7 @@ const (
 // Caps is a bit set of ecosystem capabilities.
 type Caps uint32
 
+// The ecosystem capabilities a row can require.
 const (
 	Tests Caps = 1 << iota
 	Select

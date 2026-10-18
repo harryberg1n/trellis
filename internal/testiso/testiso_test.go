@@ -40,19 +40,19 @@ func TestTestiso_GlobalConfigWriteStaysInTheSandbox(t *testing.T) {
 	if realHome == "" {
 		t.Fatal("Main did not record the home the process started with")
 	}
-	real := filepath.Join(realHome, ".gitconfig")
+	gitconfig := filepath.Join(realHome, ".gitconfig")
 	if inside(filepath.Dir(os.Getenv("HOME")), realHome) {
 		t.Fatalf("the real home %q is inside the sandbox", realHome)
 	}
-	before := fileDigest(t, real)
+	before := fileDigest(t, gitconfig)
 
 	out, err := exec.Command("git", "config", "--global", "user.name", "sandbox").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git config --global: %v\n%s", err, out)
 	}
 
-	if after := fileDigest(t, real); after != before {
-		t.Errorf("the real %s changed: sha256 %s -> %s", real, before, after)
+	if after := fileDigest(t, gitconfig); after != before {
+		t.Errorf("the real %s changed: sha256 %s -> %s", gitconfig, before, after)
 	}
 	got, err := exec.Command("git", "config", "--global", "--get", "user.name").Output() // stderr-ok: the value is asserted below
 	if err != nil || strings.TrimSpace(string(got)) != "sandbox" {

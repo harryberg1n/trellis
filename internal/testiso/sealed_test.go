@@ -33,9 +33,9 @@ func TestCeilingList_NamesEachDirOnceAndSkipsEmpty(t *testing.T) {
 }
 
 func TestCeilingList_AddsTheResolvedSpellingOfASymlinkedDir(t *testing.T) {
-	real := t.TempDir()
+	target := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("no symlinks here: %v", err) // skip-ok: an environment probe, symlinks need privilege on some platforms.
 	}
 	resolved, err := filepath.EvalSymlinks(link)

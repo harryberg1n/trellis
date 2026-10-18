@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 )
 
+// The two experiment arms: lanes in treatment get the live-ab row, lanes in
+// control do not.
 const (
 	ArmTreatment = "treatment"
 	ArmControl   = "control"
@@ -28,6 +30,7 @@ type Sticky struct {
 	vec map[string]map[string]string
 }
 
+// NewSticky returns a Sticky with no lane recorded yet.
 func NewSticky() *Sticky { return &Sticky{vec: map[string]map[string]string{}} }
 
 func copyArms(m map[string]string) map[string]string {

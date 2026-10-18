@@ -9,10 +9,10 @@ type Clock interface {
 	After(d time.Duration) <-chan time.Time
 }
 
-type real struct{}
+type system struct{}
 
-func (real) Now() time.Time                         { return time.Now() }
-func (real) After(d time.Duration) <-chan time.Time { return time.After(d) }
+func (system) Now() time.Time                         { return time.Now() }
+func (system) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // Real is the wall clock.
-func Real() Clock { return real{} }
+func Real() Clock { return system{} }
