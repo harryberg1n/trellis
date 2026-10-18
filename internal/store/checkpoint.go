@@ -34,7 +34,7 @@ func (tx *Tx) Checkpoint() (Checkpoint, error) {
 }
 
 // Save writes state.json atomically: a temp file in the same directory,
-// fsynced, then renamed over the old one. On any failure the old file stays
+// fsynced (unless the Tx is Lazy), then renamed over the old one. On any failure the old file stays
 // as it was and the temp file is removed.
 func (tx *Tx) Save(cp Checkpoint) error {
 	raw, err := json.Marshal(cp)
@@ -47,8 +47,8 @@ func (tx *Tx) Save(cp Checkpoint) error {
 	}
 	tmp := f.Name()
 	_, err = f.Write(raw)
-	if err == nil {
-		err = f.Sync()
+	if err == nil && tx.mode == Durable {
+		err = tx.s.fsync(f)
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
