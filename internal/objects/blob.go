@@ -59,8 +59,12 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 	}
 	var packed bytes.Buffer
 	zw := zlib.NewWriter(&packed)
-	zw.Write([]byte(header))
-	zw.Write(content)
+	if _, err := zw.Write([]byte(header)); err != nil {
+		return "", err
+	}
+	if _, err := zw.Write(content); err != nil {
+		return "", err
+	}
 	if err := zw.Close(); err != nil {
 		return "", err
 	}
@@ -73,12 +77,15 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 		werr = cerr
 	}
 	if werr != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name()) // best effort: werr is the error worth reporting
 		return "", werr
 	}
-	os.Chmod(tmp.Name(), 0o444) // git's own mode for objects
+	if err := os.Chmod(tmp.Name(), 0o444); err != nil { // git's own mode for objects
+		_ = os.Remove(tmp.Name()) // best effort: the chmod error is the one worth reporting
+		return "", err
+	}
 	if err := os.Rename(tmp.Name(), final); err != nil {
-		os.Remove(tmp.Name())
+		_ = os.Remove(tmp.Name()) // best effort: the rename outcome is decided below
 		// A concurrent writer may have won the rename; the object is then there.
 		if _, serr := os.Stat(final); serr == nil {
 			return id, nil
