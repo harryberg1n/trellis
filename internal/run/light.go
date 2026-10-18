@@ -5,6 +5,7 @@ package run
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,15 @@ import (
 
 // ErrTimeout is what Light reports for a child the timeout ended.
 var ErrTimeout = errors.New("run: the child timed out and its process tree was ended")
+
+// waitDelay bounds how long Light waits for a child's output after the child is
+// gone: a descendant that outlives it and holds the pipes would otherwise hold
+// the call.
+const waitDelay = 2 * time.Second
+
+// ErrNotStarted is joined to the error of a child that was never started
+// because its context was cancelled already.
+var ErrNotStarted = errors.New("run: the child was not started")
 
 // ErrNoTimeout refuses a light child with no timeout: it could hang its caller.
 var ErrNoTimeout = errors.New("run: a light child needs a timeout")
@@ -33,6 +43,12 @@ type Spec struct {
 	// it may write git state, which the refusal of ErrOwnGitState keeps from
 	// the children of tools.
 	Direct bool
+	// WaitDelay bounds how long Light waits for the output of a child that has
+	// ended, or been asked to end; zero is the default of 2 seconds.
+	WaitDelay time.Duration
+	// Ctx, when it is cancelled, ends the child and its whole process tree and
+	// makes Light return an error wrapping Ctx.Err(). Nil is never cancelled.
+	Ctx context.Context
 }
 
 // Result is what a finished child left.
@@ -61,6 +77,7 @@ var noPrompt = []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never"}
 // tree guards a child and everything it starts.
 type tree interface {
 	attach(p *os.Process) error // after Start, before the child is waited on
+	terminate()                 // ask the child and its descendants to end
 	kill()                      // end the child and its descendants
 	finish()                    // the child is done; release the guard
 }
@@ -79,6 +96,13 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 	if spec.Timeout <= 0 {
 		return Result{}, ErrNoTimeout
 	}
+	ctx := spec.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, errors.Join(ErrNotStarted, fmt.Errorf("%s: %w", spec.Name, err))
+	}
 	cmd := exec.Command(spec.Name, spec.Args...)
 	cmd.Dir = spec.Dir
 	env := os.Environ()
@@ -92,6 +116,11 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
+	// A grandchild that holds the pipes open must not hold Wait for ever.
+	cmd.WaitDelay = waitDelay
+	if spec.WaitDelay > 0 {
+		cmd.WaitDelay = spec.WaitDelay
+	}
 	tr, err := prepare(cmd)
 	if err != nil {
 		return Result{}, err
@@ -110,18 +139,37 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 	go func() { done <- cmd.Wait() }()
 	timer := c.After(spec.Timeout)
 	var waitErr error
-	timedOut := false
+	timedOut, cancelled := false, false
 	select {
 	case waitErr = <-done:
 	case <-timer:
 		timedOut = true
 		tr.kill()
 		waitErr = <-done
+	case <-ctx.Done():
+		cancelled = true
+		// Ask first, so a child like git can drop its lock files; end it by force
+		// when it has not gone within the wait delay.
+		tr.terminate()
+		select {
+		case waitErr = <-done:
+		case <-c.After(cmd.WaitDelay):
+			tr.kill()
+			waitErr = <-done
+		}
+	}
+	// Go's contract: a child that exited 0 while a descendant held its pipes is a
+	// success.
+	if !timedOut && !cancelled && errors.Is(waitErr, exec.ErrWaitDelay) && cmd.ProcessState.ExitCode() == 0 {
+		waitErr = nil
 	}
 	tr.finish()
 	res := Result{Stdout: out.Bytes(), Stderr: errb.Bytes(), ExitCode: cmd.ProcessState.ExitCode()}
 	if timedOut {
 		return res, errors.Join(ErrTimeout, waitErr)
+	}
+	if cancelled {
+		return res, errors.Join(fmt.Errorf("%s: %w", spec.Name, ctx.Err()), waitErr)
 	}
 	if waitErr != nil {
 		return res, fmt.Errorf("%s: %w: %s", spec.Name, waitErr, bytes.TrimSpace(errb.Bytes()))
@@ -163,4 +211,25 @@ func keepsGit(kv string) bool {
 		}
 	}
 	return false
+}
+
+// WithContext is r with ctx given to every child whose Spec names no Ctx of
+// its own: cancelling ctx ends the child and its tree. A nil ctx is r itself.
+func WithContext(r Runner, ctx context.Context) Runner {
+	if ctx == nil {
+		return r
+	}
+	return withCtx{inner: r, ctx: ctx}
+}
+
+type withCtx struct {
+	inner Runner
+	ctx   context.Context
+}
+
+func (w withCtx) Light(spec Spec) (Result, error) {
+	if spec.Ctx == nil {
+		spec.Ctx = w.ctx
+	}
+	return w.inner.Light(spec)
 }

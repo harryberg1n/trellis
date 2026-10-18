@@ -3,6 +3,7 @@ package tree
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -39,27 +40,30 @@ func (c *instantClock) After(time.Duration) <-chan time.Time {
 // fixture is a primary checkout on main with a bare origin that holds main,
 // and a fake gh over the real git.
 type fixture struct {
-	t         *testing.T
-	primary   string
-	origin    string
-	events    []kernel.Event
-	out       bytes.Buffer
-	errb      bytes.Buffer
-	clk       instantClock
-	gh        *testsupport.FakeRunner
-	prSeen    bool              // a pull request exists for the branch
-	mergeable []string          // what successive pr views say; the last repeats; empty is MERGEABLE
-	review    string            // the reviewDecision of the PR
-	mergeErr  string            // the failure of pr merge; "" merges
-	head      string            // the PR head sha; "" is the local HEAD of the tree
-	watchFail string            // the text of a failed watch; "" is green
-	noChecks  bool              // the PR has no checks
-	checkList string            // the JSON `pr checks --json` prints; "" is one passing check
-	checkSeq  []string          // successive JSON reads of the checks; the last repeats; used before checkList
-	workflows string            // what the workflow count prints; "" is one workflow
-	checksErr bool              // pr checks cannot be read
-	mergeSHA  string            // the merge commit pr view reports once merged; "" is none
-	logs      map[string]string // the failed log of a run id
+	t          *testing.T
+	primary    string
+	origin     string
+	events     []kernel.Event
+	out        bytes.Buffer
+	errb       bytes.Buffer
+	clk        instantClock
+	gh         *testsupport.FakeRunner
+	prSeen     bool              // a pull request exists for the branch
+	mergedOID  string            // the headRefOid of a merged pull request gh finds for the head; "" is none
+	mergeOID   string            // the merge commit of that pull request; "" is null
+	mergedBase string            // its base branch; "" is main
+	mergeable  []string          // what successive pr views say; the last repeats; empty is MERGEABLE
+	review     string            // the reviewDecision of the PR
+	mergeErr   string            // the failure of pr merge; "" merges
+	head       string            // the PR head sha; "" is the local HEAD of the tree
+	watchFail  string            // the text of a failed watch; "" is green
+	noChecks   bool              // the PR has no checks
+	checkList  string            // the JSON `pr checks --json` prints; "" is one passing check
+	checkSeq   []string          // successive JSON reads of the checks; the last repeats; used before checkList
+	workflows  string            // what the workflow count prints; "" is one workflow
+	checksErr  bool              // pr checks cannot be read
+	mergeSHA   string            // the merge commit pr view reports once merged; "" is none
+	logs       map[string]string // the failed log of a run id
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -69,6 +73,7 @@ func newFixture(t *testing.T) *fixture {
 	testiso.Git(t, filepath.Dir(f.primary), "init", "--bare", "-q", f.origin)
 	testiso.Git(t, f.primary, "remote", "add", "origin", f.origin)
 	testiso.Git(t, f.primary, "push", "-q", "-u", "origin", "main")
+	testiso.Git(t, f.primary, "remote", "set-head", "origin", "main")
 	f.gh = &testsupport.FakeRunner{Name: "gh", Inner: run.Exec{Clock: clock.Real()}, Answer: f.answer}
 	return f
 }
@@ -82,8 +87,23 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 			}
 			return run.Result{Stdout: []byte(`{"mergeCommit":{"oid":"` + f.mergeSHA + `"}}`)}, nil
 		}
+	case "pr list":
+		if slices.Contains(spec.Args, "merged") {
+			if f.mergedOID != "" {
+				base, merge := f.mergedBase, "null"
+				if base == "" {
+					base = "main"
+				}
+				if f.mergeOID != "" {
+					merge = `{"oid":"` + f.mergeOID + `"}`
+				}
+				body := fmt.Sprintf(`[{"number":5,"headRefOid":%q,"baseRefName":%q,"mergeCommit":%s}]`, f.mergedOID, base, merge)
+				return run.Result{Stdout: []byte(body)}, nil
+			}
+			return run.Result{Stdout: []byte("[]")}, nil
+		}
 		if !f.prSeen {
-			return run.Result{ExitCode: 1}, errors.New("gh: no pull requests found for branch")
+			return run.Result{Stdout: []byte("[]")}, nil
 		}
 		state := "MERGEABLE"
 		if len(f.mergeable) > 0 {
@@ -107,7 +127,7 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		case "BEHIND":
 			state, status = "MERGEABLE", "BEHIND"
 		}
-		body := fmt.Sprintf(`{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}`, state, status, head, f.review)
+		body := fmt.Sprintf(`[{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}]`, state, status, head, f.review)
 		return run.Result{Stdout: []byte(body)}, nil
 	case "pr create":
 		f.prSeen = true
@@ -344,7 +364,7 @@ func TestMerge_RecordsMergedWithPRAndRemovesTree(t *testing.T) {
 	if got := f.events[1]; got.Tree != "feat" || got.Detail["pr"] != "7" {
 		t.Errorf("merged event = %+v, want tree feat with pr 7", got)
 	}
-	wantCalls := []string{"auth status", "pr view", "pr create", "pr view", "pr checks", "pr checks", "pr view", "pr merge", "pr view"}
+	wantCalls := []string{"auth status", "pr list", "pr create", "pr list", "pr checks", "pr checks", "pr list", "pr merge", "pr view"}
 	if got := f.ghCalls(); !reflect.DeepEqual(got, wantCalls) {
 		t.Errorf("gh calls = %v, want %v", got, wantCalls)
 	}
@@ -1123,6 +1143,7 @@ func TestMerge_LocalSquashMakesOneCommitWithTheTreeSubject(t *testing.T) {
 	path := f.openTree(t)
 	commitFile(t, path, "one.txt", "1\n")
 	commitFile(t, path, "two.txt", "2\n")
+	tip := testiso.Git(t, path, "rev-parse", "HEAD")
 
 	if err := Merge(f.env(path), ""); err != nil {
 		t.Fatal(err)
@@ -1131,8 +1152,8 @@ func TestMerge_LocalSquashMakesOneCommitWithTheTreeSubject(t *testing.T) {
 	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
 		t.Errorf("subject = %q, want Merge tree feat", got)
 	}
-	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%b"); got != "- edit one.txt\n- edit two.txt" {
-		t.Errorf("body = %q, want the branch's subject lines", got)
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%b"); got != "- edit one.txt\n- edit two.txt\n\ntip "+tip {
+		t.Errorf("body = %q, want the branch subject lines and its tip", got)
 	}
 	if got := len(strings.Fields(testiso.Git(t, f.primary, "rev-list", "--parents", "-n1", "HEAD"))); got != 2 {
 		t.Errorf("HEAD has %d fields in rev-list --parents, want 2 (one parent, not a merge)", got)
@@ -1263,4 +1284,584 @@ func (f *fixture) mergeArgs() []string {
 		}
 	}
 	return args
+}
+
+func TestRm_RefusesUnmergedCommitsWithoutForce(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	commitFile(t, path, "b.txt", "2\n")
+	commitFile(t, path, "c.txt", "3\n")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "3 commits not merged into origin/main") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("err = %v, want a refusal naming 3 unmerged commits and --force", err)
+	}
+	if !exists(path) {
+		t.Errorf("tree with unmerged commits removed without --force")
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "feat"); got == "" {
+		t.Errorf("branch feat deleted without --force")
+	}
+}
+
+func TestRm_RemovesABranchMergedIntoOrigin(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	testiso.Git(t, path, "push", "-q", "origin", "feat:main")
+	testiso.Git(t, f.primary, "fetch", "-q", "origin")
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("merged tree %s still exists", path)
+	}
+}
+
+func TestRm_RemovesABranchItsUpstreamHolds(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	testiso.Git(t, path, "push", "-q", "-u", "origin", "feat")
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("pushed tree %s still exists", path)
+	}
+}
+
+func TestRm_ForceRemovesUnmergedCommits(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+
+	if err := Rm(f.env(f.primary), "feat", true); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "feat"); got != "" {
+		t.Errorf("branch feat = %q, want it deleted", got)
+	}
+}
+
+func TestRm_LocalRepoRefusesCommitsNotOnTheLocalDefault(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "1 commit not merged into main") {
+		t.Fatalf("err = %v, want a refusal naming 1 commit not merged into main", err)
+	}
+}
+
+func TestNew_RefusesAnAllDigitNameBecauseGhReadsItAsAPullRequestNumber(t *testing.T) {
+	f := newFixture(t)
+
+	err := New(f.env(f.primary), "1234", "")
+
+	if err == nil || err.Error() != "tree new: a tree name cannot be only digits" {
+		t.Fatalf("err = %v, want the digits refusal", err)
+	}
+	if exists(Path(f.primary, "1234")) {
+		t.Errorf("a tree was made for the refused name")
+	}
+	if err := New(f.env(f.primary), "feat-1234", ""); err != nil {
+		t.Errorf("a name with digits in it was refused: %v", err)
+	}
+}
+
+func TestMerge_LooksUpThePullRequestByHeadNotByName(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, s := range f.gh.Specs() {
+		if len(s.Args) >= 3 && s.Args[0] == "pr" && s.Args[1] == "view" && s.Args[2] == "feat" {
+			t.Errorf("gh %v addresses the pull request by branch name", s.Args)
+		}
+	}
+}
+
+func TestNew_RemoteWithoutOriginHeadStopsWithTheSetHeadHint(t *testing.T) {
+	f := newFixture(t)
+	testiso.Git(t, f.primary, "remote", "set-head", "origin", "-d")
+
+	err := New(f.env(f.primary), "feat", "")
+
+	want := "tree new: origin/HEAD is not set: run git remote set-head origin -a"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if exists(Path(f.primary, "feat")) {
+		t.Errorf("a tree was cut from a guessed base")
+	}
+}
+
+func TestSync_RemotesWithoutOriginAreNamedOnOneLine(t *testing.T) {
+	f := newFixture(t)
+	testiso.Git(t, f.primary, "remote", "rename", "origin", "upstream")
+	testiso.Git(t, f.primary, "remote", "add", "fork", f.origin)
+
+	err := Sync(f.env(f.primary))
+
+	want := "tree sync: no remote named origin (remotes: fork, upstream)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+func TestNew_ReadsOriginFromAnIncludedConfig(t *testing.T) {
+	f := newFixture(t)
+	commitFile(t, f.primary, "local.txt", "not pushed\n") // local main is ahead of origin/main
+	cfg := filepath.Join(f.primary, ".git", "config")
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept, moved []string
+	in := false
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(l, "[") {
+			in = strings.HasPrefix(l, `[remote "origin"]`)
+		}
+		if in {
+			moved = append(moved, l)
+		} else {
+			kept = append(kept, l)
+		}
+	}
+	included := filepath.Join(filepath.Dir(f.primary), "remote.cfg")
+	testiso.Write(t, included, strings.Join(moved, "\n")+"\n")
+	testiso.Write(t, cfg, strings.Join(kept, "\n")+"\n[include]\n\tpath = "+filepath.ToSlash(included)+"\n")
+
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if exists(filepath.Join(Path(f.primary, "feat"), "local.txt")) {
+		t.Errorf("the tree was cut from the local main: the included remote was not seen")
+	}
+}
+
+// cancelAfter runs the child and then, when its arguments contain every word
+// of Verb, cancels the context and reports the child as killed by it; a child
+// started on a context already cancelled does not start, as run.Light has it.
+type cancelAfter struct {
+	Inner  run.Runner
+	Verb   []string
+	Cancel context.CancelFunc
+	Before bool   // cancel before the matching child, which then never starts
+	After  func() // called once the matching child has run, before the cancel
+}
+
+func (c *cancelAfter) Light(spec run.Spec) (run.Result, error) {
+	if spec.Ctx != nil && spec.Ctx.Err() != nil {
+		return run.Result{}, spec.Ctx.Err()
+	}
+	match := spec.Name == "git" && slices.Contains(spec.Args, c.Verb[0]) && slices.Contains(spec.Args, c.Verb[1])
+	if match && c.Before {
+		c.Cancel()
+		return run.Result{}, errors.Join(run.ErrNotStarted, context.Canceled)
+	}
+	res, err := c.Inner.Light(spec)
+	if err == nil && match {
+		if c.After != nil {
+			c.After()
+		}
+		c.Cancel()
+		return res, fmt.Errorf("git: %w", context.Canceled)
+	}
+	return res, err
+}
+
+func TestMerge_InterruptDuringALocalSquashUndoesItAndLeavesThePrimaryClean(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	commitFile(t, path, "README.md", "tree readme\n")
+	before := testiso.Git(t, f.primary, "rev-parse", "HEAD")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel}
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "the squash in") || !strings.Contains(err.Error(), "was undone") {
+		t.Fatalf("err = %v, want an interrupt that names the undone squash", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean after the interrupt:\n%s", got)
+	}
+	if got := testiso.Git(t, f.primary, "rev-parse", "HEAD"); got != before {
+		t.Errorf("the primary moved to %s, want %s", got, before)
+	}
+	if !exists(path) {
+		t.Errorf("the tree was removed by an interrupted merge")
+	}
+	if slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("an interrupted merge recorded a merge: %v", f.kinds())
+	}
+}
+
+func TestMerge_InterruptBeforeAnyChildStartsStopsAtOnceWithoutGh(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if calls := f.ghCalls(); len(calls) != 0 {
+		t.Errorf("gh ran after the interrupt: %v", calls)
+	}
+	var fx *Fixable
+	if errors.As(err, &fx) {
+		t.Errorf("an interrupt is not a failure to fix and run again: %v", err)
+	}
+}
+
+func TestMerge_ABranchCalledDetachedDashSomethingIsNotADetachedHead(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "detached-fix", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := Path(f.primary, "detached-fix")
+	commitFile(t, path, "one.txt", "1\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatalf("a real branch named detached-fix was refused: %v", err)
+	}
+}
+
+func TestMerge_ARealDetachedHeadIsRefused(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	testiso.Git(t, path, "checkout", "-q", "--detach")
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || err.Error() != "tree merge: HEAD is detached" {
+		t.Errorf("err = %v, want the detached refusal", err)
+	}
+}
+
+func TestMerge_RedCIWithControlBytesInNamesAndLogsPrintsNone(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.watchFail = "x"
+	f.checkList = `[{"name":"te\u001b[2Jst\u0007","bucket":"fail","link":"https://github.com/o/r/actions/runs/99/job/5"}]`
+	f.logs = map[string]string{"99": "a\tb\t2026-10-18T10:00:01.0000000Z --- FAIL: Test\u001b]0;pwned\u0007A\u0000\n"}
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: 1 check did not pass\n" +
+		"te[2Jst  https://github.com/o/r/actions/runs/99/job/5\n" +
+		"  --- FAIL: Test]0;pwnedA"
+	if err == nil || err.Error() != want {
+		t.Errorf("error =\n%q\nwant\n%q", err, want)
+	}
+}
+
+// redCheck answers the shell the --check command runs in with a failure whose
+// last line has an escape sequence.
+type redCheck struct{ Inner run.Runner }
+
+func (r redCheck) Light(spec run.Spec) (run.Result, error) {
+	if spec.Name == "sh" || spec.Name == "cmd" {
+		return run.Result{Stderr: []byte("first\nlast \x1b[31mred\x07\n"), ExitCode: 1}, errors.New("exit status 1")
+	}
+	return r.Inner.Light(spec)
+}
+
+func TestMerge_CheckLastLineHasNoControlBytes(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	env := f.env(path)
+	env.Runner = redCheck{Inner: f.gh}
+
+	err := Merge(env, "make test")
+
+	want := `tree merge: check "make test" failed: last [31mred`
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
+	}
+}
+
+func TestMerge_InterruptWithAStaleIndexLockStillLeavesThePrimaryClean(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	commitFile(t, path, "README.md", "tree readme\n")
+	lock := filepath.Join(f.primary, ".git", "index.lock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{
+		Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel,
+		After: func() { testiso.Write(t, lock, "") },
+	} // what a killed git leaves behind
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "was undone") {
+		t.Fatalf("err = %v, want an interrupt that names the undone squash", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean:\n%s", got)
+	}
+	if exists(lock) {
+		t.Errorf("the stale index.lock was left")
+	}
+}
+
+func TestMerge_InterruptBeforeTheSquashStartsSaysSo(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel, Before: true}
+
+	err := Merge(env, "")
+
+	if err == nil || err.Error() != "tree merge: interrupted before the squash started" || !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the before-the-squash line wrapping context.Canceled", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean:\n%s", got)
+	}
+}
+
+func TestRm_RemovesASquashMergedBranchWhoseRemoteBranchIsGone(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	f.mergedOID = testiso.Git(t, path, "rev-parse", "HEAD") // gh finds the merged pull request of this very tip
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+	var asked bool
+	for _, s := range f.gh.Specs() {
+		if reflect.DeepEqual(s.Args[:min(len(s.Args), 6)], []string{"pr", "list", "--head", "feat", "--state", "merged"}) {
+			asked = true
+		}
+	}
+	if !asked {
+		t.Errorf("gh was not asked for a merged pull request of feat: %v", f.ghCalls())
+	}
+}
+
+func TestRm_RefusesWhenGhFindsNoMergedPullRequest(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "1 commit not merged into origin/main") {
+		t.Errorf("err = %v, want the unmerged refusal", err)
+	}
+}
+
+func TestRm_LocalRepoRemovesABranchTheDefaultHoldsAsAMergeTreeCommit(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	squashByHand(t, f, "- edit a.txt\n\ntip "+testiso.Git(t, path, "rev-parse", "HEAD")) // the local squash commit, by hand
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+}
+
+func TestRm_LocalRepoDoesNotTakeAnotherSubjectForTheMergeCommit(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	commitFile(t, f.primary, "b.txt", "2\n")
+	testiso.Git(t, f.primary, "commit", "-q", "--amend", "-m", "Merge tree feature-two")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "1 commit not merged into main") {
+		t.Errorf("err = %v, want the unmerged refusal", err)
+	}
+}
+
+func TestRm_MissingOriginDefaultSaysFetch(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	testiso.Git(t, f.primary, "update-ref", "-d", "refs/remotes/origin/main")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || err.Error() != "tree rm: origin/main not fetched: run git fetch origin" {
+		t.Errorf("err = %v, want the fetch line", err)
+	}
+}
+
+func TestPlain_StripsControlCharactersAndLineBreaksButKeepsTab(t *testing.T) {
+	got := plain("a\x00b\x1b[31mc\x07d\re\x7ff\tg\nh\u0085i\u009bjé")
+
+	if want := "ab[31mcdef\tghijé"; got != want {
+		t.Errorf("plain = %q, want %q", got, want)
+	}
+}
+
+func TestRm_ReusedBranchNameWithNewCommitsIsRefusedEvenWithAMergedPullRequestOfThatName(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	f.mergedOID = testiso.Git(t, path, "rev-parse", "HEAD") // the old, merged work
+	commitFile(t, path, "new.txt", "2\n")                   // new work under the same name
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "2 commits not merged into origin/main") {
+		t.Errorf("err = %v, want the unmerged refusal", err)
+	}
+	if !exists(path) {
+		t.Errorf("the tree with new commits was removed")
+	}
+}
+
+func TestRm_APullRequestIntoAnotherBaseDoesNotCount(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	f.mergedOID = testiso.Git(t, path, "rev-parse", "HEAD")
+	f.mergedBase = "release"
+
+	if err := Rm(f.env(path), "", false); err == nil {
+		t.Error("a pull request merged into release made the branch removable")
+	}
+}
+
+func TestRm_TipBelowTheMergeCommitCountsAsMerged(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	tip := testiso.Git(t, path, "rev-parse", "HEAD")
+	f.mergedOID = "0000000000000000000000000000000000000001" // the head moved after the merge was cut
+	f.mergeOID = testiso.Git(t, path, "commit-tree", tip+"^{tree}", "-p", tip, "-m", "merge")
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+}
+
+// squashByHand lands the tree feat in the primary the way a local merge does,
+// with the given body after the subject.
+func squashByHand(t *testing.T, f *fixture, body string) {
+	t.Helper()
+	testiso.Git(t, f.primary, "merge", "--squash", "feat")
+	testiso.Git(t, f.primary, "commit", "-qm", "Merge tree feat", "-m", body)
+}
+
+func TestRm_LocalReusedBranchNameWithNewCommitsIsRefused(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	squashByHand(t, f, "- edit a.txt\n\ntip "+testiso.Git(t, path, "rev-parse", "HEAD"))
+	commitFile(t, path, "new.txt", "2\n") // new work under the same name
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "2 commits not merged into main") {
+		t.Errorf("err = %v, want the unmerged refusal", err)
+	}
+}
+
+func TestRm_LocalSquashCommitWithoutATipLineDoesNotCount(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	squashByHand(t, f, "- edit a.txt")
+
+	if err := Rm(f.env(path), "", false); err == nil {
+		t.Error("a Merge tree commit that names no tip made the branch removable")
+	}
+}
+
+func TestMerge_LocalSquashRecordsTheBranchTipInTheBody(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	tip := testiso.Git(t, path, "rev-parse", "HEAD")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := testiso.Git(t, f.primary, "log", "-1", "--format=%b"), "- edit one.txt\n\ntip "+tip; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestMerge_LocalSquashFailingOnAForeignIndexLockLeavesTheLockAndSaysOneLine(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	lock := filepath.Join(f.primary, ".git", "index.lock")
+	testiso.Write(t, lock, "") // a live git of someone else holds it
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || strings.Contains(err.Error(), "\n") || errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %q, want one line that is no interrupt", err)
+	}
+	if !exists(lock) {
+		t.Errorf("the foreign index.lock was deleted")
+	}
+	if !exists(path) {
+		t.Errorf("the tree was removed by a merge that failed")
+	}
 }

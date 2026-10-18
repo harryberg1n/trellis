@@ -1,11 +1,17 @@
 package install
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/harryberg1n/trellis/internal/clock"
 
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -50,7 +56,10 @@ func TestInstall_InATreeOfAnUninstalledPrimaryRecordsNothingAndSaysSo(t *testing
 	if got, _ := Repos(f.root); len(got) != 0 {
 		t.Errorf("Repos = %v, want nothing recorded", got)
 	}
-	want := "not recorded: update re-installs primary checkouts only; run trellis install in " + store.Canonical(f.repo) + " to include this repository"
+	if got, err := ReferencedRepos(f.root); err != nil || !reflect.DeepEqual(got, []string{store.Canonical(f.repo)}) {
+		t.Errorf("ReferencedRepos = %v, %v; want the primary, referenced only", got, err)
+	}
+	want := "not re-installed by update (primary checkout not installed; its pins are kept): run trellis install in " + store.Canonical(f.repo) + " to include this repository"
 	if last := actions[len(actions)-1]; last != want {
 		t.Errorf("last action = %q, want %q", last, want)
 	}
@@ -183,5 +192,120 @@ func TestPin_CopiesOnceAndKeepsAnExistingPin(t *testing.T) {
 	}
 	if _, _, err := Pin(f.root, "../x", f.exe); err == nil {
 		t.Error("a version naming a parent directory was accepted")
+	}
+}
+
+func TestRecordRepo_ParallelRecordsLoseNoLine(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	repos := make([]string, 0, 8)
+	for range 8 {
+		repos = append(repos, testiso.Repo(t))
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(repos)*2)
+	for i, r := range repos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- RecordRepo(root, r)
+			errs <- RecordCreatedPin(root, fmt.Sprintf("v0.0.%d", i))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Repos(root)
+	if err != nil || len(got) != 8 {
+		t.Fatalf("Repos = %v, %v; want 8 lines", got, err)
+	}
+	pins, err := CreatedPins(root)
+	if err != nil || len(pins) != 8 {
+		t.Fatalf("CreatedPins = %v, %v; want 8 lines", pins, err)
+	}
+}
+
+func TestSweepReferences_ReadsLinkedWorktreesOfAPrimaryThatHasNoHooks(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.7", false)
+	o.Repo = tree
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+
+	own, err := ReferencedVersions(f.root, f.repo)
+	if err != nil || len(own) != 0 {
+		t.Fatalf("the primary references %v, %v; want nothing of its own", own, err)
+	}
+	got, err := SweepReferences(f.root, f.repo)
+	if want := []string{"v0.0.7"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("SweepReferences = %v, %v; want %v", got, err, want)
+	}
+	trees, err := LinkedWorktrees(f.repo)
+	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(trees, want) {
+		t.Errorf("LinkedWorktrees = %v, %v; want %v", trees, err, want)
+	}
+}
+
+func TestLinkedWorktrees_ResolvesARelativeGitdirAgainstItsAdminDirectory(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	admin := filepath.Join(f.repo, ".git", "worktrees", "feat-tree")
+	rel, err := filepath.Rel(admin, filepath.Join(tree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testiso.Write(t, filepath.Join(admin, "gitdir"), filepath.ToSlash(rel)+"\n")
+
+	got, err := LinkedWorktrees(f.repo)
+
+	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("LinkedWorktrees = %v, %v; want %v", got, err, want)
+	}
+}
+
+func TestSweepReferences_AWorktreeThatIsGoneStopsTheSweep(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	if err := os.RemoveAll(tree); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := SweepReferences(f.root, f.repo)
+
+	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") || !strings.Contains(err.Error(), "trellis update continues once it is pruned") {
+		t.Errorf("err = %v, want one line naming the missing worktree", err)
+	}
+}
+
+func TestRecordRepo_TimesOutOnTheFakeClockWhileAnotherInstallHoldsTheLock(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := store.Open(filepath.Join(root, "records"), clock.Real())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := holder.Hold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	fc := clock.Fake(time.Unix(1000, 0))
+	repo := testiso.Repo(t)
+	done := make(chan error, 1)
+	go func() { done <- RecordRepo(root, repo, WithClock(fc)) }()
+
+	fc.BlockUntil(1) // waiting for the lock
+	fc.Advance(recordLockTimeout)
+
+	if err := <-done; !errors.Is(err, store.ErrLockTimeout) {
+		t.Errorf("err = %v, want store.ErrLockTimeout", err)
 	}
 }

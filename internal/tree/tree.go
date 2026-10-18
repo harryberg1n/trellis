@@ -5,11 +5,14 @@
 package tree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +39,49 @@ type Env struct {
 	// Leave is called with the primary checkout before a tree the process
 	// stands in is removed, so the process can step out of it. May be nil.
 	Leave func(primary string) error
+	// Ctx, when cancelled, ends the running child and its tree and stops the
+	// verb; nil is never cancelled. A local squash in flight is undone first.
+	Ctx context.Context
 }
 
-func (e Env) git() run.Runner { return run.Direct{Inner: e.Runner} }
+func (e Env) git() run.Runner { return run.Direct{Inner: e.runner()} }
+
+// runner is the env's runner with the env's context given to every child.
+func (e Env) runner() run.Runner { return run.WithContext(e.Runner, e.Ctx) }
+
+// uncancelled is e with a context that is never cancelled: the work that
+// puts a half-done change right again must run after an interrupt.
+func (e Env) uncancelled() Env {
+	if e.Ctx != nil {
+		e.Ctx = context.WithoutCancel(e.Ctx)
+	}
+	return e
+}
+
+// interruptErr is the one-line error of a verb a signal cut short. It wraps
+// context.Canceled, which is how callers tell it from a failure.
+type interruptErr struct{ msg string }
+
+func (e *interruptErr) Error() string { return e.msg }
+
+func (*interruptErr) Unwrap() error { return context.Canceled }
+
+func interruptedf(format string, a ...any) error {
+	return &interruptErr{msg: fmt.Sprintf(format, a...)}
+}
+
+// cancelled reports whether the verb was interrupted.
+func (e Env) cancelled() bool { return e.Ctx != nil && e.Ctx.Err() != nil }
+
+// interrupted is err, or when the verb was interrupted and err does not say so
+// already, a one-line error that does.
+func (e Env) interrupted(verb string, err error) error {
+	var already *interruptErr
+	if err == nil || !e.cancelled() || errors.As(err, &already) {
+		return err
+	}
+	return fmt.Errorf("tree %s: interrupted: %w", verb, context.Canceled)
+}
 
 // wait pauses for d on the env's clock.
 func (e Env) wait(d time.Duration) {
@@ -46,7 +89,14 @@ func (e Env) wait(d time.Duration) {
 	if clk == nil {
 		clk = clock.Real()
 	}
-	<-clk.After(d)
+	var done <-chan struct{}
+	if e.Ctx != nil {
+		done = e.Ctx.Done()
+	}
+	select {
+	case <-clk.After(d):
+	case <-done:
+	}
 }
 
 // Fixable is a failure the operator can fix and run the verb again: red CI, a
@@ -124,12 +174,19 @@ func (e Env) branchExists(dir, name string) (bool, error) {
 // New opens a tree called name on a new branch of that name, cut from
 // origin's default branch, at path (Path when empty).
 func New(env Env, name, path string) error {
+	return env.interrupted("new", newTree(env, name, path))
+}
+
+func newTree(env Env, name, path string) error {
 	if name == "" {
 		return errors.New("tree new: a name is needed")
 	}
-	w, err := locate(env.Dir)
+	if strings.Trim(name, "0123456789") == "" {
+		return errors.New("tree new: a tree name cannot be only digits")
+	}
+	w, err := env.locate("new")
 	if err != nil {
-		return fmt.Errorf("tree new: %w", err)
+		return err
 	}
 	switch {
 	case path == "":
@@ -169,10 +226,12 @@ func baseOf(repo objects.Repo) string {
 
 // Sync fetches origin and rebases the current tree onto its default branch.
 // A conflict leaves the rebase where git stopped it.
-func Sync(env Env) error {
-	w, err := locate(env.Dir)
+func Sync(env Env) error { return env.interrupted("sync", syncTree(env)) }
+
+func syncTree(env Env) error {
+	w, err := env.locate("sync")
 	if err != nil {
-		return fmt.Errorf("tree sync: %w", err)
+		return err
 	}
 	if w.Repo.Remote != "" {
 		if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
@@ -201,13 +260,17 @@ func Rebase() MergeOption { return func(o *mergeOpts) { o.rebase = true } }
 // Rebase), then the tree and branch are removed. Any step that fails stops
 // the rest.
 func Merge(env Env, check string, opts ...MergeOption) error {
+	return env.interrupted("merge", mergeTree(env, check, opts...))
+}
+
+func mergeTree(env Env, check string, opts ...MergeOption) error {
 	var o mergeOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
-	w, err := locate(env.Dir)
+	w, err := env.locate("merge")
 	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return err
 	}
 	repo := w.Repo
 	switch {
@@ -215,7 +278,7 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 		return fmt.Errorf("tree merge: %s is the default branch", repo.Branch)
 	case repo.Primary:
 		return errors.New("tree merge: the primary checkout is not a tree")
-	case strings.HasPrefix(repo.Branch, "detached-"):
+	case repo.Detached:
 		return errors.New("tree merge: HEAD is detached")
 	}
 	name := repo.Branch
@@ -230,14 +293,14 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 			return err
 		}
 	}
-	if err := (host.GH{Runner: env.Runner, Dir: repo.Root}).Ready(); err != nil {
+	if err := (host.GH{Runner: env.runner(), Dir: repo.Root}).Ready(); err != nil {
 		return errors.New("tree merge: gh is not installed or not authenticated")
 	}
 	if _, err := env.runGit(repo.Root, "push", "--force-with-lease", "-u", "origin", name); err != nil {
 		return fmt.Errorf("tree merge: push failed: %s", firstLine(err))
 	}
 	env.say("pushed %s", name)
-	gh := host.GH{Runner: env.Runner, Dir: repo.Root}
+	gh := host.GH{Runner: env.runner(), Dir: repo.Root}
 	if err := ensurePullRequest(gh, name, repo.Default); err != nil {
 		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
@@ -290,7 +353,7 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 // runCheck runs cmd in dir, records its verdict, and fails on red.
 func runCheck(env Env, dir, name, cmd string) error {
 	prog, args := shellCommand(cmd)
-	res, err := env.Runner.Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
+	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
 	if err != nil {
 		env.record(checkEvent(name, "red"))
 		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLine(res, err))}
@@ -312,12 +375,12 @@ func runCheck(env Env, dir, name, cmd string) error {
 func lastLine(res run.Result, err error) string {
 	for _, b := range [][]byte{res.Stderr, res.Stdout} {
 		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-		if l := strings.TrimSpace(lines[len(lines)-1]); l != "" {
+		if l := plain(strings.TrimSpace(lines[len(lines)-1])); l != "" {
 			return l
 		}
 	}
 	line, _, _ := strings.Cut(err.Error(), "\n")
-	return line
+	return plain(line)
 }
 
 // ensurePullRequest opens a pull request of branch against base unless an
@@ -397,9 +460,13 @@ func short(sha string) string { return sha[:min(12, len(sha))] }
 // Rm removes the tree called name (the current tree when empty) and its
 // branch. A tree with work no commit holds is refused unless force.
 func Rm(env Env, name string, force bool) error {
-	w, err := locate(env.Dir)
+	return env.interrupted("rm", rmTree(env, name, force))
+}
+
+func rmTree(env Env, name string, force bool) error {
+	w, err := env.locate("rm")
 	if err != nil {
-		return fmt.Errorf("tree rm: %w", err)
+		return err
 	}
 	path := w.Repo.Root
 	if name == "" {
@@ -421,8 +488,107 @@ func Rm(env Env, name string, force bool) error {
 		if dirty != "" {
 			return fmt.Errorf("tree rm: %s has %s; --force removes it anyway", name, dirty)
 		}
+		if err := refuseUnmerged(env, w, name); err != nil {
+			return err
+		}
 	}
 	return removeTree(env, w, path, name, force)
+}
+
+// refuseUnmerged is a refusal when the branch holds commits that are neither
+// in the default branch (origin's, or the local one without a remote) nor in
+// its upstream: deleting the branch would lose them.
+func refuseUnmerged(env Env, w where, name string) error {
+	if found, err := env.branchExists(w.Primary, name); err != nil {
+		return fmt.Errorf("tree rm: %w", err)
+	} else if !found {
+		return nil
+	}
+	base := baseOf(w.Repo)
+	if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", base+"^{commit}"); err != nil {
+		if w.Repo.Remote != "" {
+			return fmt.Errorf("tree rm: %s not fetched: run git fetch origin", base)
+		}
+		return fmt.Errorf("tree rm: %s: no such branch", base)
+	}
+	n, err := env.countCommits(w.Primary, base+".."+name)
+	if err != nil {
+		return fmt.Errorf("tree rm: %w", err)
+	}
+	if n == 0 {
+		return nil // an ancestor of the default branch
+	}
+	if _, uerr := env.runGit(w.Primary, "rev-parse", "--verify", "-q", name+"@{upstream}"); uerr == nil {
+		if ahead, err := env.countCommits(w.Primary, name+"@{upstream}.."+name); err == nil && ahead == 0 {
+			return nil // everything is pushed
+		}
+	}
+	if landed(env, w, name, base) {
+		return nil // a squash or rebase merge: the commits are not ancestors, the change is in
+	}
+	noun := "commits"
+	if n == 1 {
+		noun = "commit"
+	}
+	return fmt.Errorf("tree rm: %s has %d %s not merged into %s; --force removes it anyway", name, n, noun, base)
+}
+
+// landed reports whether the branch was merged in a way that leaves its
+// commits out of the default branch's ancestry, and the branch tip is what was
+// merged. The name alone proves nothing: a name is reused, and gh matches a
+// pull request from any base or fork. With a remote, a merged pull request into
+// the default branch counts when the tip is its head commit, or is below its
+// merge commit. Without one, the default branch must hold a "Merge tree <name>"
+// commit whose body records `tip <sha>` of this very tip. A gh that cannot
+// answer is "not known to be merged".
+func landed(env Env, w where, name, base string) bool {
+	tip, err := env.runGit(w.Primary, "rev-parse", "refs/heads/"+name)
+	if err != nil || tip == "" {
+		return false
+	}
+	if w.Repo.Remote != "" {
+		prs, err := (host.GH{Runner: env.runner(), Dir: w.Primary}).MergedPRs(name)
+		if err != nil {
+			return false
+		}
+		for _, pr := range prs {
+			if pr.BaseBranch != w.Repo.Default {
+				continue
+			}
+			if strings.EqualFold(pr.HeadSHA, tip) {
+				return true
+			}
+			if m := pr.MergeSHA(); m != "" {
+				if _, err := env.runGit(w.Primary, "merge-base", "--is-ancestor", tip, m); err == nil {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	want := "Merge tree " + name
+	out := mustGit(env, w.Primary, "log", "--format=%s%x1f%b%x1e", "--fixed-strings", "--grep="+want, base)
+	for _, rec := range strings.Split(out, "\x1e") {
+		subject, body, _ := strings.Cut(strings.TrimSpace(rec), "\x1f")
+		if subject != want {
+			continue
+		}
+		for _, l := range lines(body) {
+			if l == "tip "+tip {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// countCommits is the number of commits in a git revision range.
+func (e Env) countCommits(dir, rng string) (int, error) {
+	out, err := e.runGit(dir, "rev-list", "--count", rng)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(out)
 }
 
 // pathOf is the path of the worktree on branch name.
@@ -468,4 +634,37 @@ func removeTree(env Env, w where, path, name string, force bool) error {
 	}
 	env.say("removed %s", path)
 	return nil
+}
+
+// locate is locate(e.Dir) with the remote read the way git reads it. The
+// repository description of objects.Open is read from files and sees only
+// the repository's own config; here git's config answers, includes and all.
+// A verb must not guess its base: with remotes but none called origin, or an
+// origin whose default branch git has not been told, it stops with a line.
+func (e Env) locate(verb string) (where, error) {
+	w, err := locate(e.Dir)
+	if err != nil {
+		return where{}, fmt.Errorf("tree %s: %w", verb, err)
+	}
+	url, err := e.runGit(w.Repo.Root, "config", "--get", "remote.origin.url")
+	if err != nil || url == "" {
+		remotes, rerr := e.runGit(w.Repo.Root, "remote")
+		if rerr != nil {
+			return where{}, fmt.Errorf("tree %s: %w", verb, rerr)
+		}
+		if names := strings.Fields(remotes); len(names) > 0 {
+			slices.Sort(names)
+			return where{}, fmt.Errorf("tree %s: no remote named origin (remotes: %s)", verb, strings.Join(names, ", "))
+		}
+		w.Repo.Remote = ""
+		return w, nil
+	}
+	w.Repo.Remote = url
+	head, err := e.runGit(w.Repo.Root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+	def, ok := strings.CutPrefix(head, "refs/remotes/origin/")
+	if err != nil || !ok || def == "" {
+		return where{}, fmt.Errorf("tree %s: origin/HEAD is not set: run git remote set-head origin -a", verb)
+	}
+	w.Repo.Default = def
+	return w, nil
 }

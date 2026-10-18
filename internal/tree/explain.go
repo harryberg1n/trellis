@@ -152,17 +152,17 @@ func unpassedChecks(env Env, gh host.GH, pr int, why string) *Fixable {
 	fmt.Fprintf(&b, "tree merge: %d %s did not pass", len(bad), noun)
 	for _, c := range bad {
 		if strings.EqualFold(c.Bucket, "cancel") {
-			fmt.Fprintf(&b, "\ncancelled: %s", c.Name)
+			fmt.Fprintf(&b, "\ncancelled: %s", plain(c.Name))
 			continue
 		}
-		fmt.Fprintf(&b, "\n%s  %s", c.Name, c.Link)
+		fmt.Fprintf(&b, "\n%s  %s", plain(c.Name), plain(c.Link))
 		m := runIDInLink.FindStringSubmatch(c.Link)
 		if m == nil {
 			continue
 		}
 		log, lerr := gh.FailedLog(m[1])
 		if lerr != nil && log == "" {
-			env.warn("no log for %s: %v", c.Name, lerr)
+			env.warn("no log for %s: %v", plain(c.Name), lerr)
 			continue
 		}
 		for _, l := range failingLines(log) {
@@ -187,7 +187,7 @@ func failingLines(log string) []string {
 		l = logPrefix.ReplaceAllString(strings.TrimPrefix(strings.TrimRight(l, "\r"), "\ufeff"), "")
 		for _, m := range failMarks {
 			if strings.Contains(l, m) {
-				out = append(out, l)
+				out = append(out, plain(l))
 				break
 			}
 		}
@@ -196,4 +196,17 @@ func failingLines(log string) []string {
 		}
 	}
 	return out
+}
+
+// plain is s on one line without control characters: the C0 bytes (newline and
+// carriage return included, tab kept), DEL and the C1 range U+0080 to U+009F.
+// Text from a check name, a CI log or a child's output goes to the operator's
+// terminal, and an escape sequence in it must not run there.
+func plain(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 }

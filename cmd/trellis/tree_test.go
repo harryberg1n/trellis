@@ -42,6 +42,8 @@ func TestTree_NewPrintsPathAndRecordsOpenedInTheStore(t *testing.T) {
 	testiso.Git(t, repo, "init", "--bare", "-q", origin)
 	testiso.Git(t, repo, "remote", "add", "origin", origin)
 	testiso.Git(t, repo, "push", "-q", "origin", "main")
+	testiso.Git(t, repo, "fetch", "-q", "origin")
+	testiso.Git(t, repo, "remote", "set-head", "origin", "main")
 	env := treeEnv{Dir: repo, Runner: runner.Exec{Clock: clock.Real()}}
 
 	var out, errb bytes.Buffer

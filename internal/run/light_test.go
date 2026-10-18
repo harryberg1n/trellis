@@ -18,7 +18,15 @@ import (
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
-func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
+func TestLight_TreeKillEndsGrandchildren(t *testing.T) { treeKill(t, false) }
+
+// A cancelled context ends the child's tree at once, without the timeout.
+func TestLight_CancelledContextKillsTheChildTree(t *testing.T) { treeKill(t, true) }
+
+// treeKill starts a child with a grandchild and ends the run by the timeout, or
+// with cancelled the cancelled context, then requires the grandchild dead.
+func treeKill(t *testing.T, cancelled bool) {
+	t.Helper()
 	// Real time bounds the test so a broken kill fails instead of hanging; the
 	// kill itself is driven by the fake clock.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -43,8 +51,10 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 		err error
 	}
 	done := make(chan outcome, 1)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	t.Cleanup(cancelRun)
 	go func() {
-		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: 30 * time.Second})
+		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: 30 * time.Second, Ctx: runCtx})
 		done <- outcome{res, err}
 	}()
 
@@ -76,11 +86,17 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Light never waited on the clock")
 	}
-	fc.Advance(30 * time.Second)
+	want := ErrTimeout
+	if cancelled {
+		want = context.Canceled
+		cancelRun()
+	} else {
+		fc.Advance(30 * time.Second)
+	}
 	select {
 	case got := <-done:
-		if !errors.Is(got.err, ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", got.err)
+		if !errors.Is(got.err, want) || (cancelled && errors.Is(got.err, ErrTimeout)) {
+			t.Fatalf("err = %v, want %v", got.err, want)
 		}
 	case <-ctx.Done():
 		t.Fatal("Light did not return after its timeout")
@@ -159,5 +175,102 @@ func TestScrubGitEnv(t *testing.T) {
 	want := []string{"PATH=/bin", "GIT_CONFIG_GLOBAL=g", "GIT_CONFIG_NOSYSTEM=1", "GIT_CEILING_DIRECTORIES=c", "GIT_TERMINAL_PROMPT=0", "HOME=/h"}
 	if got := scrubGitEnv(in); !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestLight_ACancelledContextNeverStartsTheChild(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fc := clock.Fake(time.Unix(1000, 0))
+
+	_, err := Light(fc, Spec{Name: "git", Args: []string{"--version"}, Timeout: time.Minute, Ctx: ctx})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestWithContext_GivesTheContextToAChildThatHasNone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []context.Context
+	inner := &recordCtx{func(s Spec) { got = append(got, s.Ctx) }}
+	r := WithContext(inner, ctx)
+	own := context.WithValue(context.Background(), ctxKey{}, 1)
+
+	_, _ = r.Light(Spec{})
+	_, _ = r.Light(Spec{Ctx: own})
+	cancel()
+
+	if len(got) != 2 || got[0] != ctx || got[1] != own {
+		t.Errorf("contexts = %v, want the wrapper's and then the spec's own", got)
+	}
+	if WithContext(inner, nil) != Runner(inner) {
+		t.Errorf("a nil context wrapped the runner")
+	}
+}
+
+type ctxKey struct{}
+
+type recordCtx struct{ f func(Spec) }
+
+func (r *recordCtx) Light(s Spec) (Result, error) { r.f(s); return Result{}, nil }
+
+// reportedPid listens for the pid a helper child sends over TCP.
+func reportedPid(t *testing.T, role string) (accept func() int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	t.Setenv(roleEnv, role)
+	t.Setenv(addrEnv, ln.Addr().String())
+	return func() int {
+		if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Fatalf("the %s child never reported: %v", role, err)
+		}
+		defer func() { _ = conn.Close() }() // read-only use
+		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pid
+	}
+}
+
+func TestLight_AChildThatExitedZeroWhileAGrandchildHoldsThePipesSucceeds(t *testing.T) {
+	accept := reportedPid(t, "exiter")
+	fc := clock.Fake(time.Unix(1000, 0))
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: time.Hour, WaitDelay: 50 * time.Millisecond})
+		done <- outcome{res, err}
+	}()
+	pid := accept()
+	t.Cleanup(func() {
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill() // the grandchild would otherwise outlive the test
+		}
+	})
+
+	got := <-done
+
+	if got.err != nil || got.res.ExitCode != 0 {
+		t.Errorf("err = %v, exit %d; want success: the child exited 0", got.err, got.res.ExitCode)
 	}
 }

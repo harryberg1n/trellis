@@ -47,20 +47,38 @@ func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
 	}
 }
 
-func TestGH_PRViewDecodesAndNamesAMissingPR(t *testing.T) {
-	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`{"number":7,"state":"OPEN"}`)}
-	got, err := GH{Runner: r, Dir: "d"}.PRView("feat")
+func TestGH_PRViewAddressesThePullRequestByItsHeadNeverByName(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":7,"state":"OPEN"}]`)}
+	got, err := GH{Runner: r, Dir: "d"}.PRView("123")
 	if err != nil || got != (PRState{Number: 7, State: "OPEN"}) {
 		t.Fatalf("PRView = %+v, %v; want #7 OPEN", got, err)
 	}
-	if want := []string{"pr", "view", "feat", "--json", "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
+	want := []string{"pr", "list", "--head", "123", "--state", "all", "--limit", "30", "--json", "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision"}
+	if !reflect.DeepEqual(r.Specs()[0].Args, want) {
 		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, want)
 	}
+}
 
-	none := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
-		return run.Result{ExitCode: 1}, errors.New(`no pull requests found for branch "feat"`)
-	}}
-	if _, err := (GH{Runner: none}).PRView("feat"); !errors.Is(err, ErrNoPR) {
+func TestGH_PRViewPrefersTheOpenPullRequestOfAHead(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":9,"state":"CLOSED"},{"number":8,"state":"OPEN"},{"number":3,"state":"MERGED"}]`)}
+
+	got, err := GH{Runner: r}.PRView("feat")
+
+	if err != nil || got.Number != 8 {
+		t.Errorf("PRView = %+v, %v; want #8, the open one", got, err)
+	}
+	r = &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":9,"state":"MERGED"},{"number":3,"state":"CLOSED"}]`)}
+	if got, err := (GH{Runner: r}).PRView("feat"); err != nil || got.Number != 9 {
+		t.Errorf("PRView = %+v, %v; want #9, the newest", got, err)
+	}
+}
+
+func TestGH_PRViewNamesAHeadWithNoPullRequest(t *testing.T) {
+	none := &testsupport.FakeRunner{Answer: testsupport.Stdout("[]")}
+
+	_, err := GH{Runner: none}.PRView("feat")
+
+	if !errors.Is(err, ErrNoPR) {
 		t.Errorf("err = %v, want ErrNoPR", err)
 	}
 }
@@ -71,7 +89,7 @@ func TestGH_ViewMergeableRepollsUnknownAndStopsAtTheBound(t *testing.T) {
 	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
 		a := answers[min(reads, len(answers)-1)]
 		reads++
-		return run.Result{Stdout: []byte(`{"number":7,"state":"OPEN","mergeable":"` + a + `","mergeStateStatus":"DIRTY"}`)}, nil
+		return run.Result{Stdout: []byte(`[{"number":7,"state":"OPEN","mergeable":"` + a + `","mergeStateStatus":"DIRTY"}]`)}, nil
 	}}
 	waits := 0
 	pr, err := GH{Runner: r}.ViewMergeable("feat", func(d time.Duration) {
@@ -184,5 +202,19 @@ func TestGH_MergeCommitArgvAndDecoding(t *testing.T) {
 	wantArgs := []string{"pr", "view", "20", "--json", "mergeCommit"}
 	if err != nil || got != "abc123" || !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
 		t.Errorf("sha = %q, err = %v, args = %v; want abc123 from %v", got, err, r.Specs()[0].Args, wantArgs)
+	}
+}
+
+func TestGH_MergedPRsArgvAndDecoding(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":5,"headRefOid":"aaa","baseRefName":"main","mergeCommit":{"oid":"bbb"}},{"number":4,"headRefOid":"ccc","baseRefName":"dev","mergeCommit":null}]`)}
+
+	got, err := GH{Runner: r, Dir: "d"}.MergedPRs("feat")
+
+	want := []string{"pr", "list", "--head", "feat", "--state", "merged", "--limit", "30", "--json", "number,headRefOid,baseRefName,mergeCommit"}
+	if err != nil || len(got) != 2 || !reflect.DeepEqual(r.Specs()[0].Args, want) {
+		t.Fatalf("prs = %+v, err = %v, args = %v; want two from %v", got, err, r.Specs()[0].Args, want)
+	}
+	if got[0].HeadSHA != "aaa" || got[0].BaseBranch != "main" || got[0].MergeSHA() != "bbb" || got[1].MergeSHA() != "" {
+		t.Errorf("decoded %+v", got)
 	}
 }

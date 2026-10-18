@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
+	runner "github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -131,5 +134,132 @@ func TestRun_VersionAndHelpFlagsAreTheVerbs(t *testing.T) {
 		if out.String() != c.want {
 			t.Errorf("%s printed %q, want %q", c.arg, out.String(), c.want)
 		}
+	}
+}
+
+func TestExitCode_AnInterruptedVerbThatFailedExits130(t *testing.T) {
+	live := context.Background()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, c := range []struct {
+		name string
+		ctx  context.Context
+		code int
+		want int
+	}{
+		{"no signal, ok", live, 0, 0},
+		{"no signal, error", live, 1, 1},
+		{"no signal, fixable", live, 2, 2},
+		{"signal, verb finished anyway", cancelled, 0, 0},
+		{"signal, error", cancelled, 1, 130},
+		{"signal, fixable", cancelled, 2, 130},
+	} {
+		if got := exitCode(c.ctx, c.code); got != c.want {
+			t.Errorf("%s: exitCode(%d) = %d, want %d", c.name, c.code, got, c.want)
+		}
+	}
+}
+
+func TestTree_ACancelledContextStopsTheVerbOnOneLine(t *testing.T) {
+	repo := testiso.Repo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env := treeEnv{Dir: repo, Runner: runner.Exec{Clock: clock.Real()}, Ctx: ctx}
+
+	var out, errb bytes.Buffer
+	code := treeCmd([]string{"new", "feat"}, env, &out, &errb)
+
+	if code != 1 || errb.String() != "trellis tree new: interrupted: context canceled\n" {
+		t.Errorf("code %d, stderr %q; want 1 and the interrupted line", code, errb.String())
+	}
+	if exitCode(ctx, code) != 130 {
+		t.Errorf("main would exit %d, want 130", exitCode(ctx, code))
+	}
+}
+
+func TestReadme_NamesEveryVerbOfTheUsage(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(raw)
+	var verbs []string
+	in := false
+	for _, l := range strings.Split(usage, "\n") {
+		switch {
+		case l == "verbs:":
+			in = true
+		case in && strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   "):
+			verbs = append(verbs, strings.Fields(l)[0])
+		}
+	}
+	if len(verbs) < 10 {
+		t.Fatalf("read %d verbs from the usage: %v", len(verbs), verbs)
+	}
+	for _, v := range verbs {
+		if !strings.Contains(readme, "`trellis "+v) {
+			t.Errorf("README does not name the verb `trellis %s`", v)
+		}
+	}
+	for _, v := range []string{"new", "sync", "merge", "rm"} {
+		if !strings.Contains(readme, "`trellis tree "+v) {
+			t.Errorf("README does not name `trellis tree %s`", v)
+		}
+	}
+	for _, want := range []string{"130", "authenticated `gh`", "VERSION bump is a release"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README lacks %q", want)
+		}
+	}
+}
+
+func TestHonoursInterrupt_OnlyTheVerbsThatReadTheContextCatchSignals(t *testing.T) {
+	for verb, want := range map[string]bool{
+		"tree": true, "update": true, "report": true,
+		"hook": false, "allow": false, "install": false, "doctor": false, "eject": false, "version": false, "help": false,
+	} {
+		if got := honoursInterrupt([]string{verb}); got != want {
+			t.Errorf("honoursInterrupt(%s) = %v, want %v", verb, got, want)
+		}
+	}
+	if honoursInterrupt(nil) {
+		t.Error("no verb installed a signal handler")
+	}
+}
+
+// ctxSpy remembers the context of every child it is asked to run.
+type ctxSpy struct{ got []context.Context }
+
+func (s *ctxSpy) Light(spec runner.Spec) (runner.Result, error) {
+	s.got = append(s.got, spec.Ctx)
+	return runner.Result{}, nil
+}
+
+func TestWithReportContext_GivesTheReportsChildrenTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spy := &ctxSpy{}
+
+	env := withReportContext(reportEnv{Runner: spy}, ctx)
+	_, _ = env.Runner.Light(runner.Spec{Name: "gh"})
+
+	if len(spy.got) != 1 || spy.got[0] != ctx {
+		t.Errorf("the report's child got context %v, want the verb's", spy.got)
+	}
+}
+
+func TestUsage_NamesTheFlagsOfInstallDoctorEjectAndExit130(t *testing.T) {
+	for _, want := range []string{
+		"trellis install [--repo R] [--dry] [--allow-dev]",
+		"trellis doctor [--repo R]",
+		"trellis eject [--repo R]",
+		"130 interrupted",
+	} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("usage lacks %q", want)
+		}
+	}
+	if !strings.Contains(treeUsage, "130 interrupted") {
+		t.Error("tree usage lacks the interrupted exit code")
 	}
 }

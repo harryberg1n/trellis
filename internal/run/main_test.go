@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"syscall"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -24,6 +25,10 @@ func TestMain(m *testing.M) {
 		os.Exit(childMain())
 	case "sleeper":
 		blockForever()
+	case "stubborn":
+		os.Exit(stubbornMain())
+	case "exiter":
+		os.Exit(exiterMain())
 	}
 	testiso.Main(m)
 }
@@ -32,6 +37,42 @@ func blockForever() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
+}
+
+// stubbornMain ignores SIGTERM, tells the test it is ready, and blocks until it
+// is killed.
+func stubbornMain() int {
+	signal.Ignore(syscall.SIGTERM)
+	conn, err := net.Dial("tcp", os.Getenv(addrEnv))
+	if err != nil {
+		return 3
+	}
+	if _, err := fmt.Fprintf(conn, "%d\n", os.Getpid()); err != nil {
+		return 4
+	}
+	_ = conn.Close() // the pid is sent; nothing more to report
+	blockForever()
+	return 0
+}
+
+// exiterMain starts a grandchild that holds this child's output pipes open,
+// reports the grandchild's pid, and exits 0 at once.
+func exiterMain() int {
+	gc := exec.Command(os.Args[0])
+	gc.Env = append(os.Environ(), roleEnv+"=sleeper")
+	gc.Stdout, gc.Stderr = os.Stdout, os.Stderr
+	if err := gc.Start(); err != nil {
+		return 2
+	}
+	conn, err := net.Dial("tcp", os.Getenv(addrEnv))
+	if err != nil {
+		return 3
+	}
+	if _, err := fmt.Fprintf(conn, "%d\n", gc.Process.Pid); err != nil {
+		return 4
+	}
+	_ = conn.Close() // the pid is sent; nothing more to report
+	return 0
 }
 
 // childMain starts a sleeping grandchild, reports its pid to the test over

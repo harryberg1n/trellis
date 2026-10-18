@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -746,4 +747,171 @@ func hashTree(t *testing.T, dir string) map[string][32]byte {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// installAt points a repo's hooks at a pinned version.
+func (w *world) installAt(repo, version string) {
+	w.t.Helper()
+	src := filepath.Join(w.dir, "src-"+version, "trellis")
+	testiso.Write(w.t, src, version+"-binary")
+	if _, err := install.Install(install.Options{Repo: repo, Root: w.root, Exe: src, Version: version}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func TestUpdate_SkipStillReinstallsARepoPointingAtAnotherVersion(t *testing.T) {
+	w := newWorld(t)
+	w.latest = "v0.0.3"
+	w.installAt(w.repos[0], "v0.0.2")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w.referenced(w.repos[0]); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
+		t.Errorf("%s hooks point at %v, want [v0.0.3]", w.repos[0], got)
+	}
+	lines := w.lines()
+	if lines[0] != "[skip] already at v0.0.3" {
+		t.Errorf("first line = %q, want the skip line", lines[0])
+	}
+	if want := "reinstall " + w.repos[0] + ": hooks point at v0.0.2, running v0.0.3"; !contains(lines, want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+	if want := "install " + w.repos[0] + ": 6 hooks updated"; !contains(lines, want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+	for _, l := range lines {
+		if strings.Contains(l, w.repos[1]) {
+			t.Errorf("the repo already at v0.0.3 was touched: %q", l)
+		}
+	}
+}
+
+func TestUpdate_SkipReportsARepoThatFailsAgain(t *testing.T) {
+	w := newWorld(t)
+	w.latest = "v0.0.3"
+	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
+
+	err := w.run(Options{})
+
+	if err == nil || !strings.Contains(err.Error(), "1 of 1 repos") {
+		t.Fatalf("err = %v, want the count of repos that failed", err)
+	}
+}
+
+func TestUpdate_TreatsARecordedPlainDirectoryAsNotFound(t *testing.T) {
+	w := newWorld(t)
+	plain := filepath.Join(w.dir, "was-a-repo")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(w.repos[1], "subdir")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{plain, inside} {
+		if err := install.RecordRepo(w.root, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{plain, inside} {
+		if _, err := os.Stat(filepath.Join(p, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s got a .claude directory: %v", p, err)
+		}
+		if want := "skip " + store.Canonical(p) + ": not a repository root"; !contains(w.lines(), want) {
+			t.Errorf("no line %q in:\n%s", want, w.out)
+		}
+	}
+	got, err := install.Repos(w.root)
+	if err != nil || len(got) != 4 {
+		t.Errorf("Repos = %v, %v; want all four kept in the record", got, err)
+	}
+}
+
+func TestUpdate_SweepKeepsAPinOnlyALinkedWorktreeReferences(t *testing.T) {
+	w := newWorld(t)
+	w.updatePins("v0.0.1", "v0.0.2")
+	w.oldPins("v0.0.5")
+	tree := testiso.AddTree(t, w.repos[0], "feat-tree", "feat")
+	w.installAt(tree, "v0.0.1")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pins = %v, want %v (v0.0.1 is the worktree's, v0.0.2 is nobody's)", got, want)
+	}
+}
+
+func TestUpdate_SweepKeepsAPinAWorktreeOfAnUninstalledPrimaryReferences(t *testing.T) {
+	w := newWorld(t)
+	w.updatePins("v0.0.1", "v0.0.2")
+	w.oldPins("v0.0.5")
+	primary := testiso.Repo(t)
+	tree := testiso.AddTree(t, primary, "other-tree", "other")
+	w.installAt(tree, "v0.0.1")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pins = %v, want %v", got, want)
+	}
+	if _, err := os.Stat(install.SettingsPath(primary)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("update installed into the referenced-only primary: %v", err)
+	}
+	if got, _ := install.Repos(w.root); len(got) != 2 {
+		t.Errorf("Repos = %v, want the referenced-only primary kept out of it", got)
+	}
+}
+
+func TestOneLine_TruncatesToTwoHundredRunesWithAnEllipsis(t *testing.T) {
+	long := errors.New(strings.Repeat("é", 300))
+
+	got := oneLine(long)
+
+	if want := strings.Repeat("é", 199) + "…"; got != want {
+		t.Errorf("oneLine = %d runes %q, want 199 runes and an ellipsis", len([]rune(got)), got)
+	}
+	if got := oneLine(errors.New("a\n  b")); got != "a b" {
+		t.Errorf("oneLine(short) = %q, want %q", got, "a b")
+	}
+}
+
+func TestHooksChanged_CountsAddedAndUpdatedNotKept(t *testing.T) {
+	actions := []string{"keep binary /x", "add hook Stop", "update hook PreToolUse", "keep hook SessionEnd", "keep hook SessionStart"}
+
+	if got := hooksChanged(actions); got != 2 {
+		t.Errorf("hooksChanged = %d, want 2", got)
+	}
+}
+
+func TestUpdate_GivesItsContextToEveryChild(t *testing.T) {
+	w := newWorld(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := w.env()
+	env.Ctx = ctx
+
+	if err := Run(env, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	specs := w.runner.Specs()
+	if len(specs) != 3 {
+		t.Fatalf("%d children, want 3", len(specs))
+	}
+	for _, s := range specs {
+		if s.Ctx != ctx {
+			t.Errorf("child %s %v ran without the update's context", s.Name, s.Args)
+		}
+	}
 }

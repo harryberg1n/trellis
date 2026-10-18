@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,9 +25,9 @@ verbs:
                           the tree's commits instead
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
-  rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work without --force
+  rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
 
-exit codes of merge and sync: 0 done; 2 when you can fix it and run it again (red or cancelled
+exit codes of merge and sync: 0 done; 130 interrupted; 2 when you can fix it and run it again (red or cancelled
 checks, a conflict, a branch that is behind or blocked, a head that moved); 1 anything else.
 `
 
@@ -49,17 +50,18 @@ type treeEnv struct {
 	Runner runner.Runner
 	Clock  clock.Clock
 	Leave  func(primary string) error
+	Ctx    context.Context // cancelled by a signal; nil is never cancelled
 }
 
 // treeVerb runs `trellis tree <verb>` in the real process.
-func treeVerb(args []string, stdout, stderr io.Writer) int {
+func treeVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	dir, err := os.Getwd()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis tree: %v\n", err)
 		return 1
 	}
 	clk := clock.Real()
-	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clk}, Clock: clk, Leave: os.Chdir}, stdout, stderr)
+	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clk}, Clock: clk, Leave: os.Chdir, Ctx: ctx}, stdout, stderr)
 }
 
 // treeExit is the exit code for a failed tree verb: 2 for a failure the
@@ -94,7 +96,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		fs.StringVar(&check, "check", "", "a command to run in the tree first; red stops the merge")
 		fs.BoolVar(&rebase, "rebase", false, "keep the tree's commits (a rebase merge) instead of squashing them into one")
 	case "rm":
-		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted work")
+		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted or unmerged work")
 	case "sync":
 	default:
 		_, _ = fmt.Fprintf(stderr, "trellis tree: unknown verb %q\n\n%s", verb, treeUsage)
@@ -122,6 +124,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		Err:    stderr,
 		Record: treeRecorder(env.Dir),
 		Leave:  env.Leave,
+		Ctx:    env.Ctx,
 	}
 	switch verb {
 	case "new":

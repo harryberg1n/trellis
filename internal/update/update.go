@@ -4,6 +4,7 @@
 package update
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,11 +12,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/install"
+	"github.com/harryberg1n/trellis/internal/objects"
 	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 )
@@ -31,7 +34,8 @@ const smokeTimeout = 10 * time.Second
 
 // Env is what update takes from the process.
 type Env struct {
-	Runner  run.Runner // runs gh and the staged binary
+	Runner  run.Runner      // runs gh and the staged binary
+	Ctx     context.Context // cancelling it ends the running child; nil is never cancelled
 	Out     io.Writer
 	Root    string // the state root
 	Exe     string // the running binary, the one on PATH
@@ -56,6 +60,7 @@ func Run(env Env, o Options) error {
 	if env.Version == "" || (env.Version == "dev" && !o.AllowDev) {
 		return errors.New("refusing to update an unversioned build; pass --allow-dev")
 	}
+	env.Runner = run.WithContext(env.Runner, env.Ctx)
 	u := updater{Env: env, dry: o.Dry, gh: host.GH{Runner: env.Runner}}
 	if !o.Dry {
 		removeStale(env.Exe)
@@ -66,25 +71,25 @@ func Run(env Env, o Options) error {
 	}
 	if tag == env.Version || (o.To == "" && compareTags(tag, env.Version) < 0) {
 		u.say("[skip] already at %s", env.Version)
-		return nil
+		return u.refresh(o.ForgetMissing)
 	}
 	bin, err := u.pin(tag)
 	if err != nil {
 		return flat(err)
 	}
-	alive, missing, failed, err := u.reinstall(tag, bin, o.ForgetMissing)
+	alive, missing, tried, failed, err := u.reinstall(tag, bin, o.ForgetMissing, false)
 	if err != nil {
 		return flat(err)
 	}
 	pathErr := u.replaceOnPath(bin)
-	u.sweep(tag, sweepFacts{alive: alive, missing: missing})
+	u.sweep(tag, sweepFacts{alive: alive, missing: missing, forget: o.ForgetMissing})
 	u.step("update: %s -> %s", env.Version, tag)
 	if pathErr != nil {
 		u.say("the binary on PATH was not replaced: %s", oneLine(pathErr))
 		return flat(pathErr)
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d repos could not be updated", failed, len(alive))
+		return fmt.Errorf("%d of %d repos could not be updated", failed, tried)
 	}
 	return nil
 }
@@ -94,7 +99,17 @@ func flat(err error) error {
 	return errors.New(oneLine(err))
 }
 
-func oneLine(err error) string { return strings.Join(strings.Fields(err.Error()), " ") }
+// maxLine is the longest line oneLine returns, in runes.
+const maxLine = 200
+
+// oneLine is err on one line of at most maxLine runes, cut with an ellipsis.
+func oneLine(err error) string {
+	text := strings.Join(strings.Fields(err.Error()), " ")
+	if r := []rune(text); len(r) > maxLine {
+		return string(r[:maxLine-1]) + "…"
+	}
+	return text
+}
 
 type updater struct {
 	Env
@@ -241,31 +256,88 @@ func (u updater) smoke(staged, tag string) error {
 	return nil
 }
 
+// refresh is the work of an update that finds itself at the target version:
+// every recorded repo whose hooks do not all point at the running version is
+// re-installed, so a repo that failed last time is not left behind.
+func (u updater) refresh(forget bool) error {
+	bin := install.BinPath(u.Root, u.Version, filepath.Ext(u.Exe))
+	if _, err := os.Stat(bin); err != nil {
+		bin = u.Exe // Install pins the running binary when its pin is gone
+	}
+	_, _, tried, failed, err := u.reinstall(u.Version, bin, forget, true)
+	if err != nil {
+		return flat(err)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d repos could not be updated", failed, tried)
+	}
+	return nil
+}
+
+// repoProblem is why a recorded path is not the repository it was: "" when it
+// is one, else the reason. The path must still be the root of a repository, not
+// just exist: a directory that lost its .git must not get a .claude of its own.
+func repoProblem(repo string) string {
+	if _, err := os.Stat(repo); err != nil {
+		return "not found"
+	}
+	r, err := objects.Open(repo)
+	if err != nil || store.Canonical(r.Root) != store.Canonical(repo) {
+		return "not a repository root"
+	}
+	return ""
+}
+
+// staleRefs says what the hooks of repo point at when they are not all the
+// running version, "" when they are.
+func staleRefs(root, repo, version string) string {
+	refs, err := install.ReferencedVersions(root, repo)
+	switch {
+	case err != nil:
+		return "unreadable settings"
+	case len(refs) == 1 && refs[0] == version:
+		return ""
+	case len(refs) == 0:
+		return "no hooks"
+	}
+	return strings.Join(refs, ", ")
+}
+
 // reinstall points every recorded repo's hooks at the pinned binary of tag.
-// It returns the repos it found, the ones it did not, and how many failed. A
-// repo that is not found stays in the record unless forget says to drop it: an
-// unmounted drive or a moved checkout still has hooks that point at a pin.
-func (u updater) reinstall(tag, bin string, forget bool) (alive, missing []string, failed int, err error) {
+// It returns the repos it found, the ones it did not, how many it tried and how
+// many of those failed. A repo that is not found stays in the record unless
+// forget says to drop it: an unmounted drive or a moved checkout still has
+// hooks that point at a pin. With staleOnly a repo whose hooks already point
+// at tag alone is left as it is.
+func (u updater) reinstall(tag, bin string, forget, staleOnly bool) (alive, missing []string, tried, failed int, err error) {
 	repos, err := install.Repos(u.Root)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, 0, err
 	}
 	for _, repo := range repos {
-		if _, serr := os.Stat(repo); serr != nil {
+		if why := repoProblem(repo); why != "" {
 			if !forget {
-				u.step("skip %s: not found", repo)
+				u.step("skip %s: %s", repo, why)
 				missing = append(missing, repo)
 				continue
 			}
-			u.step("forget %s: not found", repo)
+			u.step("forget %s: %s", repo, why)
 			if !u.dry {
 				if err := install.ForgetRepo(u.Root, repo); err != nil {
-					return nil, nil, 0, err
+					return nil, nil, 0, 0, err
 				}
 			}
 			continue
 		}
 		alive = append(alive, repo)
+		if staleOnly {
+			stale := staleRefs(u.Root, repo, tag)
+			if stale == "" {
+				continue
+			}
+			u.step("reinstall %s: hooks point at %s, running %s", repo, stale, tag)
+		}
+		tried++
 		if u.dry {
 			u.step("install %s", repo)
 			continue
@@ -277,12 +349,24 @@ func (u updater) reinstall(tag, bin string, forget bool) (alive, missing []strin
 			failed++
 			continue
 		}
-		u.say("install %s: %d hooks updated", repo, len(actions)-1)
+		u.say("install %s: %d hooks updated", repo, hooksChanged(actions))
 		for _, problem := range install.Doctor(opts) {
 			u.say("doctor %s: %s", repo, problem)
 		}
 	}
-	return alive, missing, failed, nil
+	return alive, missing, tried, failed, nil
+}
+
+// hooksChanged counts the actions that added or rewrote a hook; a hook that
+// was already right is "keep" and not counted.
+func hooksChanged(actions []string) int {
+	n := 0
+	for _, a := range actions {
+		if strings.HasPrefix(a, "add hook ") || strings.HasPrefix(a, "update hook ") {
+			n++
+		}
+	}
+	return n
 }
 
 // replaceOnPath replaces the running binary with the pinned one, or says
@@ -321,6 +405,7 @@ func (u updater) replaceOnPath(bin string) error {
 // sweepFacts is what the sweep knows about the recorded repos.
 type sweepFacts struct {
 	alive, missing []string
+	forget         bool // --forget-missing: drop what is not found
 }
 
 // sweep removes the pinned versions beyond the newest three that no live repo's
@@ -348,9 +433,34 @@ func (u updater) sweep(tag string, facts sweepFacts) {
 		u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", facts.missing[0])
 		return
 	}
+	// Primary checkouts recorded as referenced only: update never installs into
+	// them, but a linked worktree of theirs may point at a pin.
+	readable := facts.alive
+	only, err := install.ReferencedRepos(u.Root)
+	if err != nil {
+		u.say("sweep: %s", oneLine(err))
+		return
+	}
+	for _, repo := range only {
+		if slices.Contains(readable, repo) {
+			continue
+		}
+		if why := repoProblem(repo); why != "" {
+			if facts.forget {
+				u.step("forget %s: %s", repo, why)
+				if !u.dry {
+					_ = install.ForgetReferenced(u.Root, repo) // a record left is read again next time
+				}
+				continue
+			}
+			u.say("sweep skipped: %s is not found; --forget-missing drops it from the record", repo)
+			return
+		}
+		readable = append(readable, repo)
+	}
 	// ReferencedVersions only reads, so a dry run reads it too.
-	for _, repo := range facts.alive {
-		refs, err := install.ReferencedVersions(u.Root, repo)
+	for _, repo := range readable {
+		refs, err := install.SweepReferences(u.Root, repo)
 		if err != nil {
 			u.say("sweep: %s: %s", repo, oneLine(err))
 			return
