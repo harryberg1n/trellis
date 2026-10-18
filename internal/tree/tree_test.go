@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -48,6 +49,7 @@ type fixture struct {
 	prSeen    bool              // a pull request exists for the branch
 	mergeable []string          // what successive pr views say; the last repeats; empty is MERGEABLE
 	review    string            // the reviewDecision of the PR
+	mergeErr  string            // the failure of pr merge; "" merges
 	head      string            // the PR head sha; "" is the local HEAD of the tree
 	watchFail string            // the text of a failed watch; "" is green
 	noChecks  bool              // the PR has no checks
@@ -108,6 +110,10 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		}
 		if f.watchFail != "" {
 			return run.Result{Stdout: []byte(f.watchFail), ExitCode: 1}, errors.New("gh: exit status 1")
+		}
+	case "pr merge":
+		if f.mergeErr != "" {
+			return run.Result{ExitCode: 1}, errors.New(f.mergeErr)
 		}
 	case "run view":
 		return run.Result{Stdout: []byte(f.logs[spec.Args[2]])}, nil
@@ -669,6 +675,40 @@ func TestMerge_RefusesTreeTheCheckDirtied(t *testing.T) {
 	}
 }
 
+func TestMerge_PushFailureIsOneLine(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	env := f.env(path)
+	env.Runner = failing{
+		Inner: f.gh, Verb: []string{"push"},
+		Err: "git: exit status 1: error: failed to push some refs\nhint: updates were rejected",
+	}
+
+	err := Merge(env, "")
+
+	if want := "tree merge: push failed: error: failed to push some refs"; err == nil || fixable(err) != nil || err.Error() != want {
+		t.Errorf("err = %v, want %q (exit 1)", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr create") {
+		t.Errorf("opened a PR after a failed push")
+	}
+}
+
+func TestMerge_MergeFailureIsOneLine(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeErr = "gh: exit status 1: GraphQL: Pull request is not mergeable\nsecond line"
+
+	err := Merge(f.env(path), "")
+
+	if want := "tree merge: merge failed: GraphQL: Pull request is not mergeable"; err == nil || fixable(err) != nil || err.Error() != want {
+		t.Errorf("err = %v, want %q (exit 1)", err, want)
+	}
+	if !exists(path) {
+		t.Errorf("tree removed though the merge failed")
+	}
+}
+
 func TestMerge_LocalRefusesDirtyTree(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)
@@ -689,11 +729,12 @@ func TestMerge_LocalRefusesDirtyTree(t *testing.T) {
 type failing struct {
 	Inner run.Runner
 	Verb  []string
+	Err   string // the failure text; default "git: forced failure"
 }
 
 func (f failing) Light(spec run.Spec) (run.Result, error) {
 	if spec.Name == "git" && len(spec.Args) >= len(f.Verb) && slices.Equal(spec.Args[:len(f.Verb)], f.Verb) {
-		return run.Result{ExitCode: 128}, errors.New("git: forced failure")
+		return run.Result{ExitCode: 128}, errors.New(cmp.Or(f.Err, "git: forced failure"))
 	}
 	return f.Inner.Light(spec)
 }
