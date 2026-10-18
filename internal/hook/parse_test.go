@@ -3,6 +3,7 @@ package hook
 import (
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -196,5 +197,20 @@ func TestParse_PowerShellCommandIsInTheContext(t *testing.T) {
 	_, ctx, err := Parse("PreToolUse", []byte(body))
 	if err != nil || ctx.Args["command"] != "git status" || ctx.Tool != "PowerShell" {
 		t.Errorf("context %+v, %v; want tool PowerShell with its command", ctx, err)
+	}
+}
+
+func TestCanonical_AcceptsEveryEventTheKernelNamesAndKeepsItsSpelling(t *testing.T) {
+	want := []string{
+		"PreToolUse", "PostToolUse", "Stop", "SessionStart", "SessionEnd", "UserPromptSubmit",
+		"PostToolUseFailure", "SubagentStart", "SubagentStop", "Notification", "PreCompact",
+	}
+	if got := kernel.HookEvents(); !slices.Equal(got, want) {
+		t.Fatalf("kernel.HookEvents = %v, want %v", got, want)
+	}
+	for _, ev := range want {
+		if got, ok := canonical(strings.ToLower(ev)); !ok || got != ev {
+			t.Errorf("canonical(%q) = %q, %v; want %q", strings.ToLower(ev), got, ok, ev)
+		}
 	}
 }

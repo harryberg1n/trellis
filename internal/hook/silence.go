@@ -61,7 +61,7 @@ func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (co
 		fail(deps, event, p, err)
 		return 0
 	}
-	if name, _ := canonical(event); name == "PreToolUse" {
+	if name, _ := canonical(event); name == kernel.HookPreToolUse {
 		return preToolUse(deps, event, p, stdout, stderr)
 	}
 	if p.ev.Kind == "" {
@@ -84,7 +84,7 @@ func record(deps Deps, p *parsed) error {
 	case ev.Kind == kernel.EvEdit && p.file != "":
 		blob, err := objects.WriteBlob(p.repo.GitDir, p.file)
 		if err != nil {
-			return fmt.Errorf("hook: blob for %s: %w", ev.Detail["path"], err)
+			return fmt.Errorf("hook: blob for %s: %w", ev.Detail[kernel.DetailPath], err)
 		}
 		ev.Detail["blob"] = blob
 	case ev.Kind == kernel.EvTurnAnchored:

@@ -152,7 +152,7 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 
 	seen := map[string]bool{}
 	for _, ev := range facts.Events {
-		p := ev.Detail["transcript"]
+		p := ev.Detail[kernel.DetailTranscript]
 		if ev.Kind != kernel.EvSessionUsage || p == "" || seen[p] {
 			continue
 		}
@@ -202,7 +202,7 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 	}
 	laneOfPR := map[int]string{}
 	for _, ev := range events {
-		if n, err := strconv.Atoi(ev.Detail["pr"]); err == nil && ev.Lane != "" {
+		if n, err := strconv.Atoi(ev.Detail[kernel.DetailPR]); err == nil && ev.Lane != "" {
 			laneOfPR[n] = ev.Lane
 		}
 	}
