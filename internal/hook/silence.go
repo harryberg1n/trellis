@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
@@ -69,8 +71,34 @@ func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (co
 	}
 	if err := record(deps, &p); err != nil {
 		fail(deps, event, p, err)
+		return 0
 	}
+	foldFallback(deps)
 	return 0
+}
+
+// Limits of the fallback store: a run folds at most foldBatch of its files into
+// the log, and the store keeps at most fallbackCap.
+const (
+	foldBatch   = 200
+	fallbackCap = 1000
+)
+
+// foldFallback appends the events an earlier run parked in the fallback store,
+// oldest first, once this run has appended its own. It is best effort: a lock
+// that is busy, or any failure, leaves the files for the next run.
+func foldFallback(deps Deps) {
+	defer func() { _ = recover() }()
+	if deps.Store == nil || deps.Fallback == "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(deps.Fallback, "events.pending")); err != nil {
+		return
+	}
+	_ = deps.Store.Locked(func(tx *store.Tx) error {
+		_, err := tx.FoldFallback(deps.Fallback, foldBatch)
+		return err
+	})
 }
 
 // record performs the event's effect and appends the event.
@@ -171,8 +199,11 @@ func fail(deps Deps, event string, p parsed, err error) {
 	if clk == nil {
 		clk = clock.Real()
 	}
+	// Opening creates the directory: it exists only once something is parked.
 	if s, oerr := store.Open(deps.Fallback, clk); oerr == nil {
-		_ = s.Park(ev)
+		if s.Park(ev) == nil {
+			_ = s.CapParked(fallbackCap)
+		}
 	}
 }
 

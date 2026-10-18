@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,16 +138,38 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		return nil, nil
 	}
 	tx.folded = true
-	files, err := filepath.Glob(filepath.Join(tx.s.pendingDir(), "*.json"))
+	return tx.foldDir(tx.s.pendingDir(), stamp, 0)
+}
+
+// FoldFallback appends the events parked in dir/events.pending, a fallback
+// store another process wrote when this one was unusable, oldest first, and
+// removes their files. At most max files are taken (0 means all). A dir that
+// is not there folds nothing.
+func (tx *Tx) FoldFallback(dir string, max int) ([]kernel.Event, error) {
+	return tx.foldDir(filepath.Join(dir, "events.pending"), nil, max)
+}
+
+type parked struct {
+	name string
+	ev   kernel.Event
+}
+
+// readParked reads the *.json files of dir. An unreadable one is set aside as
+// .bad. A dir that is not there holds nothing.
+func readParked(dir string) ([]parked, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	type parked struct {
-		name string
-		ev   kernel.Event
-	}
 	var ps []parked
-	for _, name := range files {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := filepath.Join(dir, e.Name())
 		raw, err := os.ReadFile(name)
 		var ev kernel.Event
 		if err == nil {
@@ -159,6 +182,14 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 			continue
 		}
 		ps = append(ps, parked{name, ev})
+	}
+	return ps, nil
+}
+
+func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, max int) ([]kernel.Event, error) {
+	ps, err := readParked(dir)
+	if err != nil {
+		return nil, err
 	}
 	// A fold that crashed after its append left the file behind; its event is
 	// already in the log, so drop the file instead of appending it again.
@@ -192,6 +223,9 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		}
 		return ps[i].name < ps[j].name
 	})
+	if max > 0 && len(ps) > max {
+		ps = ps[:max]
+	}
 	evs := make([]kernel.Event, len(ps))
 	for i, p := range ps {
 		evs[i] = p.ev
@@ -209,6 +243,44 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		_ = tx.s.remove(p.name)
 	}
 	return out, nil
+}
+
+// CapParked keeps at most max files in events.pending and removes the oldest
+// (by modification time, then name) beyond that.
+func (s *Store) CapParked(max int) error {
+	entries, err := os.ReadDir(s.pendingDir())
+	if err != nil {
+		return err
+	}
+	type file struct {
+		name string
+		mod  time.Time
+	}
+	var files []file
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			files = append(files, file{e.Name(), info.ModTime()})
+		}
+	}
+	if len(files) <= max {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.Before(files[j].mod)
+		}
+		return files[i].name < files[j].name
+	})
+	var errs []error
+	for _, f := range files[:len(files)-max] {
+		if err := s.remove(filepath.Join(s.pendingDir(), f.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Append folds in parked events (once), then appends evs.

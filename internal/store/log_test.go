@@ -377,3 +377,127 @@ func TestLog_UnterminatedCompleteTailKeepsItsSeq(t *testing.T) {
 		}
 	}
 }
+
+func TestFoldFallback_AppendsParkedFilesOldestFirstAndDeletesThem(t *testing.T) {
+	s, _, _ := open(t)
+	fb, err := Open(filepath.Join(t.TempDir(), "fb"), clock.Fake(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tree := range []string{"tree/new", "tree/old"} {
+		e := ev("internal.error", tree)
+		e.At = t0.Add(time.Duration(2-i) * time.Minute)
+		if err := fb.Park(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var folded []kernel.Event
+	err = s.Locked(func(tx *Tx) error {
+		var ferr error
+		folded, ferr = tx.FoldFallback(fb.dir, 200)
+		return ferr
+	})
+	if err != nil || len(folded) != 2 || folded[0].Tree != "tree/old" || folded[1].Tree != "tree/new" {
+		t.Fatalf("folded %+v, %v; want tree/old then tree/new", folded, err)
+	}
+	got, _ := s.Read(1)
+	if len(got) != 2 || got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Errorf("log %+v, want the two events with Seq 1 and 2", got)
+	}
+	if m, _ := os.ReadDir(fb.pendingDir()); len(m) != 0 {
+		t.Errorf("fallback still holds %d files, want none", len(m))
+	}
+}
+
+func TestFoldFallback_TakesAtMostMaxFilesPerRun(t *testing.T) {
+	s, _, _ := open(t)
+	fb, err := Open(filepath.Join(t.TempDir(), "fb"), clock.Fake(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 5 {
+		e := ev("internal.error", "tree/a")
+		e.At = t0.Add(time.Duration(i) * time.Second)
+		if err := fb.Park(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = s.Locked(func(tx *Tx) error { _, err := tx.FoldFallback(fb.dir, 3); return err })
+	if m, _ := os.ReadDir(fb.pendingDir()); len(m) != 2 {
+		t.Errorf("fallback holds %d files after folding at most 3 of 5, want 2", len(m))
+	}
+	got, _ := s.Read(1)
+	if len(got) != 3 || !got[2].At.Equal(t0.Add(2*time.Second)) {
+		t.Errorf("log %+v, want the three oldest", got)
+	}
+}
+
+func TestFoldFallback_ADirectoryThatIsNotThereFoldsNothing(t *testing.T) {
+	s, _, _ := open(t)
+	err := s.Locked(func(tx *Tx) error {
+		evs, err := tx.FoldFallback(filepath.Join(t.TempDir(), "nowhere"), 200)
+		if len(evs) != 0 {
+			t.Errorf("folded %v from nowhere", evs)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCapParked_DropsTheOldestBeyondMax(t *testing.T) {
+	fb, err := Open(filepath.Join(t.TempDir(), "fb"), clock.Fake(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 6 {
+		if err := fb.Park(ev("internal.error", "tree/"+string(rune('a'+i)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, _ := os.ReadDir(fb.pendingDir())
+	oldest := map[string]bool{}
+	for i, f := range files {
+		when := t0.Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(filepath.Join(fb.pendingDir(), f.Name()), when, when); err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 {
+			oldest[f.Name()] = true
+		}
+	}
+	if err := fb.CapParked(4); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := os.ReadDir(fb.pendingDir())
+	if len(left) != 4 {
+		t.Fatalf("%d files left, want 4", len(left))
+	}
+	for _, f := range left {
+		if oldest[f.Name()] {
+			t.Errorf("%s is one of the two oldest and was kept", f.Name())
+		}
+	}
+}
+
+func TestFoldPending_FoldsFromAStateRootWithGlobCharacters(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "s[1]")
+	s, err := Open(dir, clock.Fake(t0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Park(ev("edit", "tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ev("commit", "tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Read(1)
+	if len(got) != 2 || got[0].Kind != "edit" {
+		t.Errorf("log %+v, want the parked edit folded in before the commit", got)
+	}
+	if m, _ := os.ReadDir(s.pendingDir()); len(m) != 0 {
+		t.Errorf("pending holds %d files, want none", len(m))
+	}
+}

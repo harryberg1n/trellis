@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/testiso"
 	"github.com/harryberg1n/trellis/internal/testsupport"
 
@@ -405,5 +408,72 @@ func TestRecorder_UsesTheRepoTheCallerLocated(t *testing.T) {
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(t.TempDir(), f, "k\n")))
 	if evs := e.events(t); len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Detail["path"] != "k.txt" {
 		t.Errorf("events %+v, want one edit of k.txt", evs)
+	}
+}
+
+// parkFallback puts n internal.error events, one second apart from t0, into the
+// fallback store of e.
+func parkFallback(t *testing.T, e *env, n int) {
+	t.Helper()
+	fb, err := store.Open(e.fallback, clock.Fake(time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		ev := kernel.Event{Kind: kernel.EvInternalError, Tree: "tree/parked", At: time.Date(2020, 1, 1, 0, 0, i, 0, time.UTC), Detail: map[string]string{"error": "parked"}}
+		if err := fb.Park(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRecorder_FoldsTheFallbackOnTheNextGoodRun(t *testing.T) {
+	e := newEnv(t)
+	parkFallback(t, e, 2)
+	f := filepath.Join(e.repo, "x.txt")
+	testiso.Write(t, f, "x\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n")))
+	got := kinds(e.events(t))
+	if want := []string{"edit", "internal.error", "internal.error"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("log kinds %v, want the run's own event first, then the two parked", got)
+	}
+	if left := fallbackFiles(e); len(left) != 0 {
+		t.Errorf("fallback still holds %v, want none", left)
+	}
+}
+
+func TestRecorder_FoldsAtMost200FallbackFilesPerRun(t *testing.T) {
+	e := newEnv(t)
+	parkFallback(t, e, 250)
+	f := filepath.Join(e.repo, "x.txt")
+	testiso.Write(t, f, "x\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n")))
+	if left := fallbackFiles(e); len(left) != 50 {
+		t.Errorf("fallback holds %d files, want 50", len(left))
+	}
+	if got := len(e.events(t)); got != 201 {
+		t.Errorf("log holds %d events, want 201", got)
+	}
+}
+
+func TestRecorder_TheFallbackIsCappedAt1000Files(t *testing.T) {
+	e := newEnv(t)
+	parkFallback(t, e, 1000)
+	e.deps.Store, e.deps.Err = nil, errors.New("state root unusable")
+	f := filepath.Join(e.repo, "x.txt")
+	testiso.Write(t, f, "x\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n")))
+	if got := fallbackFiles(e); len(got) != 1000 {
+		t.Errorf("fallback holds %d files, want the cap of 1000", len(got))
+	}
+}
+
+func TestRecorder_NoFallbackDirectoryUntilSomethingFails(t *testing.T) {
+	e := newEnv(t)
+	f := filepath.Join(e.repo, "x.txt")
+	testiso.Write(t, f, "x\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n")))
+	if _, err := os.Stat(e.fallback); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("fallback dir: %v, want it absent after a good run", err)
 	}
 }
