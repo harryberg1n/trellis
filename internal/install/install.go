@@ -37,8 +37,12 @@ func SettingsPath(repo string) string {
 func wanted(bin string) []eventEntry {
 	type spec struct{ event, matcher string }
 	specs := []spec{
-		{"PreToolUse", toolMatcher}, {"PostToolUse", toolMatcher},
-		{"Stop", ""}, {"SessionStart", ""}, {"SessionEnd", ""}, {"UserPromptSubmit", ""},
+		{"PreToolUse", toolMatcher},
+		{"PostToolUse", toolMatcher},
+		{"Stop", ""},
+		{"SessionStart", ""},
+		{"SessionEnd", ""},
+		{"UserPromptSubmit", ""},
 	}
 	out := make([]eventEntry, 0, len(specs))
 	for _, s := range specs {

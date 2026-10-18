@@ -1,0 +1,60 @@
+package install
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestPluginManifest_HooksMirrorTheInstall(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Hooks map[string][]Entry `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	const tools = "Edit|Write|Bash|PowerShell"
+	wantMatcher := map[string]string{
+		"PreToolUse": tools, "PostToolUse": tools,
+		"Stop": "", "SessionStart": "", "SessionEnd": "", "UserPromptSubmit": "",
+	}
+	if len(doc.Hooks) != len(wantMatcher) {
+		t.Errorf("hooks.json has %d events, want %d", len(doc.Hooks), len(wantMatcher))
+	}
+	for ev, matcher := range wantMatcher {
+		entries := doc.Hooks[ev]
+		if len(entries) != 1 || len(entries[0].Hooks) != 1 {
+			t.Errorf("%s: %+v", ev, entries)
+			continue
+		}
+		h := entries[0].Hooks[0]
+		if entries[0].Matcher != matcher || h.Type != "command" || h.Command != "trellis hook "+ev || h.Timeout != 10 {
+			t.Errorf("%s: matcher %q, hook %+v", ev, entries[0].Matcher, h)
+		}
+	}
+	// The per-repo install writes the same events and matchers.
+	for _, w := range wanted("/s/bin/v/trellis") {
+		if w.Entry.Matcher != wantMatcher[w.Event] || w.Entry.Hooks[0].Timeout != 10 {
+			t.Errorf("install differs from the manifest for %s: %+v", w.Event, w.Entry)
+		}
+	}
+}
+
+func TestPluginManifest_PluginJSONNamesTrellis(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]string
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p["name"] != "trellis" || p["version"] == "" || p["description"] == "" {
+		t.Errorf("plugin.json: %v", p)
+	}
+}
