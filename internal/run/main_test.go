@@ -55,8 +55,8 @@ func stubbornMain() int {
 	return 0
 }
 
-// exiterMain starts a grandchild that holds this child'"'"'s output pipes open,
-// reports the grandchild'"'"'s pid, and exits 0 at once.
+// exiterMain starts a grandchild that holds this child's output pipes open,
+// reports the grandchild's pid, and exits 0 at once.
 func exiterMain() int {
 	gc := exec.Command(os.Args[0])
 	gc.Env = append(os.Environ(), roleEnv+"=sleeper")

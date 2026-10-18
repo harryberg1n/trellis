@@ -534,19 +534,49 @@ func refuseUnmerged(env Env, w where, name string) error {
 }
 
 // landed reports whether the branch was merged in a way that leaves its
-// commits out of the default branch's ancestry: with a remote, gh finds a
-// merged pull request with the branch as head; without one, the default branch
-// holds the "Merge tree <name>" commit a local landing makes. A gh that cannot
+// commits out of the default branch's ancestry, and the branch tip is what was
+// merged. The name alone proves nothing: a name is reused, and gh matches a
+// pull request from any base or fork. With a remote, a merged pull request into
+// the default branch counts when the tip is its head commit, or is below its
+// merge commit. Without one, the default branch must hold a "Merge tree <name>"
+// commit whose body records `tip <sha>` of this very tip. A gh that cannot
 // answer is "not known to be merged".
 func landed(env Env, w where, name, base string) bool {
+	tip, err := env.runGit(w.Primary, "rev-parse", "refs/heads/"+name)
+	if err != nil || tip == "" {
+		return false
+	}
 	if w.Repo.Remote != "" {
-		merged, err := (host.GH{Runner: env.runner(), Dir: w.Primary}).HasMergedPR(name)
-		return err == nil && merged
+		prs, err := (host.GH{Runner: env.runner(), Dir: w.Primary}).MergedPRs(name)
+		if err != nil {
+			return false
+		}
+		for _, pr := range prs {
+			if pr.BaseBranch != w.Repo.Default {
+				continue
+			}
+			if strings.EqualFold(pr.HeadSHA, tip) {
+				return true
+			}
+			if m := pr.MergeSHA(); m != "" {
+				if _, err := env.runGit(w.Primary, "merge-base", "--is-ancestor", tip, m); err == nil {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	want := "Merge tree " + name
-	for _, subject := range lines(mustGit(env, w.Primary, "log", "--format=%s", "--fixed-strings", "--grep="+want, base)) {
-		if subject == want {
-			return true
+	out := mustGit(env, w.Primary, "log", "--format=%s%x1f%b%x1e", "--fixed-strings", "--grep="+want, base)
+	for _, rec := range strings.Split(out, "\x1e") {
+		subject, body, _ := strings.Cut(strings.TrimSpace(rec), "\x1f")
+		if subject != want {
+			continue
+		}
+		for _, l := range lines(body) {
+			if l == "tip "+tip {
+				return true
+			}
 		}
 	}
 	return false

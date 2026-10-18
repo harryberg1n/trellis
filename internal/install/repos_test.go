@@ -278,7 +278,7 @@ func TestSweepReferences_AWorktreeThatIsGoneStopsTheSweep(t *testing.T) {
 
 	_, err := SweepReferences(f.root, f.repo)
 
-	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") {
+	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") || !strings.Contains(err.Error(), "trellis update continues once it is pruned") {
 		t.Errorf("err = %v, want one line naming the missing worktree", err)
 	}
 }

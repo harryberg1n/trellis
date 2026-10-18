@@ -205,17 +205,16 @@ func TestGH_MergeCommitArgvAndDecoding(t *testing.T) {
 	}
 }
 
-func TestGH_HasMergedPRArgvAndDecoding(t *testing.T) {
-	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":5}]`)}
+func TestGH_MergedPRsArgvAndDecoding(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":5,"headRefOid":"aaa","baseRefName":"main","mergeCommit":{"oid":"bbb"}},{"number":4,"headRefOid":"ccc","baseRefName":"dev","mergeCommit":null}]`)}
 
-	got, err := GH{Runner: r, Dir: "d"}.HasMergedPR("feat")
+	got, err := GH{Runner: r, Dir: "d"}.MergedPRs("feat")
 
-	want := []string{"pr", "list", "--head", "feat", "--state", "merged", "--limit", "1", "--json", "number"}
-	if err != nil || !got || !reflect.DeepEqual(r.Specs()[0].Args, want) {
-		t.Errorf("merged = %v, err = %v, args = %v; want true from %v", got, err, r.Specs()[0].Args, want)
+	want := []string{"pr", "list", "--head", "feat", "--state", "merged", "--limit", "30", "--json", "number,headRefOid,baseRefName,mergeCommit"}
+	if err != nil || len(got) != 2 || !reflect.DeepEqual(r.Specs()[0].Args, want) {
+		t.Fatalf("prs = %+v, err = %v, args = %v; want two from %v", got, err, r.Specs()[0].Args, want)
 	}
-	none := &testsupport.FakeRunner{Answer: testsupport.Stdout("[]")}
-	if got, err := (GH{Runner: none}).HasMergedPR("feat"); err != nil || got {
-		t.Errorf("merged = %v, err = %v; want false", got, err)
+	if got[0].HeadSHA != "aaa" || got[0].BaseBranch != "main" || got[0].MergeSHA() != "bbb" || got[1].MergeSHA() != "" {
+		t.Errorf("decoded %+v", got)
 	}
 }

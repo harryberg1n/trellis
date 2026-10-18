@@ -56,8 +56,16 @@ func mergeLocal(env Env, w where, check string, rebase bool) error {
 		if _, err := env.runGit(w.Primary, append(args, name)...); err != nil {
 			return abortMerge(env, w, err)
 		}
-	} else if err := squashLocal(env, w, subject, body); err != nil {
-		return err
+	} else {
+		// The tip goes in the body, so tree rm can tell this very branch from a
+		// later one that reuses the name.
+		tip, err := env.runGit(w.Primary, "rev-parse", "refs/heads/"+name)
+		if err != nil {
+			return fmt.Errorf("tree merge: %w", err)
+		}
+		if err := squashLocal(env, w, subject, strings.TrimSpace(body+"\n\ntip "+tip)); err != nil {
+			return err
+		}
 	}
 	// The change is committed: recording it and removing the tree finish even
 	// if the verb is interrupted now.
@@ -131,8 +139,15 @@ func undoFailedSquash(env Env, w where, cause error, merging bool) error {
 	if merging {
 		files = lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
 	}
+	// A lock left by the git child that our cancel killed is ours to remove, and
+	// only then: on an ordinary failure a live git of someone else may hold it.
+	if cancelled && !errors.Is(cause, run.ErrNotStarted) {
+		if lerr := removeStaleIndexLock(env, w.Primary); lerr != nil {
+			return fmt.Errorf("tree merge: could not undo the squash in %s: %s", w.Primary, firstLine(lerr))
+		}
+	}
 	if uerr := undoSquash(env, w.Primary); uerr != nil {
-		return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
+		return fmt.Errorf("tree merge: could not undo the squash in %s: %s", w.Primary, firstLine(uerr))
 	}
 	switch {
 	case cancelled:
@@ -140,7 +155,7 @@ func undoFailedSquash(env Env, w where, cause error, merging bool) error {
 	case len(files) > 0:
 		return conflictFixable(w.Repo, files)
 	}
-	return fmt.Errorf("tree merge: %w", cause)
+	return fmt.Errorf("tree merge: %s", firstLine(cause))
 }
 
 // undoSquash puts the primary back to HEAD after a squash that stopped. It
@@ -153,9 +168,6 @@ func undoFailedSquash(env Env, w where, cause error, merging bool) error {
 // a glob character matches only itself. The squash's leftovers (SQUASH_MSG,
 // MERGE_MSG, AUTO_MERGE) go too, so the next commit does not open prefilled.
 func undoSquash(env Env, dir string) error {
-	if err := removeStaleIndexLock(env, dir); err != nil {
-		return err
-	}
 	out, err := env.runGit(dir, "diff", "-z", "--no-renames", "--name-only", "HEAD")
 	if err != nil {
 		return err
@@ -201,10 +213,10 @@ func undoSquash(env Env, dir string) error {
 	return nil
 }
 
-// removeStaleIndexLock deletes the index.lock a killed git child left behind.
-// The child that made it has exited by now, and the primary was verified
-// clean before the merge, so no other git of ours holds it; restoring paths
-// fails while it is there.
+// removeStaleIndexLock deletes the index.lock a git child that our cancel killed
+// left behind. The child has exited by now; restoring paths fails while the
+// lock is there. Call it only after our own cancel, never for a failure whose
+// lock may belong to someone else's git.
 func removeStaleIndexLock(env Env, dir string) error {
 	p, err := env.runGit(dir, "rev-parse", "--git-path", "index.lock")
 	if err != nil {

@@ -267,19 +267,38 @@ func (g GH) MergeCommit(number int) (string, error) {
 	return pr.MergeCommit.OID, nil
 }
 
-// HasMergedPR reports whether a merged pull request has branch as its head.
-// A branch GitHub deleted after the merge, squash or rebase, has no ancestry
-// in the default branch and no upstream left; this is how it is known merged.
-func (g GH) HasMergedPR(branch string) (bool, error) {
-	out, err := g.gh(nil, "pr", "list", "--head", branch, "--state", "merged", "--limit", "1", "--json", "number")
+// MergedPR is a merged pull request as `gh pr list --state merged --json`
+// reports it: enough to tell whether it carried a given branch tip.
+type MergedPR struct {
+	Number      int    `json:"number"`
+	HeadSHA     string `json:"headRefOid"`
+	BaseBranch  string `json:"baseRefName"`
+	MergeCommit *struct {
+		OID string `json:"oid"`
+	} `json:"mergeCommit"`
+}
+
+// MergeSHA is the merge commit's sha, "" when GitHub reports none.
+func (p MergedPR) MergeSHA() string {
+	if p.MergeCommit == nil {
+		return ""
+	}
+	return p.MergeCommit.OID
+}
+
+// MergedPRs lists the merged pull requests that have branch as their head
+// branch name. The name alone is not the branch: a name can be reused, and
+// gh matches a pull request from any base or fork, so the caller compares the
+// commits (HeadSHA, MergeSHA) with the branch tip.
+func (g GH) MergedPRs(branch string) ([]MergedPR, error) {
+	out, err := g.gh(nil, "pr", "list", "--head", branch, "--state", "merged", "--limit", "30",
+		"--json", "number,headRefOid,baseRefName,mergeCommit")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	var prs []struct {
-		Number int `json:"number"`
-	}
+	var prs []MergedPR
 	if err := json.Unmarshal(out, &prs); err != nil {
-		return false, fmt.Errorf("host: reading gh pr list: %w", err)
+		return nil, fmt.Errorf("host: reading gh pr list: %w", err)
 	}
-	return len(prs) > 0, nil
+	return prs, nil
 }

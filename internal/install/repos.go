@@ -233,7 +233,7 @@ func LinkedWorktrees(repo string) ([]string, error) {
 			dotGit = filepath.Join(admin, dotGit)
 		}
 		if _, err := os.Stat(dotGit); err != nil {
-			return nil, fmt.Errorf("linked worktree %s is not found (deleted or unmounted?): git worktree prune forgets it", filepath.Dir(dotGit))
+			return nil, fmt.Errorf("linked worktree %s is not found (deleted or unmounted?): git worktree prune forgets it, and trellis update continues once it is pruned", filepath.Dir(dotGit))
 		}
 		out = append(out, store.Canonical(filepath.Dir(dotGit)))
 	}
