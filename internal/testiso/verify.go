@@ -176,13 +176,7 @@ func makeVictim(t *testing.T) string {
 
 // cleanedEnv is this process's environment with every GIT_* variable dropped.
 func cleanedEnv() []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); !strings.HasPrefix(name, "GIT_") {
-			env = append(env, kv)
-		}
-	}
-	return env
+	return dropGit(os.Environ())
 }
 
 // hostileEnv is the environment of the probe's child: this process's, with the
