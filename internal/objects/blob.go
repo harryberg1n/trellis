@@ -80,10 +80,7 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 		_ = os.Remove(tmp.Name()) // best effort: werr is the error worth reporting
 		return "", werr
 	}
-	if err := os.Chmod(tmp.Name(), 0o444); err != nil { // git's own mode for objects
-		_ = os.Remove(tmp.Name()) // best effort: the chmod error is the one worth reporting
-		return "", err
-	}
+	_ = os.Chmod(tmp.Name(), 0o444) // best effort, git's own loose-object mode
 	if err := os.Rename(tmp.Name(), final); err != nil {
 		_ = os.Remove(tmp.Name()) // best effort: the rename outcome is decided below
 		// A concurrent writer may have won the rename; the object is then there.
