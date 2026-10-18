@@ -1,9 +1,12 @@
 name: ci
 
+# Every commit on main lands through a pull request that trellis tree merge
+# refuses unless the branch is up to date with main, so the pull request run
+# already tests the exact content that reaches main. A run on the push to
+# main would repeat it. workflow_dispatch is the hand-run for a given ref.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
