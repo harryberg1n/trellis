@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/store"
+	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
 func TestInstall_RecordsTheRepo(t *testing.T) {
@@ -29,51 +30,55 @@ func TestInstall_RecordsTheRepo(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []string{want}) {
 		t.Fatalf("Repos = %v, %v; want [%s] once", got, err, want)
 	}
-	if file, wantFile := readFile(t, filepath.Join(f.root, "repos.txt")), "# trellis repos v1\n"+want+"\n"; file != wantFile {
-		t.Errorf("repos.txt = %q, want %q", file, wantFile)
+	if file := readFile(t, filepath.Join(f.root, "repos.txt")); file != want+"\n" {
+		t.Errorf("repos.txt = %q, want %q", file, want+"\n")
 	}
 }
 
-func TestRepos_OnlyAnInstallMarksTheRecordComplete(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
-	if done, err := ReposComplete(root); err != nil || done {
-		t.Fatalf("ReposComplete with no record = %v, %v; want false", done, err)
-	}
-	legacy := filepath.Join(t.TempDir(), "legacy")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "repos.txt"), []byte(legacy+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if done, _ := ReposComplete(root); done {
-		t.Error("a record with no marker line is complete")
-	}
-	if err := ForgetRepo(root, filepath.Join(t.TempDir(), "never-recorded")); err != nil {
-		t.Fatal(err)
-	}
-	if err := ForgetRepo(root, legacy); err != nil {
-		t.Fatal(err)
-	}
-	if done, _ := ReposComplete(root); done {
-		t.Error("forgetting a repo marked the record complete")
+func TestInstall_InATreeRecordsThePrimaryOnce(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+
+	for _, repo := range []string{tree, f.repo, tree} {
+		o := f.opts("v0.0.2", false)
+		o.Repo = repo
+		if _, err := Install(o); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	other := filepath.Join(t.TempDir(), "other")
-	if err := RecordRepo(root, other); err != nil {
+	got, err := Repos(f.root)
+	if want := []string{store.Canonical(f.repo)}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Repos = %v, %v; want %v once", got, err, want)
+	}
+}
+
+func TestCreatedPins_RecordOncePerVersion(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if got, err := CreatedPins(root); err != nil || len(got) != 0 {
+		t.Fatalf("CreatedPins with no record = %v, %v; want none", got, err)
+	}
+	for _, v := range []string{"v0.0.4", "v0.0.5", "v0.0.4"} {
+		if err := RecordCreatedPin(root, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := CreatedPins(root)
+	if want := []string{"v0.0.4", "v0.0.5"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("CreatedPins = %v, %v; want %v", got, err, want)
+	}
+	if file := readFile(t, filepath.Join(root, "pins.txt")); file != "v0.0.4\nv0.0.5\n" {
+		t.Errorf("pins.txt = %q", file)
+	}
+}
+
+func TestPin_DoesNotRecordACreatedPin(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := Pin(f.root, "v0.0.9", f.exe); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := ReposComplete(root); err != nil || !done {
-		t.Errorf("after RecordRepo ReposComplete = %v, %v; want true", done, err)
-	}
-	if got, err := Repos(root); err != nil || !reflect.DeepEqual(got, []string{store.Canonical(other)}) {
-		t.Errorf("Repos = %v, %v; want the marker line left out", got, err)
-	}
-	if err := ForgetRepo(root, other); err != nil {
-		t.Fatal(err)
-	}
-	if done, _ := ReposComplete(root); !done {
-		t.Error("forgetting a repo dropped the marker")
+	if got, _ := CreatedPins(f.root); len(got) != 0 {
+		t.Errorf("Pin recorded %v; only update records what it created", got)
 	}
 }
 

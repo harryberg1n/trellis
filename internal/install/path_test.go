@@ -3,7 +3,23 @@ package install
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/testiso"
 )
+
+func TestOwned_AnotherSpellingOfTheStateRoot(t *testing.T) {
+	root := t.TempDir()
+	testiso.Write(t, BinPath(root, "v0.0.2", ""), "x")
+	alias := testiso.AltSpelling(t, root)
+
+	got, ok := Owned(Command(BinPath(root, "v0.0.2", ""), "Stop"), alias)
+	if !ok || got != "v0.0.2" {
+		t.Errorf("Owned through another spelling of the root = %q, %v; want v0.0.2", got, ok)
+	}
+	if _, ok := Owned(Command(BinPath(root, "v0.0.2", ""), "Stop"), t.TempDir()); ok {
+		t.Error("a different root owned the hook")
+	}
+}
 
 func TestCommand_QuotesTheAbsolutePathAndNamesTheEvent(t *testing.T) {
 	got := Command(filepath.FromSlash("/state/bin/v0.0.1/trellis"), "PreToolUse")
