@@ -162,7 +162,7 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 			_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
 			continue
 		}
-		facts.Usage = append(facts.Usage, measure.Usage{Lane: ev.Lane, Session: ev.Session, Transcript: raw})
+		facts.Usage = append(facts.Usage, measure.Usage{Tree: ev.Tree, Session: ev.Session, Transcript: raw})
 	}
 	return facts, name, nil
 }
@@ -200,10 +200,10 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 	if err != nil {
 		return nil, err
 	}
-	laneOfPR := map[int]string{}
+	treeOfPR := map[int]string{}
 	for _, ev := range events {
-		if n, err := strconv.Atoi(ev.Detail[kernel.DetailPR]); err == nil && ev.Lane != "" {
-			laneOfPR[n] = ev.Lane
+		if n, err := strconv.Atoi(ev.Detail[kernel.DetailPR]); err == nil && ev.Tree != "" {
+			treeOfPR[n] = ev.Tree
 		}
 	}
 	var merges []measure.Merge
@@ -222,10 +222,10 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 			m.PR, _ = strconv.Atoi(g[1])
 		} else if g := mergePR.FindStringSubmatch(m.Subject); g != nil {
 			m.PR, _ = strconv.Atoi(g[1])
-			m.Lane = path.Clean(g[2])
+			m.Tree = path.Clean(g[2])
 		}
-		if lane, ok := laneOfPR[m.PR]; ok && m.PR > 0 {
-			m.Lane = lane
+		if tree, ok := treeOfPR[m.PR]; ok && m.PR > 0 {
+			m.Tree = tree
 		}
 		diff, err := objects.Git(r, root, nil, "show", "-m", "--first-parent", "-U0", "--no-color", "--format=", m.Sha)
 		if err != nil {

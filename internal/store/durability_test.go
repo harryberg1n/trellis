@@ -25,7 +25,7 @@ func TestStore_LazyAppendSkipsFsync(t *testing.T) {
 
 	err := s.Locked(func(tx *Tx) error {
 		tx.SetDurability(Lazy)
-		if _, err := tx.Append(kernel.Event{Kind: "edit", Lane: "l", Session: "s"}); err != nil {
+		if _, err := tx.Append(kernel.Event{Kind: "edit", Tree: "l", Session: "s"}); err != nil {
 			return err
 		}
 		return tx.Save(Checkpoint{LastSeq: 1})
@@ -38,7 +38,7 @@ func TestStore_LazyAppendSkipsFsync(t *testing.T) {
 	}
 
 	err = s.Locked(func(tx *Tx) error {
-		if _, err := tx.Append(kernel.Event{Kind: "edit", Lane: "l", Session: "s"}); err != nil {
+		if _, err := tx.Append(kernel.Event{Kind: "edit", Tree: "l", Session: "s"}); err != nil {
 			return err
 		}
 		return tx.Save(Checkpoint{LastSeq: 2})
@@ -59,7 +59,7 @@ func TestStore_SyncFsyncsLogAndCheckpoint(t *testing.T) {
 	s, _, _ := open(t)
 	err := s.Locked(func(tx *Tx) error {
 		tx.SetDurability(Lazy)
-		if _, err := tx.Append(kernel.Event{Kind: "edit", Lane: "l", Session: "s"}); err != nil {
+		if _, err := tx.Append(kernel.Event{Kind: "edit", Tree: "l", Session: "s"}); err != nil {
 			return err
 		}
 		return tx.Save(Checkpoint{LastSeq: 1})

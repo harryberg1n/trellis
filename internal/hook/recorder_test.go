@@ -68,8 +68,8 @@ func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 		t.Fatalf("%d events %v, want 1", len(evs), kinds(evs))
 	}
 	ev := evs[0]
-	if ev.Kind != "edit" || ev.Lane != "main" || ev.Session != "sess-1" {
-		t.Errorf("event = kind %q lane %q session %q, want edit main sess-1", ev.Kind, ev.Lane, ev.Session)
+	if ev.Kind != "edit" || ev.Tree != "main" || ev.Session != "sess-1" {
+		t.Errorf("event = kind %q tree %q session %q, want edit main sess-1", ev.Kind, ev.Tree, ev.Session)
 	}
 	if ev.At.IsZero() {
 		t.Error("event has no time")
@@ -324,8 +324,8 @@ func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 	if got, want := kinds(evs), []string{"edit", "turn.anchored"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kinds %v, want %v", got, want)
 	}
-	if evs[0].Lane != "trunk" {
-		t.Errorf("lane %q, want trunk", evs[0].Lane)
+	if evs[0].Tree != "trunk" {
+		t.Errorf("tree %q, want trunk", evs[0].Tree)
 	}
 	if files := testiso.Git(t, repo, "ls-tree", "-r", "--name-only", "refs/trellis/replay/trunk"); files != "a.txt" {
 		t.Errorf("anchored tree holds %q, want a.txt", files)
@@ -334,7 +334,7 @@ func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 
 func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
 	e := newEnv(t)
-	wt := testiso.AddLane(t, e.repo, "wt", "side/lane")
+	wt := testiso.AddTree(t, e.repo, "wt", "side/tree")
 	f := filepath.Join(wt, "w.txt")
 	testiso.Write(t, f, "w\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(wt, f, "w\n")))
@@ -344,11 +344,11 @@ func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
 	if got, want := kinds(evs), []string{"edit", "turn.anchored"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kinds %v, want %v", got, want)
 	}
-	if evs[0].Lane != "side/lane" || evs[0].Detail["path"] != "w.txt" || evs[1].Lane != "side/lane" {
-		t.Errorf("events %+v, want lane side/lane and path w.txt", evs)
+	if evs[0].Tree != "side/tree" || evs[0].Detail["path"] != "w.txt" || evs[1].Tree != "side/tree" {
+		t.Errorf("events %+v, want tree side/tree and path w.txt", evs)
 	}
-	if got := testiso.Git(t, e.repo, "rev-parse", "--verify", "-q", "refs/trellis/replay/side--lane"); got == "" {
-		t.Error("no replay ref for side/lane")
+	if got := testiso.Git(t, e.repo, "rev-parse", "--verify", "-q", "refs/trellis/replay/side--tree"); got == "" {
+		t.Error("no replay ref for side/tree")
 	}
 }
 
@@ -360,7 +360,7 @@ func TestRecorder_NestedCwdFindsRoot(t *testing.T) {
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(sub, f, "n\n")))
 
 	evs := e.events(t)
-	if len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Lane != "main" || evs[0].Detail["path"] != "pkg/deep/n.txt" {
+	if len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Tree != "main" || evs[0].Detail["path"] != "pkg/deep/n.txt" {
 		t.Errorf("events %+v, want one edit on main for pkg/deep/n.txt", evs)
 	}
 }

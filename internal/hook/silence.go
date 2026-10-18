@@ -95,11 +95,11 @@ func record(deps Deps, p *parsed) error {
 		// blobs are passed in: their objects are already stored and WriteBlob
 		// finds them, while a blob for a file the turn later reverted or that
 		// is ignored would put a stale entry in the tree.
-		tree, commit, err := objects.AnchorTurn(deps.Runner, p.repo.Root, ev.Lane, "", nil)
+		tree, commit, err := objects.AnchorTurn(deps.Runner, p.repo.Root, ev.Tree, "", nil)
 		if err != nil {
 			return fmt.Errorf("hook: anchoring the turn: %w", err)
 		}
-		ev.Detail[kernel.DetailTree], ev.Detail[kernel.DetailCommit], ev.Detail[kernel.DetailRef] = tree, commit, objects.RefFor(ev.Lane)
+		ev.Detail[kernel.DetailTree], ev.Detail[kernel.DetailCommit], ev.Detail[kernel.DetailRef] = tree, commit, objects.RefFor(ev.Tree)
 	}
 	if len(ev.Detail) == 0 {
 		ev.Detail = nil
@@ -147,7 +147,7 @@ func fail(deps Deps, event string, p parsed, err error) {
 	defer func() { _ = recover() }()
 	ev := kernel.Event{
 		Kind:    kernel.EvInternalError,
-		Lane:    p.ev.Lane,
+		Tree:    p.ev.Tree,
 		Session: p.ev.Session,
 		At:      now(deps),
 		Detail:  map[string]string{"error": err.Error(), "event": event},

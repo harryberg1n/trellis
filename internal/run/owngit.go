@@ -10,8 +10,8 @@ import (
 // ErrOwnGitState is what Light reports for a git child that would write git
 // state trellis does not own. Incident: W42, a test-map worktree mutation
 // (fanpyp report 2026-10-17): a child of a tool wrote a ref and an index of
-// the lane it was reading. trellis writes refs under refs/trellis/ only, and
-// never a lane's index.
+// the tree it was reading. trellis writes refs under refs/trellis/ only, and
+// never a tree's index.
 var ErrOwnGitState = errors.New("trellis: refusing to write git state outside refs/trellis/")
 
 // trellisRefs is the one ref namespace a trellis child may write.
@@ -42,11 +42,11 @@ var branchWrites = []string{
 // read-tree, worktree add, fetch, commit, update-index, write-tree, ...) is
 // refused before it starts.
 //
-// "The index of a lane" is the index git opens for the checkout at Dir, or at
+// "The index of a tree" is the index git opens for the checkout at Dir, or at
 // the -C directory: <git dir>/index, the primary checkout's and a linked
 // worktree's alike. A Spec has no environment and Light removes GIT_INDEX_FILE
 // from a git child's, so no trellis child can use a private index: any verb
-// that writes an index writes a lane's, and none is on the list.
+// that writes an index writes a tree's, and none is on the list.
 func ownGitState(spec Spec) error {
 	if !isGit(spec.Name) {
 		return nil

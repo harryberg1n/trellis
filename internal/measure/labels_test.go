@@ -14,14 +14,14 @@ func day(n int) time.Time { return t0.Add(time.Duration(n) * 24 * time.Hour) }
 
 func span(s, e int) []Span { return []Span{{Start: s, End: e}} }
 
-func TestLabels_FourLaneFixture(t *testing.T) {
+func TestLabels_FourTreeFixture(t *testing.T) {
 	f := Facts{
 		Now: day(20),
 		Merges: []Merge{
-			{Sha: "aaaaaaa1111", Subject: "add a (#1)", PR: 1, Lane: "A", At: day(0), Added: map[string][]Span{"a.go": span(1, 10)}},
-			{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Lane: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
-			{Sha: "ccccccc3333", Subject: "add c (#3)", PR: 3, Lane: "C", At: day(0), Added: map[string][]Span{"c.go": span(1, 10)}},
-			{Sha: "ddddddd4444", Subject: "add d (#4)", PR: 4, Lane: "D", At: day(15), Added: map[string][]Span{"d.go": span(1, 10)}},
+			{Sha: "aaaaaaa1111", Subject: "add a (#1)", PR: 1, Tree: "A", At: day(0), Added: map[string][]Span{"a.go": span(1, 10)}},
+			{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Tree: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
+			{Sha: "ccccccc3333", Subject: "add c (#3)", PR: 3, Tree: "C", At: day(0), Added: map[string][]Span{"c.go": span(1, 10)}},
+			{Sha: "ddddddd4444", Subject: "add d (#4)", PR: 4, Tree: "D", At: day(15), Added: map[string][]Span{"d.go": span(1, 10)}},
 			// A is reverted on day 2.
 			{Sha: "eeeeeee5555", Subject: "Revert \"add a\"", Body: "This reverts commit aaaaaaa1111.", At: day(2)},
 			// B is fixed on day 15: outside its window.
@@ -34,58 +34,58 @@ func TestLabels_FourLaneFixture(t *testing.T) {
 	got := Labels(f)
 
 	want := map[string]Label{"A": Defect, "B": Clean, "C": Clean, "D": Pending}
-	for lane, w := range want {
-		if got[lane] != w {
-			t.Errorf("lane %s = %q, want %q", lane, got[lane], w)
+	for tree, w := range want {
+		if got[tree] != w {
+			t.Errorf("tree %s = %q, want %q", tree, got[tree], w)
 		}
 	}
 }
 
 func TestLabels_FixOnItsLinesInsideTheWindowIsADefect(t *testing.T) {
 	f := Facts{Now: day(30), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Lane: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
+		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Tree: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
 		{Sha: "fffffff6666", Subject: "Fix b (#6)", PR: 6, At: day(13), Removed: map[string][]Span{"b.go": span(10, 12)}},
 	}}
 	if got := Labels(f)["B"]; got != Defect {
-		t.Errorf("lane B = %q, want %q (a fix touching line 10)", got, Defect)
+		t.Errorf("tree B = %q, want %q (a fix touching line 10)", got, Defect)
 	}
 }
 
 func TestLabels_FixOnOtherLinesIsNotADefect(t *testing.T) {
 	f := Facts{Now: day(30), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Lane: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
+		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Tree: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
 		{Sha: "fffffff7777", Subject: "fix elsewhere (#8)", PR: 8, At: day(3), Removed: map[string][]Span{"b.go": span(11, 12), "z.go": span(1, 2)}},
 	}}
 	if got := Labels(f)["B"]; got != Clean {
-		t.Errorf("lane B = %q, want %q", got, Clean)
+		t.Errorf("tree B = %q, want %q", got, Clean)
 	}
 }
 
 func TestLabels_CommitNamingThePRIsADefect(t *testing.T) {
 	f := Facts{Now: day(30), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Lane: "B", At: day(0)},
+		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Tree: "B", At: day(0)},
 		{Sha: "ccccccc3333", Subject: "tidy (#123)", PR: 123, At: day(1)},
 		{Sha: "ddddddd4444", Subject: "follow-up to #12 (#13)", PR: 13, At: day(2)},
 	}}
 	if got := Labels(f)["B"]; got != Defect {
-		t.Errorf("lane B = %q, want %q", got, Defect)
+		t.Errorf("tree B = %q, want %q", got, Defect)
 	}
 }
 
 func TestLabels_NumberPrefixIsNotAName(t *testing.T) {
 	f := Facts{Now: day(30), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Lane: "B", At: day(0)},
+		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Tree: "B", At: day(0)},
 		{Sha: "ccccccc3333", Subject: "tidy (#123)", PR: 123, At: day(1)},
 	}}
 	if got := Labels(f)["B"]; got != Clean {
-		t.Errorf("lane B = %q, want %q", got, Clean)
+		t.Errorf("tree B = %q, want %q", got, Clean)
 	}
 }
 
 func TestLabels_EscapeIssueNamingThePR(t *testing.T) {
 	f := Facts{Now: day(30), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Lane: "B", At: day(0)},
-		{Sha: "ccccccc3333", Subject: "add c (#13)", PR: 13, Lane: "C", At: day(0)},
+		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Tree: "B", At: day(0)},
+		{Sha: "ccccccc3333", Subject: "add c (#13)", PR: 13, Tree: "C", At: day(0)},
 	}, Issues: []Issue{
 		{Number: 40, Title: "escape: login breaks", Body: "introduced by #12", At: day(4)},
 		{Number: 41, Title: "docs typo mentions #13", Body: "", At: day(4)},
@@ -98,24 +98,24 @@ func TestLabels_EscapeIssueNamingThePR(t *testing.T) {
 
 func TestLabels_EscapeIssueAfterTheWindowIsIgnored(t *testing.T) {
 	f := Facts{Now: day(60), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Lane: "B", At: day(0)},
+		{Sha: "bbbbbbb2222", Subject: "add b (#12)", PR: 12, Tree: "B", At: day(0)},
 	}, Issues: []Issue{{Number: 40, Title: "escape: late", Body: "#12", At: day(20)}}}
 	if got := Labels(f)["B"]; got != Clean {
-		t.Errorf("lane B = %q, want clean", got)
+		t.Errorf("tree B = %q, want clean", got)
 	}
 }
 
 func TestLabels_OverlapAloneIsOff(t *testing.T) {
 	f := Facts{Now: day(60), Merges: []Merge{
-		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Lane: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
+		{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Tree: "B", At: day(0), Added: map[string][]Span{"b.go": span(1, 10)}},
 		{Sha: "ccccccc3333", Subject: "rework (#3)", PR: 3, At: day(1), Removed: map[string][]Span{"b.go": span(1, 10)}},
 	}}
 	if got := Labels(f)["B"]; got != Clean {
-		t.Errorf("lane B = %q, want clean", got)
+		t.Errorf("tree B = %q, want clean", got)
 	}
 }
 
-func TestLabels_LaneWithoutNameIsKeyedByPR(t *testing.T) {
+func TestLabels_TreeWithoutNameIsKeyedByPR(t *testing.T) {
 	f := Facts{Now: day(60), Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "x (#9)", PR: 9, At: day(0)}}}
 	want := map[string]Label{"pr-9": Clean}
 	if got := Labels(f); !reflect.DeepEqual(got, want) {
@@ -123,30 +123,30 @@ func TestLabels_LaneWithoutNameIsKeyedByPR(t *testing.T) {
 	}
 }
 
-func TestLabels_SecondMergeOnALaneKeepsTheDefect(t *testing.T) {
-	first := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
+func TestLabels_SecondMergeOnATreeKeepsTheDefect(t *testing.T) {
+	first := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Tree: "L", At: day(0)}
 	revert := Merge{Sha: "eeeeeee5555", Subject: "Revert", Body: "This reverts commit aaaaaaa1111.", At: day(1)}
-	second := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Lane: "L", At: day(5)}
+	second := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Tree: "L", At: day(5)}
 	for name, merges := range map[string][]Merge{
 		"defective first": {first, revert, second},
 		"defective last":  {second, first, revert},
 	} {
 		if got := Labels(Facts{Now: day(60), Merges: merges})["L"]; got != Defect {
-			t.Errorf("%s: lane L = %q, want %q", name, got, Defect)
+			t.Errorf("%s: tree L = %q, want %q", name, got, Defect)
 		}
 	}
 }
 
-func TestLabels_PendingOutranksCleanOnOneLane(t *testing.T) {
-	old := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
-	recent := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Lane: "L", At: day(19)}
+func TestLabels_PendingOutranksCleanOnOneTree(t *testing.T) {
+	old := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Tree: "L", At: day(0)}
+	recent := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Tree: "L", At: day(19)}
 	if got := Labels(Facts{Now: day(20), Merges: []Merge{recent, old}})["L"]; got != Pending {
-		t.Errorf("lane L = %q, want %q", got, Pending)
+		t.Errorf("tree L = %q, want %q", got, Pending)
 	}
 }
 
 func TestLabels_FourteenDayBoundary(t *testing.T) {
-	base := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
+	base := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Tree: "L", At: day(0)}
 	revertAt := func(at time.Time) Merge {
 		return Merge{Sha: "eeeeeee5555", Subject: "Revert", Body: "This reverts commit aaaaaaa1111.", At: at}
 	}
@@ -162,12 +162,12 @@ func TestLabels_FourteenDayBoundary(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := Labels(c.f)["L"]; got != c.want {
-			t.Errorf("%s: lane L = %q, want %q", c.name, got, c.want)
+			t.Errorf("%s: tree L = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
 
-func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
+func TestLabels_SquashMergeLinksToTheTreeOfItsPRBranch(t *testing.T) {
 	f := Facts{
 		Now: day(30),
 		Merges: []Merge{
@@ -182,10 +182,10 @@ func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
 	}
 }
 
-func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
+func TestLabels_TreeOnTheMergeWinsOverThePRBranch(t *testing.T) {
 	f := Facts{
 		Now:    day(30),
-		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, Lane: "named", At: day(0)}},
+		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, Tree: "named", At: day(0)}},
 		PRs:    []PR{{Number: 5, Branch: "feat-x"}},
 	}
 	want := map[string]Label{"named": Clean}
@@ -194,13 +194,13 @@ func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
 	}
 }
 
-func TestLeadTimes_SquashMergeUsesThePRBranchLane(t *testing.T) {
+func TestLeadTimes_SquashMergeUsesThePRBranchTree(t *testing.T) {
 	f := Facts{
 		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)}},
 		PRs:    []PR{{Number: 5, Branch: "feat-x"}},
-		Events: []kernel.Event{{Kind: kernel.EvLaneOpened, Lane: "feat-x", At: day(0).Add(-90 * time.Minute)}},
+		Events: []kernel.Event{{Kind: kernel.EvTreeOpened, Tree: "feat-x", At: day(0).Add(-90 * time.Minute)}},
 	}
-	want := []Lead{{Lane: "feat-x", MergedAt: day(0), Time: 90 * time.Minute}}
+	want := []Lead{{Tree: "feat-x", MergedAt: day(0), Time: 90 * time.Minute}}
 	if got := LeadTimes(f); !reflect.DeepEqual(got, want) {
 		t.Errorf("lead times = %v, want %v", got, want)
 	}

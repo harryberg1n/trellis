@@ -41,10 +41,10 @@ func TestFakeRunner_AnswersItsProgramAndPassesTheRestOn(t *testing.T) {
 
 func TestPendingEvents_ReadsParkedFilesInNameOrder(t *testing.T) {
 	dir := t.TempDir()
-	testiso.Write(t, filepath.Join(dir, "events.pending", "b.json"), `{"kind":"edit","lane":"b"}`)
-	testiso.Write(t, filepath.Join(dir, "events.pending", "a.json"), `{"kind":"stop","lane":"a"}`)
+	testiso.Write(t, filepath.Join(dir, "events.pending", "b.json"), `{"kind":"edit","tree":"b"}`)
+	testiso.Write(t, filepath.Join(dir, "events.pending", "a.json"), `{"kind":"stop","tree":"a"}`)
 	got := PendingEvents(t, dir)
-	if len(got) != 2 || got[0].Lane != "a" || got[1].Kind != "edit" {
+	if len(got) != 2 || got[0].Tree != "a" || got[1].Kind != "edit" {
 		t.Errorf("events %+v, want a then b", got)
 	}
 	if got := PendingEvents(t, t.TempDir()); len(got) != 0 {

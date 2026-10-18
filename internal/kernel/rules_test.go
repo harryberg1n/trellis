@@ -66,6 +66,6 @@ func TestDecide_AdmittedRowsActAndLiveABFollowsTheArm(t *testing.T) {
 
 func TestDecide_PublicDecideMatchesNothingYet(t *testing.T) {
 	if got := Decide([]Row{{ID: "adm", State: Admitted}}, Event{}, Context{}); len(got) != 0 {
-		t.Errorf("actions = %+v, want none until lane 6 adds matching", got)
+		t.Errorf("actions = %+v, want none until step 6 adds matching", got)
 	}
 }

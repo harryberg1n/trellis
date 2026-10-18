@@ -19,12 +19,12 @@ func fixture(t *testing.T, name string) []byte {
 }
 
 func TestCost_FixtureTranscript(t *testing.T) {
-	f := Facts{Usage: []Usage{{Lane: "A", Session: "s1", Transcript: fixture(t, "transcript_cost.jsonl")}}}
+	f := Facts{Usage: []Usage{{Tree: "A", Session: "s1", Transcript: fixture(t, "transcript_cost.jsonl")}}}
 
-	got := LaneCosts(f)["A"]
+	got := TreeCosts(f)["A"]
 
 	if got != 0.0125 {
-		t.Errorf("cost of lane A = %v USD, want 0.0125", got)
+		t.Errorf("cost of tree A = %v USD, want 0.0125", got)
 	}
 }
 
@@ -35,7 +35,7 @@ func TestCost_LineOverTheLimitIsSkippedAndLaterTurnsCount(t *testing.T) {
 	huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 9<<20) + `"}}` + "\n"
 	tr := []byte(rec("a") + huge + rec("b"))
 
-	got := LaneCosts(Facts{Usage: []Usage{{Lane: "A", Transcript: tr}}})["A"]
+	got := TreeCosts(Facts{Usage: []Usage{{Tree: "A", Transcript: tr}}})["A"]
 
 	if got != 0.025 {
 		t.Errorf("cost = %v USD, want 0.025 (both records around the 9 MiB line)", got)
@@ -44,7 +44,7 @@ func TestCost_LineOverTheLimitIsSkippedAndLaterTurnsCount(t *testing.T) {
 
 func TestCost_UnpricedModelCostsNothing(t *testing.T) {
 	tr := []byte(`{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"mystery-1","usage":{"input_tokens":1000000,"output_tokens":1}}}` + "\n")
-	if got := LaneCosts(Facts{Usage: []Usage{{Lane: "A", Transcript: tr}}})["A"]; got != 0 {
+	if got := TreeCosts(Facts{Usage: []Usage{{Tree: "A", Transcript: tr}}})["A"]; got != 0 {
 		t.Errorf("cost = %v, want 0", got)
 	}
 }
@@ -73,16 +73,16 @@ func TestCost_LongestPrefixWins(t *testing.T) {
 func denyEvents() []kernel.Event {
 	at := func(m int) time.Time { return time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC) }
 	return []kernel.Event{
-		{Seq: 1, Kind: kernel.EvLaneOpened, Lane: "A", At: at(-60)},
-		{Seq: 2, Kind: kernel.EvWallDenied, Lane: "A", At: at(0), Detail: map[string]string{"row": "w.main", "bytes": "400"}},
-		{Seq: 3, Kind: kernel.EvCIResult, Lane: "A", At: at(5), Detail: map[string]string{"result": "green"}},
-		{Seq: 4, Kind: kernel.EvWallDenied, Lane: "A", At: at(6), Detail: map[string]string{"row": "w.main", "line": "twelve bytes"}},
-		{Seq: 5, Kind: kernel.EvWallDenied, Lane: "B", At: at(0), Detail: map[string]string{"row": "w.secrets", "bytes": "40"}},
+		{Seq: 1, Kind: kernel.EvTreeOpened, Tree: "A", At: at(-60)},
+		{Seq: 2, Kind: kernel.EvWallDenied, Tree: "A", At: at(0), Detail: map[string]string{"row": "w.main", "bytes": "400"}},
+		{Seq: 3, Kind: kernel.EvCIResult, Tree: "A", At: at(5), Detail: map[string]string{"result": "green"}},
+		{Seq: 4, Kind: kernel.EvWallDenied, Tree: "A", At: at(6), Detail: map[string]string{"row": "w.main", "line": "twelve bytes"}},
+		{Seq: 5, Kind: kernel.EvWallDenied, Tree: "B", At: at(0), Detail: map[string]string{"row": "w.secrets", "bytes": "40"}},
 	}
 }
 
 func TestCost_DenyTurnsCharged(t *testing.T) {
-	f := Facts{Events: denyEvents(), Usage: []Usage{{Lane: "A", Session: "s2", Transcript: fixture(t, "transcript_deny.jsonl")}}}
+	f := Facts{Events: denyEvents(), Usage: []Usage{{Tree: "A", Session: "s2", Transcript: fixture(t, "transcript_deny.jsonl")}}}
 
 	rows := RowCosts(f)
 
@@ -100,17 +100,17 @@ func TestCost_DenyTurnsCharged(t *testing.T) {
 	}
 }
 
-// anchored is n turn.anchored events of lane A, one a minute from 10:01.
+// anchored is n turn.anchored events of tree A, one a minute from 10:01.
 func anchored(n int) []kernel.Event {
 	var evs []kernel.Event
 	for i := 1; i <= n; i++ {
-		evs = append(evs, kernel.Event{Kind: kernel.EvTurnAnchored, Lane: "A", At: time.Date(2026, 10, 1, 10, i, 0, 0, time.UTC)})
+		evs = append(evs, kernel.Event{Kind: kernel.EvTurnAnchored, Tree: "A", At: time.Date(2026, 10, 1, 10, i, 0, 0, time.UTC)})
 	}
 	return evs
 }
 
 func denyAt(m int) kernel.Event {
-	return kernel.Event{Kind: kernel.EvWallDenied, Lane: "A", At: time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC), Detail: map[string]string{"row": "r"}}
+	return kernel.Event{Kind: kernel.EvWallDenied, Tree: "A", At: time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC), Detail: map[string]string{"row": "r"}}
 }
 
 func TestCost_UnresolvedDenyIsCappedAt50Turns(t *testing.T) {
@@ -135,9 +135,9 @@ func TestCost_UnresolvedDenyStopsAtTheNextDeny(t *testing.T) {
 	}
 }
 
-func TestCost_UnresolvedDenyStopsAtTheLanesMerge(t *testing.T) {
+func TestCost_UnresolvedDenyStopsAtTheTreesMerge(t *testing.T) {
 	evs := append([]kernel.Event{denyAt(0)}, anchored(9)...)
-	merge := Merge{Sha: "aaaaaaa1111", Subject: "x (#1)", PR: 1, Lane: "A", At: time.Date(2026, 10, 1, 10, 3, 0, 0, time.UTC)}
+	merge := Merge{Sha: "aaaaaaa1111", Subject: "x (#1)", PR: 1, Tree: "A", At: time.Date(2026, 10, 1, 10, 3, 0, 0, time.UTC)}
 
 	rows := RowCosts(Facts{Events: evs, Merges: []Merge{merge}})
 
@@ -150,11 +150,11 @@ func TestCost_UnresolvedDenyStopsAtTheLanesMerge(t *testing.T) {
 func TestCost_DenyTurnsFallBackToAnchoredEvents(t *testing.T) {
 	at := func(m int) time.Time { return time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC) }
 	evs := []kernel.Event{
-		{Kind: kernel.EvWallDenied, Lane: "A", At: at(0), Detail: map[string]string{"row": "r"}},
-		{Kind: kernel.EvTurnAnchored, Lane: "A", At: at(1)},
-		{Kind: kernel.EvTurnAnchored, Lane: "A", At: at(2)},
-		{Kind: kernel.EvCIResult, Lane: "A", At: at(3), Detail: map[string]string{"result": "green"}},
-		{Kind: kernel.EvTurnAnchored, Lane: "A", At: at(4)},
+		{Kind: kernel.EvWallDenied, Tree: "A", At: at(0), Detail: map[string]string{"row": "r"}},
+		{Kind: kernel.EvTurnAnchored, Tree: "A", At: at(1)},
+		{Kind: kernel.EvTurnAnchored, Tree: "A", At: at(2)},
+		{Kind: kernel.EvCIResult, Tree: "A", At: at(3), Detail: map[string]string{"result": "green"}},
+		{Kind: kernel.EvTurnAnchored, Tree: "A", At: at(4)},
 	}
 	rows := RowCosts(Facts{Events: evs})
 	if len(rows) != 1 || rows[0].Turns != 2 || rows[0].Unresolved != 0 {

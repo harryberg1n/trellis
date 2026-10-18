@@ -19,7 +19,7 @@ import (
 )
 
 // ErrOwnGitState is what run.Light reports for a git child that would write a
-// ref outside refs/trellis/ or a lane's index: the own-git-state wall. It is
+// ref outside refs/trellis/ or a tree's index: the own-git-state wall. It is
 // checked at the run.Light seam, not in a hook, so Match never matches that
 // row.
 var ErrOwnGitState = run.ErrOwnGitState

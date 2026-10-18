@@ -39,14 +39,14 @@ func TestCheckpoint_CorruptFileHealsByReplay(t *testing.T) {
 	for name, junk := range map[string]string{"junk": "{\"last_seq\": 1, \"arm", "empty": ""} {
 		t.Run(name, func(t *testing.T) {
 			s, dir, _ := open(t)
-			if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+			if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(junk), 0o644); err != nil {
 				t.Fatal(err)
 			}
 
-			if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+			if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 				t.Fatalf("Step over a corrupt state.json: %v", err)
 			}
 
@@ -59,8 +59,8 @@ func TestCheckpoint_CorruptFileHealsByReplay(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cp.LastSeq != 2 || cp.Lanes["lane/a"] != kernel.LaneOpen {
-				t.Errorf("checkpoint after healing = %+v, want last_seq 2 and lane/a open", cp)
+			if cp.LastSeq != 2 || cp.Trees["tree/a"] != kernel.TreeOpen {
+				t.Errorf("checkpoint after healing = %+v, want last_seq 2 and tree/a open", cp)
 			}
 			if junk != "" {
 				q, err := os.ReadFile(filepath.Join(dir, "events.quarantine"))

@@ -14,13 +14,13 @@ func TestSpeed_P50P90PerWeek(t *testing.T) {
 	evs := make([]kernel.Event, 0, 11)
 	ms := make([]Merge, 0, 11)
 	for i, mins := range []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100} {
-		lane := string(rune('a' + i))
-		evs = append(evs, kernel.Event{Kind: kernel.EvLaneOpened, Lane: lane, At: mon})
-		ms = append(ms, Merge{Lane: lane, PR: i + 1, At: mon.Add(time.Duration(mins) * time.Minute)})
+		tree := string(rune('a' + i))
+		evs = append(evs, kernel.Event{Kind: kernel.EvTreeOpened, Tree: tree, At: mon})
+		ms = append(ms, Merge{Tree: tree, PR: i + 1, At: mon.Add(time.Duration(mins) * time.Minute)})
 	}
-	// A lane merged the next week, 5 hours after it opened.
-	evs = append(evs, kernel.Event{Kind: kernel.EvLaneOpened, Lane: "z", At: mon.Add(7 * 24 * time.Hour)})
-	ms = append(ms, Merge{Lane: "z", PR: 99, At: mon.Add(7*24*time.Hour + 5*time.Hour)})
+	// A tree merged the next week, 5 hours after it opened.
+	evs = append(evs, kernel.Event{Kind: kernel.EvTreeOpened, Tree: "z", At: mon.Add(7 * 24 * time.Hour)})
+	ms = append(ms, Merge{Tree: "z", PR: 99, At: mon.Add(7*24*time.Hour + 5*time.Hour)})
 
 	got := Speed(Facts{Events: evs, Merges: ms})
 
@@ -33,20 +33,20 @@ func TestSpeed_P50P90PerWeek(t *testing.T) {
 	}
 }
 
-func TestSpeed_TwoMergesOnOneLaneGetTheirOwnLeadTimes(t *testing.T) {
-	// Lane L opened Monday 2026-10-05 08:00 (W41) and merged 60 minutes later;
+func TestSpeed_TwoMergesOnOneTreeGetTheirOwnLeadTimes(t *testing.T) {
+	// Tree L opened Monday 2026-10-05 08:00 (W41) and merged 60 minutes later;
 	// it opened again on Monday 10-12 (W42) and merged 30 minutes after that.
 	// The log lists the newest merge first.
 	t1 := time.Date(2026, 10, 5, 8, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	f := Facts{
 		Events: []kernel.Event{
-			{Kind: kernel.EvLaneOpened, Lane: "L", At: t1},
-			{Kind: kernel.EvLaneOpened, Lane: "L", At: t2},
+			{Kind: kernel.EvTreeOpened, Tree: "L", At: t1},
+			{Kind: kernel.EvTreeOpened, Tree: "L", At: t2},
 		},
 		Merges: []Merge{
-			{Sha: "bbbbbbb2222", Lane: "L", PR: 2, At: t2.Add(30 * time.Minute)},
-			{Sha: "aaaaaaa1111", Lane: "L", PR: 1, At: t1.Add(60 * time.Minute)},
+			{Sha: "bbbbbbb2222", Tree: "L", PR: 2, At: t2.Add(30 * time.Minute)},
+			{Sha: "aaaaaaa1111", Tree: "L", PR: 1, At: t1.Add(60 * time.Minute)},
 		},
 	}
 
@@ -61,8 +61,8 @@ func TestSpeed_TwoMergesOnOneLaneGetTheirOwnLeadTimes(t *testing.T) {
 	}
 }
 
-func TestSpeed_LaneWithoutOpenEventIsSkipped(t *testing.T) {
-	got := Speed(Facts{Merges: []Merge{{Lane: "x", PR: 1, At: day(0)}}})
+func TestSpeed_TreeWithoutOpenEventIsSkipped(t *testing.T) {
+	got := Speed(Facts{Merges: []Merge{{Tree: "x", PR: 1, At: day(0)}}})
 	if len(got) != 0 {
 		t.Errorf("speed = %+v, want none", got)
 	}

@@ -7,7 +7,7 @@ import (
 
 // mainCommit is the main-commit wall (#1043): `git commit`, `git push` or
 // `git merge` run in the primary checkout while it is on the default branch.
-// The default branch moves by merging a lane, not by a commit made where it is
+// The default branch moves by merging a tree, not by a commit made where it is
 // checked out. A command that only reads or undoes (--dry-run, merge --abort)
 // is let through.
 func mainCommit(a *analysis) string {

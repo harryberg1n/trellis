@@ -32,7 +32,7 @@ func TestHook_RecordsAnEditAndPrintsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"kind":"edit"`, `"lane":"main"`, `"session":"s-1"`, `"path":"hello.txt"`, `"blob":"ce013625030ba8dba906f756967f9e9ca394464a"`} {
+	for _, want := range []string{`"kind":"edit"`, `"tree":"main"`, `"session":"s-1"`, `"path":"hello.txt"`, `"blob":"ce013625030ba8dba906f756967f9e9ca394464a"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("event log lacks %s:\n%s", want, raw)
 		}

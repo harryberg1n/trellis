@@ -5,18 +5,18 @@ import (
 	"encoding/binary"
 )
 
-// The two experiment arms: lanes in treatment get the live-ab row, lanes in
+// The two experiment arms: trees in treatment get the live-ab row, trees in
 // control do not.
 const (
 	ArmTreatment = "treatment"
 	ArmControl   = "control"
 )
 
-// Assign puts a lane in an experiment arm: the first 8 bytes of
-// sha256(experiment + "\x00" + lane), read big-endian, mod 100, is the bucket;
+// Assign puts a tree in an experiment arm: the first 8 bytes of
+// sha256(experiment + "\x00" + tree), read big-endian, mod 100, is the bucket;
 // bucket < sharePct is treatment, else control.
-func Assign(lane, experiment string, sharePct int) string {
-	sum := sha256.Sum256([]byte(experiment + "\x00" + lane))
+func Assign(tree, experiment string, sharePct int) string {
+	sum := sha256.Sum256([]byte(experiment + "\x00" + tree))
 	bucket := binary.BigEndian.Uint64(sum[:8]) % 100
 	if bucket < uint64(max(sharePct, 0)) {
 		return ArmTreatment
@@ -24,13 +24,13 @@ func Assign(lane, experiment string, sharePct int) string {
 	return ArmControl
 }
 
-// Sticky keeps, per lane, the arm vector recorded at the lane's first event,
-// so a share change never moves a lane already in flight.
+// Sticky keeps, per tree, the arm vector recorded at the tree's first event,
+// so a share change never moves a tree already in flight.
 type Sticky struct {
 	vec map[string]map[string]string
 }
 
-// NewSticky returns a Sticky with no lane recorded yet.
+// NewSticky returns a Sticky with no tree recorded yet.
 func NewSticky() *Sticky { return &Sticky{vec: map[string]map[string]string{}} }
 
 func copyArms(m map[string]string) map[string]string {
@@ -41,13 +41,13 @@ func copyArms(m map[string]string) map[string]string {
 	return out
 }
 
-// Observe records the arms of ev that the lane has no arm for yet. Arms are
+// Observe records the arms of ev that the tree has no arm for yet. Arms are
 // sticky per experiment: a recorded arm is never overwritten.
 func (s *Sticky) Observe(ev Event) {
-	v := s.vec[ev.Lane]
+	v := s.vec[ev.Tree]
 	if v == nil {
 		v = map[string]string{}
-		s.vec[ev.Lane] = v
+		s.vec[ev.Tree] = v
 	}
 	for exp, arm := range ev.Arms {
 		if _, ok := v[exp]; !ok {
@@ -56,18 +56,18 @@ func (s *Sticky) Observe(ev Event) {
 	}
 }
 
-// Resolve returns the lane's arms. Every recorded arm is kept unchanged; an
+// Resolve returns the tree's arms. Every recorded arm is kept unchanged; an
 // experiment in shares (experiment -> percent) with no recorded arm is
 // assigned now and recorded, so it is sticky from then on.
-func (s *Sticky) Resolve(lane string, shares map[string]int) map[string]string {
-	v := s.vec[lane]
+func (s *Sticky) Resolve(tree string, shares map[string]int) map[string]string {
+	v := s.vec[tree]
 	if v == nil {
 		v = map[string]string{}
-		s.vec[lane] = v
+		s.vec[tree] = v
 	}
 	for exp, pct := range shares {
 		if _, ok := v[exp]; !ok {
-			v[exp] = Assign(lane, exp, pct)
+			v[exp] = Assign(tree, exp, pct)
 		}
 	}
 	return copyArms(v)

@@ -181,12 +181,12 @@ func parseTurns(raw []byte) []turn {
 	return out
 }
 
-// LaneCosts is the agent dollars per lane at list price, from the transcripts.
-func LaneCosts(f Facts) map[string]float64 {
+// TreeCosts is the agent dollars per tree at list price, from the transcripts.
+func TreeCosts(f Facts) map[string]float64 {
 	out := map[string]float64{}
 	for _, u := range f.Usage {
 		for _, t := range parseTurns(u.Transcript) {
-			out[u.Lane] += costUSD(t.model, t.tok)
+			out[u.Tree] += costUSD(t.model, t.tok)
 		}
 	}
 	return out
@@ -208,26 +208,26 @@ type RowCost struct {
 //
 // A deny is a wall.denied event; its row is Detail["row"] and the line it
 // injected is Detail["bytes"] bytes long (else the length of Detail["line"]).
-// Its green is the first later event of the same lane with kind ci.result and
+// Its green is the first later event of the same tree with kind ci.result and
 // Detail["result"] == "green". The turns it charges are the agent replies of
-// that lane strictly after the deny and not after the green, or after the deny
+// that tree strictly after the deny and not after the green, or after the deny
 // to the end of the transcript when no green came (then it counts as Unresolved).
-// A reply is an assistant message of the lane's transcripts, once per
-// requestId; a lane with no transcript uses its turn.anchored events instead.
+// A reply is an assistant message of the tree's transcripts, once per
+// requestId; a tree with no transcript uses its turn.anchored events instead.
 func RowCosts(f Facts) []RowCost {
 	times := map[string][]time.Time{}
 	for _, u := range f.Usage {
 		for _, t := range parseTurns(u.Transcript) {
-			times[u.Lane] = append(times[u.Lane], t.at)
+			times[u.Tree] = append(times[u.Tree], t.at)
 		}
 	}
 	withUsage := map[string]bool{}
-	for lane, ts := range times {
-		withUsage[lane] = len(ts) > 0
+	for tree, ts := range times {
+		withUsage[tree] = len(ts) > 0
 	}
 	for _, ev := range f.Events {
-		if ev.Kind == kernel.EvTurnAnchored && !withUsage[ev.Lane] {
-			times[ev.Lane] = append(times[ev.Lane], ev.At)
+		if ev.Kind == kernel.EvTurnAnchored && !withUsage[ev.Tree] {
+			times[ev.Tree] = append(times[ev.Tree], ev.At)
 		}
 	}
 	rows := map[string]*RowCost{}
@@ -255,7 +255,7 @@ func RowCosts(f Facts) []RowCost {
 		}
 		end, inclusive, capped := capFor(f.Events, merges, d)
 		n := 0
-		for _, at := range times[d.Lane] {
+		for _, at := range times[d.Tree] {
 			switch {
 			case !at.After(d.At):
 			case resolved:
@@ -280,17 +280,17 @@ func RowCosts(f Facts) []RowCost {
 // maxUnresolvedTurns caps the turns charged to a deny that has no green.
 const maxUnresolvedTurns = 50
 
-// capFor is where the turns of an unresolved deny end: at the lane's next
-// deny (exclusive) or at the lane's merge (inclusive), whichever is first.
+// capFor is where the turns of an unresolved deny end: at the tree's next
+// deny (exclusive) or at the tree's merge (inclusive), whichever is first.
 // ok is false when neither exists; the turn count cap still applies.
 func capFor(evs []kernel.Event, merges []Merge, deny kernel.Event) (end time.Time, inclusive, ok bool) {
 	for _, ev := range evs {
-		if ev.Kind == kernel.EvWallDenied && ev.Lane == deny.Lane && ev.At.After(deny.At) && (!ok || ev.At.Before(end)) {
+		if ev.Kind == kernel.EvWallDenied && ev.Tree == deny.Tree && ev.At.After(deny.At) && (!ok || ev.At.Before(end)) {
 			end, inclusive, ok = ev.At, false, true
 		}
 	}
 	for _, m := range merges {
-		if m.Lane == deny.Lane && !m.At.Before(deny.At) && (!ok || m.At.Before(end)) {
+		if m.Tree == deny.Tree && !m.At.Before(deny.At) && (!ok || m.At.Before(end)) {
 			end, inclusive, ok = m.At, true, true
 		}
 	}
@@ -301,7 +301,7 @@ func nextGreen(evs []kernel.Event, deny kernel.Event) (time.Time, bool) {
 	var best time.Time
 	found := false
 	for _, ev := range evs {
-		if ev.Kind == kernel.EvCIResult && ev.Lane == deny.Lane && ev.Detail[kernel.DetailResult] == "green" && ev.At.After(deny.At) && (!found || ev.At.Before(best)) {
+		if ev.Kind == kernel.EvCIResult && ev.Tree == deny.Tree && ev.Detail[kernel.DetailResult] == "green" && ev.At.After(deny.At) && (!found || ev.At.Before(best)) {
 			best, found = ev.At, true
 		}
 	}

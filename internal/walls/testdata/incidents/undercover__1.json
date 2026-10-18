@@ -1,1 +1,1 @@
-{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@LANE@","tool_name":"Bash","tool_input":{"command":"git commit -m \"fix the parser\n\nCo-Authored-By: Pat <pat@example.invalid>\""}}
+{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@TREE@","tool_name":"Bash","tool_input":{"command":"git commit -m \"fix the parser\n\nCo-Authored-By: Pat <pat@example.invalid>\""}}

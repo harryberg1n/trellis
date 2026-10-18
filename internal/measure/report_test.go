@@ -13,31 +13,31 @@ import (
 
 var update = flag.Bool("update", false, "rewrite testdata/golden_report.txt")
 
-// reportFixture is four lanes, one of them with a reverted merge and agent
+// reportFixture is four trees, one of them with a reverted merge and agent
 // usage, with the paths and transcript text a report must never repeat.
 func reportFixture(t *testing.T) Facts {
 	t.Helper()
-	opened := func(lane string, at time.Time) kernel.Event {
-		return kernel.Event{Kind: kernel.EvLaneOpened, Lane: lane, At: at}
+	opened := func(tree string, at time.Time) kernel.Event {
+		return kernel.Event{Kind: kernel.EvTreeOpened, Tree: tree, At: at}
 	}
 	evs := append(denyEvents(),
 		opened("B", day(0).Add(-30*time.Hour)),
 		opened("C", day(0).Add(-5*time.Hour)),
 		opened("D", day(15).Add(-2*time.Hour)))
-	evs[0].At = day(0).Add(-3 * time.Hour) // lane A opened 3 hours before its merge
+	evs[0].At = day(0).Add(-3 * time.Hour) // tree A opened 3 hours before its merge
 	return Facts{
 		Now: day(20),
 		Merges: []Merge{
-			{Sha: "aaaaaaa1111", Subject: "add a (#1)", PR: 1, Lane: "A", At: day(0), Added: map[string][]Span{"secret/path/a.go": span(1, 10)}},
-			{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Lane: "B", At: day(0)},
-			{Sha: "ccccccc3333", Subject: "add c (#3)", PR: 3, Lane: "C", At: day(0)},
-			{Sha: "ddddddd4444", Subject: "add d (#4)", PR: 4, Lane: "D", At: day(15)},
+			{Sha: "aaaaaaa1111", Subject: "add a (#1)", PR: 1, Tree: "A", At: day(0), Added: map[string][]Span{"secret/path/a.go": span(1, 10)}},
+			{Sha: "bbbbbbb2222", Subject: "add b (#2)", PR: 2, Tree: "B", At: day(0)},
+			{Sha: "ccccccc3333", Subject: "add c (#3)", PR: 3, Tree: "C", At: day(0)},
+			{Sha: "ddddddd4444", Subject: "add d (#4)", PR: 4, Tree: "D", At: day(15)},
 			{Sha: "eeeeeee5555", Subject: "Revert \"add a\"", Body: "This reverts commit aaaaaaa1111.", At: day(2)},
 		},
 		Events: evs,
 		Usage: []Usage{
-			{Lane: "A", Session: "s1", Transcript: fixture(t, "transcript_cost.jsonl")},
-			{Lane: "A", Session: "s2", Transcript: fixture(t, "transcript_deny.jsonl")},
+			{Tree: "A", Session: "s1", Transcript: fixture(t, "transcript_cost.jsonl")},
+			{Tree: "A", Session: "s2", Transcript: fixture(t, "transcript_deny.jsonl")},
 		},
 	}
 }

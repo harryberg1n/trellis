@@ -99,8 +99,8 @@ func TestIsPrimary(t *testing.T) {
 	if got, err := IsPrimary(repo); err != nil || !got {
 		t.Errorf("IsPrimary(repo) = %v, %v; want true", got, err)
 	}
-	lane := testiso.AddLane(t, repo, "lane", "lane/x")
-	if got, err := IsPrimary(lane); err != nil || got {
+	tree := testiso.AddTree(t, repo, "tree", "tree/x")
+	if got, err := IsPrimary(tree); err != nil || got {
 		t.Errorf("IsPrimary(linked worktree) = %v, %v; want false", got, err)
 	}
 }
@@ -133,7 +133,7 @@ func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *te
 func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 	repo := store.Canonical(testiso.Repo(t))
 	testiso.Git(t, repo, "config", "remote.origin.url", "https://example.invalid/o/r.git")
-	lane := store.Canonical(testiso.AddLane(t, repo, "lane", "lane/x"))
+	tree := store.Canonical(testiso.AddTree(t, repo, "tree", "tree/x"))
 
 	got, err := Open(filepath.Join(repo, "no", "such", "dir"))
 	if err != nil {
@@ -147,13 +147,13 @@ func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 		t.Errorf("Open(primary) = %+v, want %+v", got, want)
 	}
 
-	got, err = Open(lane)
+	got, err = Open(tree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Root != lane || got.Branch != "lane/x" || got.Primary || got.Common != want.Common ||
+	if got.Root != tree || got.Branch != "tree/x" || got.Primary || got.Common != want.Common ||
 		got.GitDir == got.Common || got.Remote != want.Remote {
-		t.Errorf("Open(lane) = %+v", got)
+		t.Errorf("Open(tree) = %+v", got)
 	}
 	if _, err := Open(filepath.Dir(repo)); !errors.Is(err, ErrNotARepo) {
 		t.Errorf("Open outside a repo: %v, want ErrNotARepo", err)

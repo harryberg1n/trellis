@@ -40,7 +40,7 @@ type Log interface {
 
 // Store is one repo's state directory. It implements Log and the checkpoint.
 // Shares is the experiment -> treatment percent map the engine resolves new
-// lanes against; the caller sets it before use.
+// trees against; the caller sets it before use.
 type Store struct {
 	Shares map[string]int
 

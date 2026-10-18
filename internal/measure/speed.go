@@ -9,49 +9,49 @@ import (
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
-// WeekSpeed is the lead times of the lanes merged in one ISO week.
+// WeekSpeed is the lead times of the trees merged in one ISO week.
 type WeekSpeed struct {
 	Week     string
 	N        int
 	P50, P90 time.Duration
 }
 
-// Lead is one merge's lead time: from its lane opening to the merge.
+// Lead is one merge's lead time: from its tree opening to the merge.
 type Lead struct {
-	Lane     string
+	Tree     string
 	MergedAt time.Time
 	Time     time.Duration
 }
 
-// LeadTimes is the lead time of each merge that has a lane, in the order of
-// f.Merges. The open time is the lane's latest lane.opened event at or before
-// the merge, so a lane opened again after an earlier merge measures from the
-// reopening; with no such event it is the lane's first event at or before the
+// LeadTimes is the lead time of each merge that has a tree, in the order of
+// f.Merges. The open time is the tree's latest tree.opened event at or before
+// the merge, so a tree opened again after an earlier merge measures from the
+// reopening; with no such event it is the tree's first event at or before the
 // merge. A merge with neither has no lead time.
 func LeadTimes(f Facts) []Lead {
 	var out []Lead
 	for _, m := range linked(f) {
-		if m.Lane == "" {
+		if m.Tree == "" {
 			continue
 		}
 		var opened, first time.Time
 		foundOpen, foundFirst := false, false
 		for _, ev := range f.Events {
-			if ev.Lane != m.Lane || ev.At.After(m.At) {
+			if ev.Tree != m.Tree || ev.At.After(m.At) {
 				continue
 			}
 			if !foundFirst || ev.At.Before(first) {
 				first, foundFirst = ev.At, true
 			}
-			if ev.Kind == kernel.EvLaneOpened && (!foundOpen || ev.At.After(opened)) {
+			if ev.Kind == kernel.EvTreeOpened && (!foundOpen || ev.At.After(opened)) {
 				opened, foundOpen = ev.At, true
 			}
 		}
 		switch {
 		case foundOpen:
-			out = append(out, Lead{Lane: m.Lane, MergedAt: m.At, Time: m.At.Sub(opened)})
+			out = append(out, Lead{Tree: m.Tree, MergedAt: m.At, Time: m.At.Sub(opened)})
 		case foundFirst:
-			out = append(out, Lead{Lane: m.Lane, MergedAt: m.At, Time: m.At.Sub(first)})
+			out = append(out, Lead{Tree: m.Tree, MergedAt: m.At, Time: m.At.Sub(first)})
 		}
 	}
 	return out

@@ -1,4 +1,4 @@
-// Package measure folds recorded facts into the report: defect labels, lane
+// Package measure folds recorded facts into the report: defect labels, tree
 // speed, agent cost and intervals. It is pure: it imports the standard library
 // and kernel types only, reads no file and no clock. Everything it knows comes
 // in as Facts, gathered by cmd/trellis.
@@ -18,7 +18,7 @@ import (
 // Window is how long after its merge a change can still become a defect.
 const Window = 14 * 24 * time.Hour
 
-// Label is a lane's verdict.
+// Label is a tree's verdict.
 type Label string
 
 // The labels. Pending holds until the window closes.
@@ -33,10 +33,10 @@ type Span struct{ Start, End int }
 
 // Merge is one first-parent commit on the default branch. Added holds the
 // new-side line ranges the commit wrote, Removed the old-side ranges it
-// replaced or deleted, by path. Lane is the lane that produced it, empty for a
-// commit no lane owns (a revert, a direct commit).
+// replaced or deleted, by path. Tree is the tree that produced it, empty for a
+// commit no tree owns (a revert, a direct commit).
 type Merge struct {
-	Sha, Subject, Body, Lane string
+	Sha, Subject, Body, Tree string
 	PR                       int
 	At                       time.Time
 	Added, Removed           map[string][]Span
@@ -49,10 +49,10 @@ type Issue struct {
 	At          time.Time
 }
 
-// Usage names one session transcript (raw JSONL bytes) and the lane it
+// Usage names one session transcript (raw JSONL bytes) and the tree it
 // worked on.
 type Usage struct {
-	Lane, Session string
+	Tree, Session string
 	Transcript    []byte
 }
 
@@ -72,8 +72,8 @@ type Facts struct {
 	Now    time.Time
 }
 
-// linked is the merges with a lane filled in for each squash or rebase merge
-// "(#N)" that has none: the lane whose name is the head branch of PR N. A lane
+// linked is the merges with a tree filled in for each squash or rebase merge
+// "(#N)" that has none: the tree whose name is the head branch of PR N. A tree
 // already on the merge (a merge commit's branch, or a Detail["pr"] override
 // resolved by the caller) is kept.
 func linked(f Facts) []Merge {
@@ -84,8 +84,8 @@ func linked(f Facts) []Merge {
 	out := make([]Merge, len(f.Merges))
 	copy(out, f.Merges)
 	for i, m := range out {
-		if m.Lane == "" && m.PR > 0 {
-			out[i].Lane = branch[m.PR]
+		if m.Tree == "" && m.PR > 0 {
+			out[i].Tree = branch[m.PR]
 		}
 	}
 	return out
@@ -96,21 +96,21 @@ var (
 	revertsSha = regexp.MustCompile(`[Tt]his reverts commit ([0-9a-f]{7,64})`)
 )
 
-// laneKey is the key a merge's lane has in the maps: its lane name, else
+// treeKey is the key a merge's tree has in the maps: its tree name, else
 // pr-N.
-func laneKey(m Merge) string {
-	if m.Lane != "" {
-		return m.Lane
+func treeKey(m Merge) string {
+	if m.Tree != "" {
+		return m.Tree
 	}
 	return fmt.Sprintf("pr-%d", m.PR)
 }
 
-// Labels labels every lane that has a merge with a PR number or a lane name.
+// Labels labels every tree that has a merge with a PR number or a tree name.
 // A change is a defect when, within Window of its merge, any of these happen:
 // a revert of its commit; a later merge whose subject starts with "fix" and
 // that touches its lines; a later commit or PR that names its PR; an "escape:"
 // issue that names its PR. Without one of them it is Pending until the window
-// closes at Now, then Clean. A lane with several merges takes the worst: defect, then
+// closes at Now, then Clean. A tree with several merges takes the worst: defect, then
 // pending, then clean. Line overlap alone is not a label: it is off
 // until a precision check has validated it.
 //
@@ -118,12 +118,12 @@ func laneKey(m Merge) string {
 // new-side ranges by path, without following line shifts of merges between
 // the two.
 func Labels(f Facts) map[string]Label {
-	rank := map[Label]int{Clean: 1, Pending: 2, Defect: 3} // a lane keeps its worst merge
+	rank := map[Label]int{Clean: 1, Pending: 2, Defect: 3} // a tree keeps its worst merge
 	out := map[string]Label{}
 	f.Merges = linked(f)
 	for _, m := range f.Merges {
-		if m.Lane == "" && m.PR == 0 {
-			continue // a revert or direct commit owns no lane
+		if m.Tree == "" && m.PR == 0 {
+			continue // a revert or direct commit owns no tree
 		}
 		l := Clean
 		switch {
@@ -132,7 +132,7 @@ func Labels(f Facts) map[string]Label {
 		case f.Now.Before(m.At.Add(Window)):
 			l = Pending
 		}
-		if k := laneKey(m); rank[l] > rank[out[k]] {
+		if k := treeKey(m); rank[l] > rank[out[k]] {
 			out[k] = l
 		}
 	}

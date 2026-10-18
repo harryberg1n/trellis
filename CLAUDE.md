@@ -4,7 +4,7 @@ Go module `github.com/harryberg1n/trellis`, Go 1.26.9. Dependencies: the standar
 
 ## Rules
 
-- One builder at a time, in lane order. Each lane is one PR, rebased on `origin/main`, never merged by the builder.
+- One builder at a time, in tree order. Each tree is one PR, rebased on `origin/main`, never merged by the builder.
 - TDD: a failing test first for new code. A test's expectation is a literal, never a value computed by the code under test.
 - No test sleeps. Time comes from `clock.Clock`. A test that fails under load is a broken test.
 - Platform code goes in `_windows.go` / `_other.go` pairs, never an inline `runtime.GOOS`.

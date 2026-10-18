@@ -15,8 +15,8 @@ func TestCheckpoint_RoundTrip(t *testing.T) {
 	err := s.Locked(func(tx *Tx) error {
 		return tx.Save(Checkpoint{
 			LastSeq: 7,
-			Arms:    map[string]map[string]string{"lane/a": {"exp1": "control"}},
-			Lanes:   map[string]kernel.LaneState{"lane/a": kernel.LaneOpen},
+			Arms:    map[string]map[string]string{"tree/a": {"exp1": "control"}},
+			Trees:   map[string]kernel.TreeState{"tree/a": kernel.TreeOpen},
 		})
 	})
 	if err != nil {
@@ -31,7 +31,7 @@ func TestCheckpoint_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LastSeq != 7 || got.Arms["lane/a"]["exp1"] != "control" || got.Lanes["lane/a"] != kernel.LaneOpen {
+	if got.LastSeq != 7 || got.Arms["tree/a"]["exp1"] != "control" || got.Trees["tree/a"] != kernel.TreeOpen {
 		t.Fatalf("checkpoint = %+v", got)
 	}
 }

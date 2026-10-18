@@ -88,7 +88,7 @@ func TestParseStatus(t *testing.T) {
 }
 
 func TestWriteTargets(t *testing.T) {
-	dir := filepath.FromSlash("/work/lane")
+	dir := filepath.FromSlash("/work/tree")
 	abs := func(p string) string {
 		return filepath.Clean(filepath.Join(filepath.VolumeName(dir)+string(filepath.Separator), p))
 	}

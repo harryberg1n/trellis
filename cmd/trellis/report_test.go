@@ -74,7 +74,7 @@ func repoWithHistory(t *testing.T) string {
 
 const sentinel = "SENTINEL-PROMPT-7f3a"
 
-// reportFixture builds a repo whose history has lane A (#1) reverted and lane
+// reportFixture builds a repo whose history has tree A (#1) reverted and tree
 // B (#2) recent, an event log that opened them, and a transcript with a
 // sentinel in it.
 func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
@@ -92,10 +92,10 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 		`{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"`+sentinel+`"}],"usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}`+"\n")
 	at := func(d, h int) time.Time { return time.Date(2026, 10, d, h, 0, 0, 0, time.UTC) }
 	_, err = st.Append(
-		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "A", Session: "s1", At: at(1, 9), Detail: map[string]string{"pr": "1"}},
-		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "B", Session: "s2", At: at(3, 9), Detail: map[string]string{"pr": "2"}},
-		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "C", Session: "s3", At: at(7, 8)},
-		kernel.Event{Kind: kernel.EvSessionUsage, Lane: "A", Session: "s1", At: at(1, 11), Detail: map[string]string{"transcript": transcript}},
+		kernel.Event{Kind: kernel.EvTreeOpened, Tree: "A", Session: "s1", At: at(1, 9), Detail: map[string]string{"pr": "1"}},
+		kernel.Event{Kind: kernel.EvTreeOpened, Tree: "B", Session: "s2", At: at(3, 9), Detail: map[string]string{"pr": "2"}},
+		kernel.Event{Kind: kernel.EvTreeOpened, Tree: "C", Session: "s3", At: at(7, 8)},
+		kernel.Event{Kind: kernel.EvSessionUsage, Tree: "A", Session: "s1", At: at(1, 11), Detail: map[string]string{"transcript": transcript}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -114,8 +114,8 @@ func TestReport_GathersLabelsFromTheRepoHistory(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	for _, want := range []string{
-		"lanes merged: 3 (defect 1, clean 0, pending 2)",
-		"lanes with usage: 1  total $0.01250",
+		"trees merged: 3 (defect 1, clean 0, pending 2)",
+		"trees with usage: 1  total $0.01250",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
@@ -132,7 +132,7 @@ func TestReport_MergeTimeIsTheCommitDate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	// Lane C opened on 10-07 08:00 and was authored on 09-27 but committed on
+	// Tree C opened on 10-07 08:00 and was authored on 09-27 but committed on
 	// 10-07 09:00: 60 minutes, in the commit date's week 2026-W41.
 	if want := "  2026-W41  n=1  p50=60.0  p90=60.0\n"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, out.String())
@@ -174,7 +174,7 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 			t.Errorf("issue body contains %q:\n%s", bad, body)
 		}
 	}
-	if !strings.Contains(body, "lanes merged: 3") {
+	if !strings.Contains(body, "trees merged: 3") {
 		t.Errorf("issue body is not the report:\n%s", body)
 	}
 	if got, want := out.String(), "filed https://github.com/harryberg1n/trellis/issues/77\n"; got != want {
@@ -233,7 +233,7 @@ func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	if want := "lanes with usage: 1  total $0.01250"; !strings.Contains(out.String(), want) {
+	if want := "trees with usage: 1  total $0.01250"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q (an empty log?):\n%s", want, out.String())
 	}
 }
@@ -249,7 +249,7 @@ func TestReport_ReadsOriginsHistoryWhenTheLocalDefaultLags(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	if want := "lanes merged: 3"; !strings.Contains(out.String(), want) {
+	if want := "trees merged: 3"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q: the lagging local main hid merges:\n%s", want, out.String())
 	}
 }
@@ -264,7 +264,7 @@ func TestReport_ReadsHEADWhenThereIsNoMainOrMaster(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	if want := "lanes merged: 3"; !strings.Contains(out.String(), want) {
+	if want := "trees merged: 3"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, out.String())
 	}
 }
