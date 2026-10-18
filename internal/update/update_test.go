@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -890,5 +891,27 @@ func TestHooksChanged_CountsAddedAndUpdatedNotKept(t *testing.T) {
 
 	if got := hooksChanged(actions); got != 2 {
 		t.Errorf("hooksChanged = %d, want 2", got)
+	}
+}
+
+func TestUpdate_GivesItsContextToEveryChild(t *testing.T) {
+	w := newWorld(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := w.env()
+	env.Ctx = ctx
+
+	if err := Run(env, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	specs := w.runner.Specs()
+	if len(specs) != 3 {
+		t.Fatalf("%d children, want 3", len(specs))
+	}
+	for _, s := range specs {
+		if s.Ctx != ctx {
+			t.Errorf("child %s %v ran without the update's context", s.Name, s.Args)
+		}
 	}
 }

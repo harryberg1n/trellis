@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -57,6 +58,9 @@ func mergeLocal(env Env, w where, check string, rebase bool) error {
 	} else if err := squashLocal(env, w, subject, body); err != nil {
 		return err
 	}
+	// The change is committed: recording it and removing the tree finish even
+	// if the verb is interrupted now.
+	env = env.uncancelled()
 	sha, err := env.runGit(w.Primary, "rev-parse", "HEAD")
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
@@ -79,12 +83,17 @@ func conflictFixable(repo objects.Repo, files []string) error {
 // conflicts leaves MERGE_HEAD: whatever else fails, the primary checkout must
 // not be left merging.
 func abortMerge(env Env, w where, cause error) error {
+	cancelled := env.cancelled()
+	env = env.uncancelled() // the abort must run after an interrupt
 	if _, herr := env.runGit(w.Primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr != nil {
 		return fmt.Errorf("tree merge: %w", cause)
 	}
 	files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
 	if _, aerr := env.runGit(w.Primary, "merge", "--abort"); aerr != nil {
 		return fmt.Errorf("tree merge: could not abort the merge in %s: %w", w.Primary, aerr)
+	}
+	if cancelled {
+		return fmt.Errorf("tree merge: interrupted; the merge in %s was aborted: %w", w.Primary, context.Canceled)
 	}
 	return conflictFixable(w.Repo, files)
 }
@@ -94,26 +103,40 @@ func abortMerge(env Env, w where, cause error) error {
 // MERGE_HEAD but a dirty index, so it is undone by hand (see undoSquash).
 func squashLocal(env Env, w where, subject, body string) error {
 	if _, err := env.runGit(w.Primary, "merge", "--squash", w.Repo.Branch); err != nil {
-		files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
-		if uerr := undoSquash(env, w.Primary); uerr != nil {
-			return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
-		}
-		if len(files) == 0 {
-			return fmt.Errorf("tree merge: %w", err)
-		}
-		return conflictFixable(w.Repo, files)
+		return undoFailedSquash(env, w, err, true)
 	}
 	args := []string{"commit", "-m", subject}
 	if body != "" {
 		args = append(args, "-m", body)
 	}
 	if _, err := env.runGit(w.Primary, args...); err != nil {
-		if uerr := undoSquash(env, w.Primary); uerr != nil {
-			return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
-		}
-		return fmt.Errorf("tree merge: %w", err)
+		return undoFailedSquash(env, w, err, false)
 	}
 	return nil
+}
+
+// undoFailedSquash puts the primary right after a squash or its commit failed
+// with cause. It runs to the end even when the verb was interrupted (that is
+// often the cause): a primary left holding a staged squash is the worst
+// outcome of a Ctrl-C. A conflict names its files only when it came from the
+// squash (merging).
+func undoFailedSquash(env Env, w where, cause error, merging bool) error {
+	cancelled := env.cancelled()
+	env = env.uncancelled()
+	var files []string
+	if merging {
+		files = lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
+	}
+	if uerr := undoSquash(env, w.Primary); uerr != nil {
+		return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
+	}
+	switch {
+	case cancelled:
+		return fmt.Errorf("tree merge: interrupted; the squash in %s was undone: %w", w.Primary, context.Canceled)
+	case len(files) > 0:
+		return conflictFixable(w.Repo, files)
+	}
+	return fmt.Errorf("tree merge: %w", cause)
 }
 
 // undoSquash puts the primary back to HEAD after a squash that stopped. It

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,17 +50,18 @@ type treeEnv struct {
 	Runner runner.Runner
 	Clock  clock.Clock
 	Leave  func(primary string) error
+	Ctx    context.Context // cancelled by a signal; nil is never cancelled
 }
 
 // treeVerb runs `trellis tree <verb>` in the real process.
-func treeVerb(args []string, stdout, stderr io.Writer) int {
+func treeVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	dir, err := os.Getwd()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis tree: %v\n", err)
 		return 1
 	}
 	clk := clock.Real()
-	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clk}, Clock: clk, Leave: os.Chdir}, stdout, stderr)
+	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clk}, Clock: clk, Leave: os.Chdir, Ctx: ctx}, stdout, stderr)
 }
 
 // treeExit is the exit code for a failed tree verb: 2 for a failure the
@@ -122,6 +124,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		Err:    stderr,
 		Record: treeRecorder(env.Dir),
 		Leave:  env.Leave,
+		Ctx:    env.Ctx,
 	}
 	switch verb {
 	case "new":

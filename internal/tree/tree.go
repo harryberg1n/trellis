@@ -5,6 +5,7 @@
 package tree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,9 +39,36 @@ type Env struct {
 	// Leave is called with the primary checkout before a tree the process
 	// stands in is removed, so the process can step out of it. May be nil.
 	Leave func(primary string) error
+	// Ctx, when cancelled, ends the running child and its tree and stops the
+	// verb; nil is never cancelled. A local squash in flight is undone first.
+	Ctx context.Context
 }
 
-func (e Env) git() run.Runner { return run.Direct{Inner: e.Runner} }
+func (e Env) git() run.Runner { return run.Direct{Inner: e.runner()} }
+
+// runner is the env's runner with the env's context given to every child.
+func (e Env) runner() run.Runner { return run.WithContext(e.Runner, e.Ctx) }
+
+// uncancelled is e with a context that is never cancelled: the work that
+// puts a half-done change right again must run after an interrupt.
+func (e Env) uncancelled() Env {
+	if e.Ctx != nil {
+		e.Ctx = context.WithoutCancel(e.Ctx)
+	}
+	return e
+}
+
+// cancelled reports whether the verb was interrupted.
+func (e Env) cancelled() bool { return e.Ctx != nil && e.Ctx.Err() != nil }
+
+// interrupted is err, or when the verb was interrupted and err does not say so
+// already, a one-line error that does.
+func (e Env) interrupted(verb string, err error) error {
+	if err == nil || !e.cancelled() || strings.Contains(err.Error(), "interrupted") {
+		return err
+	}
+	return fmt.Errorf("tree %s: interrupted: %w", verb, context.Canceled)
+}
 
 // wait pauses for d on the env's clock.
 func (e Env) wait(d time.Duration) {
@@ -48,7 +76,14 @@ func (e Env) wait(d time.Duration) {
 	if clk == nil {
 		clk = clock.Real()
 	}
-	<-clk.After(d)
+	var done <-chan struct{}
+	if e.Ctx != nil {
+		done = e.Ctx.Done()
+	}
+	select {
+	case <-clk.After(d):
+	case <-done:
+	}
 }
 
 // Fixable is a failure the operator can fix and run the verb again: red CI, a
@@ -126,6 +161,10 @@ func (e Env) branchExists(dir, name string) (bool, error) {
 // New opens a tree called name on a new branch of that name, cut from
 // origin's default branch, at path (Path when empty).
 func New(env Env, name, path string) error {
+	return env.interrupted("new", newTree(env, name, path))
+}
+
+func newTree(env Env, name, path string) error {
 	if name == "" {
 		return errors.New("tree new: a name is needed")
 	}
@@ -174,7 +213,9 @@ func baseOf(repo objects.Repo) string {
 
 // Sync fetches origin and rebases the current tree onto its default branch.
 // A conflict leaves the rebase where git stopped it.
-func Sync(env Env) error {
+func Sync(env Env) error { return env.interrupted("sync", syncTree(env)) }
+
+func syncTree(env Env) error {
 	w, err := env.locate("sync")
 	if err != nil {
 		return err
@@ -206,6 +247,10 @@ func Rebase() MergeOption { return func(o *mergeOpts) { o.rebase = true } }
 // Rebase), then the tree and branch are removed. Any step that fails stops
 // the rest.
 func Merge(env Env, check string, opts ...MergeOption) error {
+	return env.interrupted("merge", mergeTree(env, check, opts...))
+}
+
+func mergeTree(env Env, check string, opts ...MergeOption) error {
 	var o mergeOpts
 	for _, opt := range opts {
 		opt(&o)
@@ -235,14 +280,14 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 			return err
 		}
 	}
-	if err := (host.GH{Runner: env.Runner, Dir: repo.Root}).Ready(); err != nil {
+	if err := (host.GH{Runner: env.runner(), Dir: repo.Root}).Ready(); err != nil {
 		return errors.New("tree merge: gh is not installed or not authenticated")
 	}
 	if _, err := env.runGit(repo.Root, "push", "--force-with-lease", "-u", "origin", name); err != nil {
 		return fmt.Errorf("tree merge: push failed: %s", firstLine(err))
 	}
 	env.say("pushed %s", name)
-	gh := host.GH{Runner: env.Runner, Dir: repo.Root}
+	gh := host.GH{Runner: env.runner(), Dir: repo.Root}
 	if err := ensurePullRequest(gh, name, repo.Default); err != nil {
 		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
@@ -295,7 +340,7 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 // runCheck runs cmd in dir, records its verdict, and fails on red.
 func runCheck(env Env, dir, name, cmd string) error {
 	prog, args := shellCommand(cmd)
-	res, err := env.Runner.Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
+	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
 	if err != nil {
 		env.record(checkEvent(name, "red"))
 		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLine(res, err))}
@@ -402,6 +447,10 @@ func short(sha string) string { return sha[:min(12, len(sha))] }
 // Rm removes the tree called name (the current tree when empty) and its
 // branch. A tree with work no commit holds is refused unless force.
 func Rm(env Env, name string, force bool) error {
+	return env.interrupted("rm", rmTree(env, name, force))
+}
+
+func rmTree(env Env, name string, force bool) error {
 	w, err := env.locate("rm")
 	if err != nil {
 		return err

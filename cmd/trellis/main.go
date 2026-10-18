@@ -2,9 +2,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/buildinfo"
@@ -25,8 +27,23 @@ verbs:
   help      print this text (also --help, -h)
 `
 
+// exitInterrupted is the exit code of a verb a signal cut short: 128 and SIGINT.
+const exitInterrupted = 130
+
 func main() {
-	os.Exit(runIn(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
+	code := exitCode(ctx, runCtx(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	stop()
+	os.Exit(code)
+}
+
+// exitCode is code, or exitInterrupted when ctx was cancelled and the verb did
+// not succeed: a signal during a verb that finished anyway is no failure.
+func exitCode(ctx context.Context, code int) int {
+	if code != 0 && ctx.Err() != nil {
+		return exitInterrupted
+	}
+	return code
 }
 
 // run dispatches one verb that reads no stdin and returns the exit code.
@@ -36,6 +53,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 // runIn dispatches one verb and returns the exit code.
 func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runCtx(context.Background(), args, stdin, stdout, stderr)
+}
+
+// runCtx is runIn for a verb that ctx can cancel.
+func runCtx(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, usage)
 		return 2
@@ -58,9 +80,9 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "install", "eject", "doctor":
 		return installVerb(args, stdout, stderr)
 	case "tree":
-		return treeVerb(args[1:], stdout, stderr)
+		return treeVerb(ctx, args[1:], stdout, stderr)
 	case "update":
-		return updateVerb(args[1:], stdout, stderr)
+		return updateVerb(ctx, args[1:], stdout, stderr)
 	case "help", "--help", "-h":
 		_, _ = io.WriteString(stdout, usage)
 		return 0

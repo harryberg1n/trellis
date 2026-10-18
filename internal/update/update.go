@@ -4,6 +4,7 @@
 package update
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -33,7 +34,8 @@ const smokeTimeout = 10 * time.Second
 
 // Env is what update takes from the process.
 type Env struct {
-	Runner  run.Runner // runs gh and the staged binary
+	Runner  run.Runner      // runs gh and the staged binary
+	Ctx     context.Context // cancelling it ends the running child; nil is never cancelled
 	Out     io.Writer
 	Root    string // the state root
 	Exe     string // the running binary, the one on PATH
@@ -58,6 +60,7 @@ func Run(env Env, o Options) error {
 	if env.Version == "" || (env.Version == "dev" && !o.AllowDev) {
 		return errors.New("refusing to update an unversioned build; pass --allow-dev")
 	}
+	env.Runner = run.WithContext(env.Runner, env.Ctx)
 	u := updater{Env: env, dry: o.Dry, gh: host.GH{Runner: env.Runner}}
 	if !o.Dry {
 		removeStale(env.Exe)

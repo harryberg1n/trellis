@@ -3,6 +3,7 @@ package tree
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1437,5 +1438,79 @@ func TestNew_ReadsOriginFromAnIncludedConfig(t *testing.T) {
 
 	if exists(filepath.Join(Path(f.primary, "feat"), "local.txt")) {
 		t.Errorf("the tree was cut from the local main: the included remote was not seen")
+	}
+}
+
+// cancelAfter runs the child and then, when its arguments contain every word
+// of Verb, cancels the context and reports the child as killed by it; a child
+// started on a context already cancelled does not start, as run.Light has it.
+type cancelAfter struct {
+	Inner  run.Runner
+	Verb   []string
+	Cancel context.CancelFunc
+}
+
+func (c *cancelAfter) Light(spec run.Spec) (run.Result, error) {
+	if spec.Ctx != nil && spec.Ctx.Err() != nil {
+		return run.Result{}, spec.Ctx.Err()
+	}
+	res, err := c.Inner.Light(spec)
+	if err == nil && spec.Name == "git" && slices.Contains(spec.Args, c.Verb[0]) && slices.Contains(spec.Args, c.Verb[1]) {
+		c.Cancel()
+		return res, fmt.Errorf("git: %w", context.Canceled)
+	}
+	return res, err
+}
+
+func TestMerge_InterruptDuringALocalSquashUndoesItAndLeavesThePrimaryClean(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	commitFile(t, path, "README.md", "tree readme\n")
+	before := testiso.Git(t, f.primary, "rev-parse", "HEAD")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+	env.Runner = &cancelAfter{Inner: f.gh, Verb: []string{"merge", "--squash"}, Cancel: cancel}
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "the squash in") || !strings.Contains(err.Error(), "was undone") {
+		t.Fatalf("err = %v, want an interrupt that names the undone squash", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain"); got != "" {
+		t.Errorf("the primary is not clean after the interrupt:\n%s", got)
+	}
+	if got := testiso.Git(t, f.primary, "rev-parse", "HEAD"); got != before {
+		t.Errorf("the primary moved to %s, want %s", got, before)
+	}
+	if !exists(path) {
+		t.Errorf("the tree was removed by an interrupted merge")
+	}
+	if slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("an interrupted merge recorded a merge: %v", f.kinds())
+	}
+}
+
+func TestMerge_InterruptBeforeAnyChildStartsStopsAtOnceWithoutGh(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env := f.env(path)
+	env.Ctx = ctx
+
+	err := Merge(env, "")
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if calls := f.ghCalls(); len(calls) != 0 {
+		t.Errorf("gh ran after the interrupt: %v", calls)
+	}
+	var fx *Fixable
+	if errors.As(err, &fx) {
+		t.Errorf("an interrupt is not a failure to fix and run again: %v", err)
 	}
 }

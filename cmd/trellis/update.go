@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +19,7 @@ import (
 const updateUsageLine = "update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
 
 // updateVerb runs `trellis update` in the real process.
-func updateVerb(args []string, stdout, stderr io.Writer) int {
+func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("update", updateUsageLine, stderr)
 	to := fs.String("to", "", "switch to this pinned (or released) version instead of the newest release")
 	dry := fs.Bool("dry", false, "print each step with \"would \" and change nothing")
@@ -39,6 +40,7 @@ func updateVerb(args []string, stdout, stderr io.Writer) int {
 	}
 	env := update.Env{
 		Runner:  runner.Exec{Clock: clock.Real()},
+		Ctx:     ctx,
 		Out:     stdout,
 		Root:    root,
 		Exe:     exe,

@@ -18,7 +18,15 @@ import (
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
-func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
+func TestLight_TreeKillEndsGrandchildren(t *testing.T) { treeKill(t, false) }
+
+// A cancelled context ends the child's tree at once, without the timeout.
+func TestLight_CancelledContextKillsTheChildTree(t *testing.T) { treeKill(t, true) }
+
+// treeKill starts a child with a grandchild and ends the run by the timeout, or
+// with cancelled the cancelled context, then requires the grandchild dead.
+func treeKill(t *testing.T, cancelled bool) {
+	t.Helper()
 	// Real time bounds the test so a broken kill fails instead of hanging; the
 	// kill itself is driven by the fake clock.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -43,8 +51,10 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 		err error
 	}
 	done := make(chan outcome, 1)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	t.Cleanup(cancelRun)
 	go func() {
-		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: 30 * time.Second})
+		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: 30 * time.Second, Ctx: runCtx})
 		done <- outcome{res, err}
 	}()
 
@@ -76,11 +86,17 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Light never waited on the clock")
 	}
-	fc.Advance(30 * time.Second)
+	want := ErrTimeout
+	if cancelled {
+		want = context.Canceled
+		cancelRun()
+	} else {
+		fc.Advance(30 * time.Second)
+	}
 	select {
 	case got := <-done:
-		if !errors.Is(got.err, ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", got.err)
+		if !errors.Is(got.err, want) || (cancelled && errors.Is(got.err, ErrTimeout)) {
+			t.Fatalf("err = %v, want %v", got.err, want)
 		}
 	case <-ctx.Done():
 		t.Fatal("Light did not return after its timeout")
@@ -161,3 +177,38 @@ func TestScrubGitEnv(t *testing.T) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
+
+func TestLight_ACancelledContextNeverStartsTheChild(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fc := clock.Fake(time.Unix(1000, 0))
+
+	_, err := Light(fc, Spec{Name: "git", Args: []string{"--version"}, Timeout: time.Minute, Ctx: ctx})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestWithContext_GivesTheContextToAChildThatHasNone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var got []context.Context
+	inner := &recordCtx{func(s Spec) { got = append(got, s.Ctx) }}
+	r := WithContext(inner, ctx)
+	own := context.WithValue(context.Background(), struct{}{}, 1)
+
+	_, _ = r.Light(Spec{})
+	_, _ = r.Light(Spec{Ctx: own})
+	cancel()
+
+	if len(got) != 2 || got[0] != ctx || got[1] != own {
+		t.Errorf("contexts = %v, want the wrapper's and then the spec's own", got)
+	}
+	if WithContext(inner, nil) != Runner(inner) {
+		t.Errorf("a nil context wrapped the runner")
+	}
+}
+
+type recordCtx struct{ f func(Spec) }
+
+func (r *recordCtx) Light(s Spec) (Result, error) { r.f(s); return Result{}, nil }
