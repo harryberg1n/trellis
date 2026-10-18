@@ -20,6 +20,10 @@ import (
 // "blob <len>\0" + content, hashed with the repo's format, deflated to
 // objects/xx/rest through a temp file and a rename. An object already there is
 // left alone.
+//
+// The object file is not fsynced: temp write plus rename only, like git's
+// loose-object default before 2.36. A power loss can lose it; Stop re-anchors
+// from disk, which rewrites whatever the turn's tree needs.
 func WriteBlob(gitDir, path string) (string, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -65,9 +69,6 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 		return "", err
 	}
 	_, werr := tmp.Write(packed.Bytes())
-	if werr == nil {
-		werr = tmp.Sync() // the object must survive a crash before the anchor names it
-	}
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
