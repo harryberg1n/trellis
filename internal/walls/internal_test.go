@@ -190,6 +190,24 @@ func TestGitCalls_InsideShellConstructs(t *testing.T) {
 		{"plain substitution counted once", `echo $(git commit --no-verify)`, []string{"commit"}, true},
 		{"nested depth", `(if true; then bash -c "git push --no-verify"; fi)`, []string{"push"}, true},
 		{"while", `while true; do git commit -n; done`, []string{"commit"}, true},
+		{"backticks", "echo `git commit --no-verify`", []string{"commit"}, true},
+		{"backticks in double quotes", "echo \"x `git commit --no-verify`\"", []string{"commit"}, true},
+		{"backticks in single quotes are data", "echo '`git commit --no-verify`'", nil, false},
+		{"timeout", `timeout 5 git commit --no-verify`, []string{"commit"}, true},
+		{"timeout with options", `timeout -s KILL -k 2 5 git commit --no-verify`, []string{"commit"}, true},
+		{"stdbuf", `stdbuf -oL -e0 git commit --no-verify`, []string{"commit"}, true},
+		{"setsid", `setsid git commit --no-verify`, []string{"commit"}, true},
+		{"ionice", `ionice -c 3 -n 7 git commit --no-verify`, []string{"commit"}, true},
+		{"nice", `nice -n 5 git commit --no-verify`, []string{"commit"}, true},
+		{"env -S", `env -S 'git commit --no-verify'`, []string{"commit"}, true},
+		{"exported GIT_DIR from an earlier segment", `export GIT_DIR=/x/.git; git commit --no-verify`, []string{"commit"}, true},
+		// Known gaps, left open on purpose: a heredoc fed to a shell (`bash <<EOF`),
+		// a script piped to one (`echo ... | sh`), a command held in a variable
+		// and another language's -c (`python -c`) are not read.
+		{"heredoc to a shell is a known gap", "bash <<EOF\ngit commit --no-verify\nEOF", nil, false},
+		{"pipe to a shell is a known gap", `echo "git commit --no-verify" | sh`, nil, false},
+		{"variable is a known gap", `c="git commit --no-verify"; $c`, nil, false},
+		{"python -c is a known gap", `python -c "import os; os.system('git commit --no-verify')"`, nil, false},
 	}
 	for _, c := range cases {
 		a := &analysis{tool: "Bash", cwd: t.TempDir(), command: c.cmd}

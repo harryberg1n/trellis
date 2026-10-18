@@ -125,10 +125,17 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 	}
 	dir := cwd
 	segs := parse(tool, src)
+	gitDir := "" // GIT_DIR as an earlier `export` of this command left it
 	for _, seg := range segs {
 		if target, ok := cdTarget(seg); ok {
 			dir = resolve(dir, target)
 			continue
+		}
+		if v, ok := exportedGitDir(seg); ok {
+			gitDir = v
+		}
+		if gitDir != "" {
+			seg = withGitDir(seg, gitDir)
 		}
 		fn(seg, dir)
 		if script, ok := inlineScript(seg); ok {
@@ -142,6 +149,31 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 	for _, body := range substitutionBodies(src, esc) {
 		walkDepth(tool, body, dir, keepBodies, depth+1, fn)
 	}
+}
+
+// exportedGitDir is the GIT_DIR an `export` segment sets.
+func exportedGitDir(seg []word) (string, bool) {
+	i := commandStart(seg)
+	if i >= len(seg) || seg[i].text != "export" {
+		return "", false
+	}
+	for _, w := range seg[i+1:] {
+		if v, ok := strings.CutPrefix(w.text, "GIT_DIR="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// withGitDir is a git segment with GIT_DIR=dir put in front of its command, as
+// if it had been written there; any other segment is returned as it is.
+func withGitDir(seg []word, dir string) []word {
+	i := commandStart(seg)
+	if i >= len(seg) || baseCommand(seg[i].text) != "git" {
+		return seg
+	}
+	assign := "GIT_DIR=" + dir
+	return append([]word{{text: assign, raw: assign}}, seg...)
 }
 
 // changesDir are the commands that move the shell's directory, in bash and
@@ -170,6 +202,9 @@ var shells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true
 // inlineScript is the script a `bash -c` segment (any of -c, -lc, -ec...) or
 // an `eval` segment runs, found behind any env, sudo or xargs prefix.
 func inlineScript(seg []word) (string, bool) {
+	if script, ok := envSplitString(seg); ok {
+		return script, true
+	}
 	i := commandStart(seg)
 	if i >= len(seg) {
 		return "", false
@@ -188,6 +223,29 @@ func inlineScript(seg []word) (string, bool) {
 	for j, a := range args {
 		if isDashC(a.text) && j+1 < len(args) {
 			return args[j+1].text, true
+		}
+	}
+	return "", false
+}
+
+// envSplitString is the command line of an `env -S 'cmd args'` segment, and
+// the words after it.
+func envSplitString(seg []word) (string, bool) {
+	for i, w := range seg {
+		if baseCommand(w.text) != "env" {
+			continue
+		}
+		for j := i + 1; j < len(seg); j++ {
+			t := seg[j].text
+			if v, ok := strings.CutPrefix(t, "--split-string="); ok {
+				return strings.Join(append([]string{v}, texts(seg[j+1:])...), " "), true
+			}
+			if (t == "-S" || t == "--split-string") && j+1 < len(seg) {
+				return strings.Join(texts(seg[j+1:]), " "), true
+			}
+			if !strings.HasPrefix(t, "-") && !strings.Contains(t, "=") {
+				break
+			}
 		}
 	}
 	return "", false
@@ -217,6 +275,13 @@ func substitutionBodies(src string, esc byte) []string {
 		switch src[i] {
 		case esc:
 			i++
+		case '`':
+			if esc != '`' {
+				if end := backtickEnd(src, i); end > i {
+					bodies = append(bodies, src[i+1:end])
+					i = end
+				}
+			}
 		case '#':
 			if wordStart(src, i) {
 				for i < len(src) && src[i] != '\n' {
@@ -230,6 +295,11 @@ func substitutionBodies(src string, esc byte) []string {
 				switch {
 				case src[i] == esc:
 					i++
+				case src[i] == '`' && esc != '`':
+					if end := backtickEnd(src, i); end > i {
+						bodies = append(bodies, src[i+1:end])
+						i = end
+					}
 				case src[i] == '$' && i+1 < len(src) && src[i+1] == '(':
 					if end := closeParen(src, i+2); end >= 0 {
 						bodies = append(bodies, src[i+2:end])
@@ -249,6 +319,20 @@ func substitutionBodies(src string, esc byte) []string {
 		}
 	}
 	return bodies
+}
+
+// backtickEnd is the index of the backtick that closes the one at src[i], or
+// -1; a backslash escapes the byte after it.
+func backtickEnd(src string, i int) int {
+	for j := i + 1; j < len(src); j++ {
+		switch src[j] {
+		case '\\':
+			j++
+		case '`':
+			return j
+		}
+	}
+	return -1
 }
 
 // wordStart reports whether src[i] begins a word.
@@ -554,11 +638,19 @@ var prefixOptions = map[string]map[string]bool{
 	"sudo":    {"-u": true, "-g": true, "-h": true, "-p": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true, "-r": true, "-t": true, "--user": true, "--group": true},
 	"xargs":   {"-I": true, "-L": true, "-n": true, "-P": true, "-s": true, "-d": true, "-E": true, "-a": true, "--max-args": true, "--max-procs": true, "--delimiter": true, "--arg-file": true},
 	"nice":    {"-n": true},
+	"timeout": {"-s": true, "-k": true, "--signal": true, "--kill-after": true},
+	"stdbuf":  {"-i": true, "-o": true, "-e": true},
+	"setsid":  {},
+	"ionice":  {"-c": true, "-n": true, "-p": true, "-P": true, "-u": true},
 	"exec":    {"-a": true},
 	"command": {},
 	"time":    {"-f": true, "-o": true},
 	"nohup":   {},
 }
+
+// prefixPositional are the prefixes that take that many plain arguments
+// before the command they run: `timeout 5 git ...`.
+var prefixPositional = map[string]int{"timeout": 1}
 
 // commandStart is the index in seg of the program the segment runs: past
 // NAME=value assignments and past env, sudo, xargs and the like with their
@@ -577,6 +669,7 @@ func commandStart(seg []word) int {
 				}
 				i++
 			}
+			i += prefixPositional[baseCommand(t)]
 		case strings.Contains(t, "=") && !strings.HasPrefix(t, "-"):
 			i++
 		default:

@@ -650,3 +650,21 @@ func TestMainCommit_FollowsGitDirAndWorkTreeToTheRepoTheyName(t *testing.T) {
 		t.Errorf("a tree's own --git-dir: denies %+v, want none", d)
 	}
 }
+
+func TestMainCommit_FollowsAnExportedGitDir(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	gitDir := filepath.ToSlash(filepath.Join(w.primary, ".git"))
+	for _, cmd := range []string{
+		`export GIT_DIR=` + gitDir + `; git commit -m x`,
+		`export A=1 GIT_DIR=` + gitDir + ` && git push origin main`,
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "main-commit" {
+			t.Errorf("%q from a tree: denies %+v, want main-commit", cmd, d)
+		}
+	}
+	if d := verdicts(decide(t, bash(t, w.tree, `export GIT_DIR=`+gitDir+`; echo hi; git status`, true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("an exported GIT_DIR with a harmless git verb: denies %+v, want none", d)
+	}
+}
