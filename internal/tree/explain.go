@@ -33,7 +33,7 @@ func syncError(env Env, repo objects.Repo, out string, err error) error {
 	}
 	b.WriteString("\nconflicted: " + strings.Join(files, ", "))
 	b.WriteString("\nresolve, git add, git rebase --continue; or git rebase --abort")
-	return fmt.Errorf("%s", b.String())
+	return &Fixable{Msg: b.String()}
 }
 
 // mustGit is the output of a git read, "" when it fails.
@@ -92,27 +92,46 @@ func conflictFiles(env Env, dir, base string) []string {
 
 var runIDInLink = regexp.MustCompile(`/runs/(\d+)`)
 
-// checksError explains a failed wait: for each failed check its name and
-// link and the failing lines of its log. A wait that failed with no failed
-// check to show is gh's own output, as a plain error.
-func checksError(env Env, gh host.GH, pr int, out string, err error) error {
+// checksError explains a failed wait. Checks that failed or were cancelled are
+// one block (see unpassedChecks). A wait that failed with no such check to
+// show means the checks could not be read: one line, with gh's first line.
+func checksError(env Env, gh host.GH, pr int, err error) error {
+	if fx := unpassedChecks(env, gh, pr, ""); fx != nil {
+		return fx
+	}
+	line, _, _ := strings.Cut(strings.TrimPrefix(err.Error(), "host: "), "\n")
+	return fmt.Errorf("tree merge: checks could not be read: %s", line)
+}
+
+// unpassedChecks is a Fixable listing every check of the pull request that
+// failed (its name, link and the failing lines of its log) or was cancelled,
+// under one header. With none to list it is nil, or, when why is given, a
+// Fixable that says why the checks are taken for red all the same.
+func unpassedChecks(env Env, gh host.GH, pr int, why string) *Fixable {
 	checks, _ := gh.Checks(pr)
-	var failed []host.Check
+	var bad []host.Check
 	for _, c := range checks {
-		if strings.EqualFold(c.Bucket, "fail") {
-			failed = append(failed, c)
+		if strings.EqualFold(c.Bucket, "fail") || strings.EqualFold(c.Bucket, "cancel") {
+			bad = append(bad, c)
 		}
 	}
-	if len(failed) == 0 {
-		return fmt.Errorf("tree merge: checks of #%d: %w\n%s", pr, err, out)
+	if len(bad) == 0 {
+		if why == "" {
+			return nil
+		}
+		return &Fixable{Msg: "tree merge: checks did not pass: " + why}
 	}
 	noun := "checks"
-	if len(failed) == 1 {
+	if len(bad) == 1 {
 		noun = "check"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "tree merge: %d %s failed", len(failed), noun)
-	for _, c := range failed {
+	fmt.Fprintf(&b, "tree merge: %d %s did not pass", len(bad), noun)
+	for _, c := range bad {
+		if strings.EqualFold(c.Bucket, "cancel") {
+			fmt.Fprintf(&b, "\ncancelled: %s", c.Name)
+			continue
+		}
 		fmt.Fprintf(&b, "\n%s  %s", c.Name, c.Link)
 		m := runIDInLink.FindStringSubmatch(c.Link)
 		if m == nil {
@@ -142,7 +161,7 @@ var failMarks = []string{"--- FAIL", "FAIL\t", "panic:", "Error:", "error:", "##
 func failingLines(log string) []string {
 	var out []string
 	for _, l := range strings.Split(log, "\n") {
-		l = logPrefix.ReplaceAllString(strings.TrimRight(l, "\r"), "")
+		l = logPrefix.ReplaceAllString(strings.TrimPrefix(strings.TrimRight(l, "\r"), "\ufeff"), "")
 		for _, m := range failMarks {
 			if strings.Contains(l, m) {
 				out = append(out, l)

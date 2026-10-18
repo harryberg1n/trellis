@@ -122,6 +122,7 @@ type PRState struct {
 	Mergeable        string `json:"mergeable"`        // MERGEABLE, CONFLICTING or UNKNOWN
 	MergeStateStatus string `json:"mergeStateStatus"` // CLEAN, DIRTY, BEHIND, BLOCKED ...
 	HeadSHA          string `json:"headRefOid"`
+	ReviewDecision   string `json:"reviewDecision"` // REVIEW_REQUIRED, CHANGES_REQUESTED, APPROVED or ""
 }
 
 // Check is one check of a pull request as `gh pr check --json` reports it.
@@ -159,7 +160,7 @@ var ErrNoPR = errors.New("host: no pull request for the branch")
 
 // PRView is the pull request of branch, or an error wrapping ErrNoPR.
 func (g GH) PRView(branch string) (PRState, error) {
-	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state,mergeable,mergeStateStatus,headRefOid")
+	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision")
 	if err != nil {
 		if strings.Contains(err.Error(), "no pull requests found") {
 			return PRState{}, fmt.Errorf("%w: %s", ErrNoPR, branch)

@@ -14,13 +14,6 @@ import (
 func mergeLocal(env Env, w where, check string) error {
 	repo := w.Repo
 	name := repo.Branch
-	dirty, err := walls.Dirty(env.git(), repo.Root)
-	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
-	}
-	if dirty != "" {
-		return fmt.Errorf("tree merge: %s has %s; commit or discard it first", name, dirty)
-	}
 	if check != "" {
 		if err := runCheck(env, repo.Root, name, check); err != nil {
 			return err
@@ -33,7 +26,7 @@ func mergeLocal(env Env, w where, check string) error {
 	if primary.Branch != repo.Default {
 		return fmt.Errorf("tree merge: the primary checkout is on %s, not %s", primary.Branch, repo.Default)
 	}
-	dirty, err = walls.Dirty(env.git(), w.Primary)
+	dirty, err := walls.Dirty(env.git(), w.Primary)
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
@@ -46,13 +39,20 @@ func mergeLocal(env Env, w where, check string) error {
 		args = append(args, "-m", body)
 	}
 	if _, err := env.runGit(w.Primary, append(args, name)...); err != nil {
-		files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
-		if len(files) == 0 {
+		// a merge that stopped on conflicts leaves MERGE_HEAD: whatever else
+		// fails below, the primary checkout must not be left merging
+		if _, herr := env.runGit(w.Primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr != nil {
 			return fmt.Errorf("tree merge: %w", err)
 		}
-		_, _ = env.runGit(w.Primary, "merge", "--abort")
-		return &Fixable{Msg: fmt.Sprintf("tree merge: conflicts with %s in: %s\nrun trellis tree sync in the tree, resolve, merge again",
-			repo.Default, strings.Join(files, ", "))}
+		files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
+		if _, aerr := env.runGit(w.Primary, "merge", "--abort"); aerr != nil {
+			return fmt.Errorf("tree merge: could not abort the merge in %s: %w", w.Primary, aerr)
+		}
+		where := "(files unknown)"
+		if len(files) > 0 {
+			where = "in: " + strings.Join(files, ", ")
+		}
+		return &Fixable{Msg: fmt.Sprintf("tree merge: conflicts with %s %s\nrun trellis tree sync in the tree, resolve, merge again", repo.Default, where)}
 	}
 	sha, err := env.runGit(w.Primary, "rev-parse", "HEAD")
 	if err != nil {

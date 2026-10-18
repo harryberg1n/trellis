@@ -205,6 +205,9 @@ func Merge(env Env, check string) error {
 		return errors.New("tree merge: HEAD is detached")
 	}
 	name := repo.Branch
+	if err := refuseDirty(env, repo.Root, name); err != nil {
+		return err
+	}
 	if repo.Remote == "" {
 		return mergeLocal(env, w, check)
 	}
@@ -235,16 +238,18 @@ func Merge(env Env, check string) error {
 		return conflictError(env, repo)
 	case st.IsBehind():
 		return &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+	case st.MergeUnknown():
+		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
-	switch out, err := gh.WatchChecks(pr); {
+	switch _, err := gh.WatchChecks(pr); {
 	case errors.Is(err, host.ErrNoChecks):
 		env.say("no checks on this PR")
 	case err != nil:
-		return checksError(env, gh, pr, out, err)
+		return checksError(env, gh, pr, err)
 	default:
 		env.say("checks passed on #%d", pr)
 	}
-	if err := headMoved(env, gh, repo, name); err != nil {
+	if err := readyToMerge(env, gh, repo, name); err != nil {
 		return err
 	}
 	if err := gh.MergePR(pr); err != nil {
@@ -297,9 +302,10 @@ func ensurePullRequest(gh host.GH, branch, base string) error {
 	return err
 }
 
-// headMoved is a Fixable when the pull request's head is no longer the commit
-// this tree is on: the checks that just passed judged another commit.
-func headMoved(env Env, gh host.GH, repo objects.Repo, branch string) error {
+// readyToMerge reads the pull request once more after the checks and is a
+// Fixable unless gh would merge it: the head must still be the commit this
+// tree is on (the checks judged it), and the merge state must be clean.
+func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) error {
 	st, err := gh.PRView(branch)
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
@@ -308,10 +314,44 @@ func headMoved(env Env, gh host.GH, repo objects.Repo, branch string) error {
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
-	if st.HeadSHA == "" || strings.EqualFold(st.HeadSHA, local) {
-		return nil
+	switch {
+	case st.HeadSHA != "" && !strings.EqualFold(st.HeadSHA, local):
+		return &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
+	case st.IsConflicting():
+		return conflictError(env, repo)
+	case st.IsBehind():
+		return &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+	case strings.EqualFold(st.MergeStateStatus, "BLOCKED"):
+		return &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
+	case strings.EqualFold(st.MergeStateStatus, "UNSTABLE"):
+		// the watch said green, so this is our read being wrong: red all the same
+		return unpassedChecks(env, gh, st.Number, "merge state UNSTABLE after a green watch")
 	}
-	return &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
+	return nil
+}
+
+// blockReason is ": <why>" for a review decision gh names, else "".
+func blockReason(reviewDecision string) string {
+	switch strings.ToUpper(reviewDecision) {
+	case "REVIEW_REQUIRED":
+		return ": review required"
+	case "CHANGES_REQUESTED":
+		return ": changes requested"
+	}
+	return ""
+}
+
+// refuseDirty is a one-line refusal when the tree holds work no commit does:
+// a push would leave it out and the removal after the merge would refuse it.
+func refuseDirty(env Env, dir, name string) error {
+	dirty, err := walls.Dirty(env.git(), dir)
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	if dirty != "" {
+		return fmt.Errorf("tree merge: %s has %s; commit or discard it first", name, dirty)
+	}
+	return nil
 }
 
 func short(sha string) string { return sha[:min(12, len(sha))] }
