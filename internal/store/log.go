@@ -71,7 +71,7 @@ func WithLockTimeout(d time.Duration) Option {
 
 // Open prepares repoDir and returns its Store.
 func Open(repoDir string, c clock.Clock, opts ...Option) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), dirMode); err != nil {
 		return nil, err
 	}
 	s := &Store{dir: repoDir, clock: c, rename: os.Rename, remove: os.Remove, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
@@ -314,7 +314,7 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 		buf.WriteByte('\n')
 		out[i] = ev
 	}
-	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_RDWR, fileMode)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +363,7 @@ func (s *Store) Park(ev kernel.Event) error {
 	// Synced through the file's own Sync, not the store's seam: a parked event
 	// is never a Lazy write.
 	return WriteAtomic(s.pendingDir(), name+".json", raw,
-		WithSync((*os.File).Sync), WithMode(0o644))
+		WithSync((*os.File).Sync), WithMode(fileMode))
 }
 
 // BytesRead is how many log bytes this Store has read, for tests that pin
@@ -408,7 +408,7 @@ func (s *Store) skip(l logLine) {
 	if l.off >= 0 && s.quarantinedAt(l.off) {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
 	if err != nil {
 		return
 	}
@@ -417,7 +417,7 @@ func (s *Store) skip(l logLine) {
 	_, _ = f.Write(append(append([]byte(nil), l.raw...), newline))
 	_ = f.Close()
 	if l.off >= 0 {
-		if at, err := os.OpenFile(s.quarantineAtPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		if at, err := os.OpenFile(s.quarantineAtPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode); err == nil {
 			_, _ = at.WriteString(strconv.FormatInt(l.off, 10) + "\n")
 			_ = at.Close()
 		}
