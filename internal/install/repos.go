@@ -62,26 +62,9 @@ func writeLines(root, name string, lines []string) error {
 // No record is no repositories.
 func Repos(root string) ([]string, error) { return readLines(root, reposFile) }
 
-// recordedRoot is the root a repo is recorded under. A linked worktree is
-// recorded as its primary checkout: the hooks in a tree are the repository's,
-// and a tree that `trellis tree rm` later removes must not leave a record that
-// is not found.
-func recordedRoot(repo string) (string, error) {
-	canon, err := canonicalRepo(repo)
-	if err != nil {
-		return "", err
-	}
-	r, err := objects.Open(canon)
-	if err != nil || r.Primary || filepath.Base(r.Common) != ".git" {
-		return canon, nil
-	}
-	return filepath.Dir(r.Common), nil
-}
-
-// RecordRepo adds repo to the record, once. A linked worktree is recorded as
-// its primary checkout.
+// RecordRepo adds repo to the record, once.
 func RecordRepo(root, repo string) error {
-	canon, err := recordedRoot(repo)
+	canon, err := canonicalRepo(repo)
 	if err != nil {
 		return err
 	}
@@ -93,6 +76,32 @@ func RecordRepo(root, repo string) error {
 		return nil
 	}
 	return writeLines(root, reposFile, append(repos, canon))
+}
+
+// recordInstall records the repository an install just wrote hooks into, and
+// returns a note when it recorded nothing. A linked worktree is recorded as its
+// primary checkout, but only when the primary holds trellis hooks of its own:
+// update re-installs what it records, and must not write hooks into a checkout
+// the user never installed in. A tree that `trellis tree rm` later removes
+// leaves no record that is not found.
+func recordInstall(root, repo string) (note string, err error) {
+	canon, err := canonicalRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	r, oerr := objects.Open(canon)
+	if oerr != nil || r.Primary || filepath.Base(r.Common) != ".git" {
+		return "", RecordRepo(root, canon)
+	}
+	primary := filepath.Dir(r.Common)
+	refs, err := ReferencedVersions(root, primary)
+	if err != nil {
+		return "", err
+	}
+	if len(refs) == 0 {
+		return "not recorded: update re-installs primary checkouts only; run trellis install in " + primary + " to include this repository", nil
+	}
+	return "", RecordRepo(root, primary)
 }
 
 // ForgetRepo removes repo from the record; one not there is not an error.

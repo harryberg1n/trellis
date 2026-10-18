@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/store"
@@ -35,15 +36,47 @@ func TestInstall_RecordsTheRepo(t *testing.T) {
 	}
 }
 
-func TestInstall_InATreeRecordsThePrimaryOnce(t *testing.T) {
+func TestInstall_InATreeOfAnUninstalledPrimaryRecordsNothingAndSaysSo(t *testing.T) {
 	f := newFixture(t)
 	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.2", false)
+	o.Repo = tree
 
-	for _, repo := range []string{tree, f.repo, tree} {
-		o := f.opts("v0.0.2", false)
-		o.Repo = repo
-		if _, err := Install(o); err != nil {
+	actions, err := Install(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := Repos(f.root); len(got) != 0 {
+		t.Errorf("Repos = %v, want nothing recorded", got)
+	}
+	want := "not recorded: update re-installs primary checkouts only; run trellis install in " + store.Canonical(f.repo) + " to include this repository"
+	if last := actions[len(actions)-1]; last != want {
+		t.Errorf("last action = %q, want %q", last, want)
+	}
+	if _, err := os.Stat(SettingsPath(f.repo)); !os.IsNotExist(err) {
+		t.Errorf("the primary's settings were touched: %v", err)
+	}
+}
+
+func TestInstall_InATreeOfAnInstalledPrimaryRecordsThePrimaryOnce(t *testing.T) {
+	f := newFixture(t)
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.2", false)
+	o.Repo = tree
+
+	for range 2 {
+		actions, err := Install(o)
+		if err != nil {
 			t.Fatal(err)
+		}
+		for _, a := range actions {
+			if strings.HasPrefix(a, "not recorded") {
+				t.Errorf("unexpected action %q", a)
+			}
 		}
 	}
 

@@ -131,8 +131,12 @@ func Install(o Options) ([]string, error) {
 			return nil, err
 		}
 	}
-	if err := RecordRepo(o.Root, o.Repo); err != nil {
+	note, err := recordInstall(o.Root, o.Repo)
+	if err != nil {
 		return nil, err
+	}
+	if note != "" {
+		actions = append(actions, note)
 	}
 	return actions, nil
 }
