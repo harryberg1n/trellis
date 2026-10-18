@@ -124,6 +124,10 @@ func readMessage(dir, name string) string {
 // identityKeys are the -c settings that name who a commit is by.
 var identityKeys = map[string]bool{"user.name": true, "user.email": true}
 
+// commitWriters are the git verbs that write a commit, and so have an identity
+// to judge; `git log --author=` is a search, not an identity.
+var commitWriters = map[string]bool{"commit": true, "merge": true, "cherry-pick": true, "revert": true, "am": true, "rebase": true, "pull": true}
+
 // identityCause is the vendor address a git call sets as the identity of its
 // commit, or "": `--author=<ident>`, `--author <ident>`, and `-c user.name=` or
 // `-c user.email=` among the globals of the call. Source: aphrollo-tools
@@ -131,7 +135,7 @@ var identityKeys = map[string]bool{"user.name": true, "user.email": true}
 // and committer of a commit), read here before the commit exists.
 func identityCause(seg []word, dir string) string {
 	c, ok := parseGit(seg, dir)
-	if !ok {
+	if !ok || !commitWriters[c.Verb] {
 		return ""
 	}
 	for _, kv := range c.Globals {

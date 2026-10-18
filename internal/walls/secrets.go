@@ -190,7 +190,7 @@ func gitleaksVersion(r run.Runner, bin, dir string) string {
 	}
 	res, _ := r.Light(run.Spec{Name: "gitleaks", Args: []string{"version"}, Dir: dir, Timeout: gitleaksTimeout})
 	version := semver.FindString(string(res.Stdout) + string(res.Stderr))
-	if rootErr == nil {
+	if rootErr == nil && version != "" { // a failed ask is asked again next time
 		_ = store.SaveToolVersion(root, bin, info.ModTime(), version) // a cache that cannot be written is asked again
 	}
 	return version

@@ -23,7 +23,7 @@ type toolVersion struct {
 }
 
 func readToolVersions(root string) map[string]toolVersion {
-	raw, err := os.ReadFile(filepath.Join(root, toolVersionFile))
+	raw, err := readFileShared(filepath.Join(root, toolVersionFile))
 	if err != nil {
 		return nil
 	}

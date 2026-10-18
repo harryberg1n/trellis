@@ -325,3 +325,32 @@ func TestStashEmpty_AnUnreadableRefIsNotEmpty(t *testing.T) {
 		t.Error("StashEmpty with a refs/stash it cannot read = true, want false (unknown is not empty)")
 	}
 }
+
+func TestBranch_RebaseMergeWinsOverRebaseApply(t *testing.T) {
+	primary := testiso.Repo(t)
+	tree := testiso.AddTree(t, primary, "tree", "tree/x")
+	testiso.Git(t, tree, "checkout", "-q", "--detach")
+	_, gitDir, err := GitDirs(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testiso.Write(t, filepath.Join(gitDir, "rebase-apply", "head-name"), "refs/heads/from-apply\n")
+	testiso.Write(t, filepath.Join(gitDir, "rebase-merge", "head-name"), "refs/heads/from-merge\n")
+	if r, err := Open(tree); err != nil || r.Branch != "from-merge" {
+		t.Errorf("Open with both rebase dirs: branch %q, %v; want from-merge", r.Branch, err)
+	}
+}
+
+func TestStashEmpty_AStashInPackedRefsIsNotEmpty(t *testing.T) {
+	repo := testiso.Repo(t)
+	common := filepath.Join(repo, ".git")
+	testiso.Write(t, filepath.Join(repo, "README.md"), "changed\n")
+	testiso.Git(t, repo, "stash", "push", "-q")
+	testiso.Git(t, repo, "pack-refs", "--all")
+	if _, err := os.Stat(filepath.Join(common, "refs", "stash")); err == nil {
+		t.Fatal("refs/stash is still loose after pack-refs --all; the fixture does not test the packed read")
+	}
+	if StashEmpty(common) {
+		t.Error("StashEmpty with refs/stash only in packed-refs = true, want false")
+	}
+}

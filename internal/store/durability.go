@@ -32,7 +32,7 @@ func (s *Store) Sync() error {
 	defer s.mu.Unlock()
 	var errs []error
 	for _, p := range []string{s.logPath(), s.statePath()} {
-		f, err := os.OpenFile(p, os.O_RDWR, 0) // FlushFileBuffers needs write access
+		f, err := openSharedRW(p) // FlushFileBuffers needs write access
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

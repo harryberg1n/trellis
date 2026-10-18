@@ -82,7 +82,7 @@ func verdicts(actions []kernel.Action, v kernel.Verdict) []kernel.Action {
 
 func quiet(t testing.TB) run.Runner {
 	t.Helper()
-	testiso.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeGitleaks(t, "8.21.1", 0, "[]")
 	return testsupport.Recorder()
 }
 
@@ -108,7 +108,7 @@ func TestWalls_EachIncidentFixtureIsDenied(t *testing.T) {
 			if row == "secrets" {
 				leak = 2
 			}
-			testiso.FakeTool(t, "gitleaks", leak, "leaks found: 1")
+			testiso.FakeGitleaks(t, "8.21.1", leak, gitleaksReport)
 			actions := decide(t, w.fill(string(raw)), testsupport.Recorder())
 			denies := verdicts(actions, kernel.VerdictDeny)
 			if len(denies) != 1 || denies[0].RowID != row {
@@ -407,7 +407,7 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 
 func TestWallsWarnPeople_NonAgentGetsWarning(t *testing.T) {
 	w := newWorld(t)
-	testiso.FakeTool(t, "gitleaks", 2, "leaks found: 1")
+	testiso.FakeGitleaks(t, "8.21.1", 2, gitleaksReport)
 	rec := testsupport.Recorder()
 
 	// main-commit, as an agent: a deny. Without a session_id: a warn.
@@ -454,7 +454,7 @@ func TestMatch_RowWithNothingToSayDoesNotMatch(t *testing.T) {
 
 func TestSecrets_OnlyExitCodeTwoIsAFinding(t *testing.T) {
 	w := newWorld(t)
-	testiso.FakeTool(t, "gitleaks", 1, "fatal: not a git repository")
+	testiso.FakeGitleaks(t, "8.21.1", 1, "fatal: not a git repository")
 	got := decide(t, bash(t, w.tree, `git commit -m "x"`, true), testsupport.Recorder())
 	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks failed (exit 1)"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -890,4 +890,92 @@ func countOf(lines []string, want string) int {
 		}
 	}
 	return n
+}
+
+// Searching history for a vendor address is what a person runs to clean it up;
+// only a verb that writes a commit has an identity to judge.
+func TestUndercover_IdentityIsJudgedOnlyForVerbsThatWriteACommit(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	for _, cmd := range []string{
+		"git log --author=noreply@anthropic.com --oneline",
+		"git log --author noreply@anthropic.com",
+		"git -c user.email=a@anthropic.com log -1",
+		"git shortlog -sne --author=cursoragent@cursor.com",
+		"git blame -e README.md",
+	} {
+		if d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny); len(d) != 0 {
+			t.Errorf("%q: denies %+v, want none", cmd, d)
+		}
+	}
+	for _, cmd := range []string{
+		"git cherry-pick -n --author=noreply@anthropic.com abc",
+		"git -c user.email=noreply@anthropic.com revert HEAD",
+		"git -c user.email=noreply@anthropic.com merge other",
+		"git -c user.email=noreply@anthropic.com am x.patch",
+		"git -c user.email=noreply@anthropic.com rebase main",
+		"git -c user.email=noreply@anthropic.com pull",
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "undercover" {
+			t.Errorf("%q: denies %+v, want one from undercover", cmd, d)
+		}
+	}
+}
+
+func TestUndercover_MergeMessageFileAndOtherForms(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	testiso.Write(t, filepath.Join(w.tree, "msg.txt"), "merge it\n\nCo-Authored-By: X <x@y>\n")
+	for _, cmd := range []string{"git merge -F msg.txt other", "git merge --file=msg.txt other", "git merge --file msg.txt other"} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "undercover" {
+			t.Errorf("%q: denies %+v, want one from undercover", cmd, d)
+		}
+	}
+}
+
+func TestDiscard_CleanClusterOrderAndExcludeForms(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	tree := testiso.AddTree(t, w.primary, "ign2", "ign2/x")
+	testiso.Write(t, filepath.Join(tree, ".gitignore"), ".env\n")
+	testiso.Git(t, tree, "add", ".gitignore")
+	testiso.Git(t, tree, "commit", "-qm", "ignore .env")
+	testiso.Write(t, filepath.Join(tree, ".env"), "SECRET=1\n")
+	for _, cmd := range []string{"git clean -xdf", "git clean -dxf", "git clean -f -d -x"} {
+		d := verdicts(decide(t, bash(t, tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || !strings.Contains(d[0].Line, "discards 1 ignored file") {
+			t.Errorf("%q: denies %+v, want one naming 1 ignored file", cmd, d)
+		}
+	}
+	// -e takes a pattern; only a short flag cluster with x counts, and the
+	// pattern is not a path of the measurement.
+	if got := decide(t, bash(t, tree, "git clean -fd -e pat", true), r); len(got) != 0 {
+		t.Errorf("clean -fd -e pat with only an ignored file: actions %+v, want none", got)
+	}
+}
+
+// stash@{2} names an entry the stash may not have; the wall asks only whether
+// the stash holds anything, so a drop on a one-entry stash is a deny.
+func TestDiscard_StashDropOfANamedEntryOnANonEmptyStashIsDenied(t *testing.T) {
+	w := newWorld(t) // holds one stash entry
+	d := verdicts(decide(t, bash(t, w.tree, "git stash drop stash@{2}", true), quiet(t)), kernel.VerdictDeny)
+	want := "trellis: discard-uncommitted: stash drop discards a stash entry for good. Override: trellis allow discard-uncommitted."
+	if len(d) != 1 || d[0].Line != want {
+		t.Errorf("denies %+v, want the line %q", d, want)
+	}
+}
+
+// A gitleaks that did not name its version is asked again next time: caching
+// the failure would pin an old binary to the form it lacks.
+func TestSecrets_AVersionThatWasNotNamedIsNotKept(t *testing.T) {
+	w := newWorld(t)
+	calls := testiso.FakeGitleaks(t, "", 0, "[]")
+	rec := testsupport.Recorder()
+	decide(t, bash(t, w.tree, `git commit -m "x"`, true), rec)
+	decide(t, bash(t, w.tree, `git commit -m "y"`, true), rec)
+	if got := countOf(calls(), "version"); got != 2 {
+		t.Errorf("version asked %d times for two commits, want 2", got)
+	}
 }

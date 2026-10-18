@@ -31,6 +31,9 @@ func mergeLocal(env Env, w where, check string, rebase bool) error {
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
+	if primary.Branch == repo.Default && primary.Detached {
+		return fmt.Errorf("tree merge: the primary checkout is in the middle of a rebase of %s; finish or abort it first", primary.Branch)
+	}
 	if primary.Branch != repo.Default {
 		return fmt.Errorf("tree merge: the primary checkout is on %s, not %s", primary.Branch, repo.Default)
 	}

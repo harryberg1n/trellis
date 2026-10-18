@@ -102,3 +102,7 @@ func TestWriteAtomic_RetriesARenameTheOSRefusesAndPublishes(t *testing.T) {
 		t.Errorf("%d entries, want only s", len(entries))
 	}
 }
+
+// withRetryable replaces which rename errors are tried again, so a test makes
+// an error portable.
+func withRetryable(f func(error) bool) AtomicOption { return func(c *atomicConfig) { c.retry = f } }

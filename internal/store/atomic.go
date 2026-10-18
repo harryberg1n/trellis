@@ -89,7 +89,3 @@ func WriteAtomic(dir, name string, data []byte, opts ...AtomicOption) error {
 // WithClock paces the retry of a rename the OS refuses; the default is the
 // wall clock. The store passes its own so a test drives the pauses.
 func WithClock(c clock.Clock) AtomicOption { return func(a *atomicConfig) { a.clock = c } }
-
-// withRetryable replaces which rename errors are tried again: the seam a test
-// uses to make an error portable.
-func withRetryable(f func(error) bool) AtomicOption { return func(c *atomicConfig) { c.retry = f } }
