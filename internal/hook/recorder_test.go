@@ -208,3 +208,34 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		}
 	})
 }
+
+func TestRecorder_EditIsLazyStopIsDurable(t *testing.T) {
+	e := newEnv(t)
+	var synced []string
+	e.st.SetFsync(func(f *os.File) error {
+		synced = append(synced, filepath.Base(f.Name()))
+		return f.Sync()
+	})
+	a := filepath.Join(e.repo, "a.txt")
+	writeFile(t, a, "a\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "write_01_create_full"), vars(e.repo, a, "a\n")))
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, a, "a\n")))
+	e.do(t, "PostToolUse", fill(readShape(t, "bash_post"), vars(e.repo, "", "")))
+	if len(synced) != 0 {
+		t.Fatalf("3 edits synced %v, want nothing", synced)
+	}
+
+	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
+	if want := []string{"events.jsonl", "state.json"}; !reflect.DeepEqual(synced, want) {
+		t.Errorf("Stop synced %v, want %v", synced, want)
+	}
+
+	synced = nil
+	e.do(t, "SessionEnd", fill(readShape(t, "sessionend"), vars(e.repo, "", "")))
+	if want := []string{"events.jsonl", "state.json"}; !reflect.DeepEqual(synced, want) {
+		t.Errorf("SessionEnd synced %v, want %v", synced, want)
+	}
+	if got, want := kinds(e.events(t)), []string{"edit", "edit", "edit", "turn.anchored", "session.usage"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("kinds %v, want %v", got, want)
+	}
+}
