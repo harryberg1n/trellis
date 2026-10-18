@@ -1539,3 +1539,53 @@ func TestMerge_ARealDetachedHeadIsRefused(t *testing.T) {
 		t.Errorf("err = %v, want the detached refusal", err)
 	}
 }
+
+func TestMerge_RedCIWithControlBytesInNamesAndLogsPrintsNone(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.watchFail = "x"
+	f.checkList = `[{"name":"te\u001b[2Jst\u0007","bucket":"fail","link":"https://github.com/o/r/actions/runs/99/job/5"}]`
+	f.logs = map[string]string{"99": "a\tb\t2026-10-18T10:00:01.0000000Z --- FAIL: Test\u001b]0;pwned\u0007A\u0000\n"}
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: 1 check did not pass\n" +
+		"te[2Jst  https://github.com/o/r/actions/runs/99/job/5\n" +
+		"  --- FAIL: Test]0;pwnedA"
+	if err == nil || err.Error() != want {
+		t.Errorf("error =\n%q\nwant\n%q", err, want)
+	}
+}
+
+func TestPlain_StripsC0ControlBytesButKeepsNewlineAndTab(t *testing.T) {
+	got := plain("a\x00b\x1b[31mc\x07d\re\x7ff\tg\nh\u00e9")
+
+	if want := "ab[31mcde\x7ff\tg\nh\u00e9"; got != want {
+		t.Errorf("plain = %q, want %q", got, want)
+	}
+}
+
+// redCheck answers the shell the --check command runs in with a failure whose
+// last line has an escape sequence.
+type redCheck struct{ Inner run.Runner }
+
+func (r redCheck) Light(spec run.Spec) (run.Result, error) {
+	if spec.Name == "sh" || spec.Name == "cmd" {
+		return run.Result{Stderr: []byte("first\nlast \x1b[31mred\x07\n"), ExitCode: 1}, errors.New("exit status 1")
+	}
+	return r.Inner.Light(spec)
+}
+
+func TestMerge_CheckLastLineHasNoControlBytes(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	env := f.env(path)
+	env.Runner = redCheck{Inner: f.gh}
+
+	err := Merge(env, "make test")
+
+	want := `tree merge: check "make test" failed: last [31mred`
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
+	}
+}

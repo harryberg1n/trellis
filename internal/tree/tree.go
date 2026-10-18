@@ -362,12 +362,12 @@ func runCheck(env Env, dir, name, cmd string) error {
 func lastLine(res run.Result, err error) string {
 	for _, b := range [][]byte{res.Stderr, res.Stdout} {
 		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-		if l := strings.TrimSpace(lines[len(lines)-1]); l != "" {
+		if l := plain(strings.TrimSpace(lines[len(lines)-1])); l != "" {
 			return l
 		}
 	}
 	line, _, _ := strings.Cut(err.Error(), "\n")
-	return line
+	return plain(line)
 }
 
 // ensurePullRequest opens a pull request of branch against base unless an
