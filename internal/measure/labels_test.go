@@ -173,7 +173,7 @@ func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
 			{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)},
 			{Sha: "eeeeeee5555", Subject: "Revert \"add b\"", Body: "This reverts commit bbbbbbb2222.", At: day(1)},
 		},
-		PRs: []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+		PRs: []PR{{Number: 5, Branch: "feat-x"}},
 	}
 	want := map[string]Label{"feat-x": Defect}
 	if got := Labels(f); !reflect.DeepEqual(got, want) {
@@ -184,7 +184,7 @@ func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
 func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
 	f := Facts{Now: day(30),
 		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, Lane: "named", At: day(0)}},
-		PRs:    []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+		PRs:    []PR{{Number: 5, Branch: "feat-x"}},
 	}
 	want := map[string]Label{"named": Clean}
 	if got := Labels(f); !reflect.DeepEqual(got, want) {
@@ -195,10 +195,10 @@ func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
 func TestLeadTimes_SquashMergeUsesThePRBranchLane(t *testing.T) {
 	f := Facts{
 		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)}},
-		PRs:    []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+		PRs:    []PR{{Number: 5, Branch: "feat-x"}},
 		Events: []kernel.Event{{Kind: kernel.EvLaneOpened, Lane: "feat-x", At: day(0).Add(-90 * time.Minute)}},
 	}
-	want := map[string]time.Duration{"feat-x": 90 * time.Minute}
+	want := []Lead{{Lane: "feat-x", MergedAt: day(0), Time: 90 * time.Minute}}
 	if got := LeadTimes(f); !reflect.DeepEqual(got, want) {
 		t.Errorf("lead times = %v, want %v", got, want)
 	}

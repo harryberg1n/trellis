@@ -150,7 +150,7 @@ func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, s
 		_, _ = fmt.Fprintf(stderr, "trellis report: merged pull requests not read: %v\n", err)
 	}
 	for _, p := range prs {
-		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch, MergedAt: p.MergedAt})
+		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch})
 	}
 
 	seen := map[string]bool{}
