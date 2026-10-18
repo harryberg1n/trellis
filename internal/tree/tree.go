@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,9 +132,9 @@ func New(env Env, name, path string) error {
 	if strings.Trim(name, "0123456789") == "" {
 		return errors.New("tree new: a tree name cannot be only digits")
 	}
-	w, err := locate(env.Dir)
+	w, err := env.locate("new")
 	if err != nil {
-		return fmt.Errorf("tree new: %w", err)
+		return err
 	}
 	switch {
 	case path == "":
@@ -174,9 +175,9 @@ func baseOf(repo objects.Repo) string {
 // Sync fetches origin and rebases the current tree onto its default branch.
 // A conflict leaves the rebase where git stopped it.
 func Sync(env Env) error {
-	w, err := locate(env.Dir)
+	w, err := env.locate("sync")
 	if err != nil {
-		return fmt.Errorf("tree sync: %w", err)
+		return err
 	}
 	if w.Repo.Remote != "" {
 		if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
@@ -209,9 +210,9 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	w, err := locate(env.Dir)
+	w, err := env.locate("merge")
 	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return err
 	}
 	repo := w.Repo
 	switch {
@@ -401,9 +402,9 @@ func short(sha string) string { return sha[:min(12, len(sha))] }
 // Rm removes the tree called name (the current tree when empty) and its
 // branch. A tree with work no commit holds is refused unless force.
 func Rm(env Env, name string, force bool) error {
-	w, err := locate(env.Dir)
+	w, err := env.locate("rm")
 	if err != nil {
-		return fmt.Errorf("tree rm: %w", err)
+		return err
 	}
 	path := w.Repo.Root
 	if name == "" {
@@ -513,4 +514,37 @@ func removeTree(env Env, w where, path, name string, force bool) error {
 	}
 	env.say("removed %s", path)
 	return nil
+}
+
+// locate is locate(e.Dir) with the remote read the way git reads it. The
+// repository description of objects.Open is read from files and sees only
+// the repository's own config; here git's config answers, includes and all.
+// A verb must not guess its base: with remotes but none called origin, or an
+// origin whose default branch git has not been told, it stops with a line.
+func (e Env) locate(verb string) (where, error) {
+	w, err := locate(e.Dir)
+	if err != nil {
+		return where{}, fmt.Errorf("tree %s: %w", verb, err)
+	}
+	url, err := e.runGit(w.Repo.Root, "config", "--get", "remote.origin.url")
+	if err != nil || url == "" {
+		remotes, rerr := e.runGit(w.Repo.Root, "remote")
+		if rerr != nil {
+			return where{}, fmt.Errorf("tree %s: %w", verb, rerr)
+		}
+		if names := strings.Fields(remotes); len(names) > 0 {
+			slices.Sort(names)
+			return where{}, fmt.Errorf("tree %s: no remote named origin (remotes: %s)", verb, strings.Join(names, ", "))
+		}
+		w.Repo.Remote = ""
+		return w, nil
+	}
+	w.Repo.Remote = url
+	head, err := e.runGit(w.Repo.Root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+	def, ok := strings.CutPrefix(head, "refs/remotes/origin/")
+	if err != nil || !ok || def == "" {
+		return where{}, fmt.Errorf("tree %s: origin/HEAD is not set: run git remote set-head origin -a", verb)
+	}
+	w.Repo.Default = def
+	return w, nil
 }

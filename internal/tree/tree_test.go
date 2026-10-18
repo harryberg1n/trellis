@@ -69,6 +69,7 @@ func newFixture(t *testing.T) *fixture {
 	testiso.Git(t, filepath.Dir(f.primary), "init", "--bare", "-q", f.origin)
 	testiso.Git(t, f.primary, "remote", "add", "origin", f.origin)
 	testiso.Git(t, f.primary, "push", "-q", "-u", "origin", "main")
+	testiso.Git(t, f.primary, "remote", "set-head", "origin", "main")
 	f.gh = &testsupport.FakeRunner{Name: "gh", Inner: run.Exec{Clock: clock.Real()}, Answer: f.answer}
 	return f
 }
@@ -1375,5 +1376,66 @@ func TestMerge_LooksUpThePullRequestByHeadNotByName(t *testing.T) {
 		if len(s.Args) >= 3 && s.Args[0] == "pr" && s.Args[1] == "view" && s.Args[2] == "feat" {
 			t.Errorf("gh %v addresses the pull request by branch name", s.Args)
 		}
+	}
+}
+
+func TestNew_RemoteWithoutOriginHeadStopsWithTheSetHeadHint(t *testing.T) {
+	f := newFixture(t)
+	testiso.Git(t, f.primary, "remote", "set-head", "origin", "-d")
+
+	err := New(f.env(f.primary), "feat", "")
+
+	want := "tree new: origin/HEAD is not set: run git remote set-head origin -a"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if exists(Path(f.primary, "feat")) {
+		t.Errorf("a tree was cut from a guessed base")
+	}
+}
+
+func TestSync_RemotesWithoutOriginAreNamedOnOneLine(t *testing.T) {
+	f := newFixture(t)
+	testiso.Git(t, f.primary, "remote", "rename", "origin", "upstream")
+	testiso.Git(t, f.primary, "remote", "add", "fork", f.origin)
+
+	err := Sync(f.env(f.primary))
+
+	want := "tree sync: no remote named origin (remotes: fork, upstream)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+}
+
+func TestNew_ReadsOriginFromAnIncludedConfig(t *testing.T) {
+	f := newFixture(t)
+	commitFile(t, f.primary, "local.txt", "not pushed\n") // local main is ahead of origin/main
+	cfg := filepath.Join(f.primary, ".git", "config")
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept, moved []string
+	in := false
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(l, "[") {
+			in = strings.HasPrefix(l, `[remote "origin"]`)
+		}
+		if in {
+			moved = append(moved, l)
+		} else {
+			kept = append(kept, l)
+		}
+	}
+	included := filepath.Join(filepath.Dir(f.primary), "remote.cfg")
+	testiso.Write(t, included, strings.Join(moved, "\n")+"\n")
+	testiso.Write(t, cfg, strings.Join(kept, "\n")+"\n[include]\n\tpath = "+filepath.ToSlash(included)+"\n")
+
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if exists(filepath.Join(Path(f.primary, "feat"), "local.txt")) {
+		t.Errorf("the tree was cut from the local main: the included remote was not seen")
 	}
 }
