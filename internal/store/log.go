@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,7 +393,11 @@ func (s *Store) Skipped() int {
 }
 
 // skip appends a line that does not parse to events.quarantine, once per
-// offset per Store. Failing to write it must not fail the read.
+// offset: the offsets already set aside are kept in events.quarantine.at, so
+// another process, or this one after a restart, does not set the same line
+// aside again. A line with no offset in the log (off < 0: a corrupt
+// checkpoint) is kept once per Store. Failing to write it must not fail the
+// read.
 func (s *Store) skip(l logLine) {
 	s.skipMu.Lock()
 	defer s.skipMu.Unlock()
@@ -400,6 +405,9 @@ func (s *Store) skip(l logLine) {
 		return
 	}
 	s.skipped[l.off] = true
+	if l.off >= 0 && s.quarantinedAt(l.off) {
+		return
+	}
 	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
@@ -408,6 +416,29 @@ func (s *Store) skip(l logLine) {
 	// line is not quarantined, and the read must not fail for it.
 	_, _ = f.Write(append(append([]byte(nil), l.raw...), newline))
 	_ = f.Close()
+	if l.off >= 0 {
+		if at, err := os.OpenFile(s.quarantineAtPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			_, _ = at.WriteString(strconv.FormatInt(l.off, 10) + "\n")
+			_ = at.Close()
+		}
+	}
+}
+
+func (s *Store) quarantineAtPath() string { return filepath.Join(s.dir, "events.quarantine.at") }
+
+// quarantinedAt reports whether the log line at off was already set aside.
+func (s *Store) quarantinedAt(off int64) bool {
+	raw, err := os.ReadFile(s.quarantineAtPath())
+	if err != nil {
+		return false
+	}
+	want := strconv.FormatInt(off, 10)
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }
 
 type logLine struct {

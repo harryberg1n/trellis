@@ -501,3 +501,50 @@ func TestFoldPending_FoldsFromAStateRootWithGlobCharacters(t *testing.T) {
 		t.Errorf("pending holds %d files, want none", len(m))
 	}
 }
+
+func TestQuarantine_AJunkLineIsSetAsideOnceAcrossProcesses(t *testing.T) {
+	s1, dir, fc := open(t)
+	if _, err := s1.Append(ev("edit", "tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("this is not json\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s1.Read(1); err != nil {
+		t.Fatal(err)
+	}
+	// A second process: a fresh Store over the same directory, and a parked
+	// file so its fold scans the whole log.
+	s2, err := Open(dir, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Park(ev("edit", "tree/b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Append(ev("commit", "tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	s3, err := Open(dir, fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.Read(1); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "events.quarantine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "this is not json\n"; string(got) != want {
+		t.Errorf("events.quarantine = %q, want the junk line once: %q", got, want)
+	}
+}
