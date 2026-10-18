@@ -16,7 +16,7 @@ var Table = []Row{
 	},
 	{
 		ID: "hook-bypass", Kind: Wall, Stage: StageCommit, State: Admitted, Level: Block,
-		Incident: "2026-09 bypass refusals (aphrollo no-verify)", Decision: "2026-09-01 owner",
+		Incident: "2026-09 bypass refusals (no-verify)", Decision: "2026-09-01 owner",
 		Budget: 50 * time.Millisecond, Class: Light,
 	},
 	{
