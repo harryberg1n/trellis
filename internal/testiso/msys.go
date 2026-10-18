@@ -1,5 +1,8 @@
 // Copied from aphrollo-tools internal/msys/msys.go at 12b3724e.
 // Incident #1043: tests wrote into the real repository and the global git config.
+// Differences from the copy: the package path; anchorExited is kept and
+// stopAnchor ends the shell and waits for it, so the goroutine that waits on
+// the anchor is gone before the run's goroutine-leak check (goleak).
 
 // The MSYS anchor keeps the MSYS shell tools of a Windows box from taking a
 // throwaway directory for their /tmp.
@@ -18,7 +21,12 @@ package testiso
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// anchorStopWait bounds how long stopAnchor waits for the shell to end once
+// its stdin is closed; a shell that lingers past it is left to the process end.
+const anchorStopWait = 5 * time.Second
 
 var (
 	anchorOnce sync.Once
@@ -26,6 +34,8 @@ var (
 	// anchorRelease holds the anchor's stdin open: the shell lives until it
 	// reads EOF there, which is the process ending or Release.
 	anchorRelease = func() {}
+	// anchorExited is closed once the anchor shell is gone.
+	anchorExited <-chan struct{}
 )
 
 // anchor makes sure an MSYS process started under this process's own temp
@@ -35,7 +45,7 @@ var (
 // poison.
 func anchor() {
 	anchorOnce.Do(func() {
-		anchorRelease, _ = startAnchor()
+		anchorRelease, anchorExited = startAnchor()
 		anchored.Store(true)
 	})
 }
@@ -43,4 +53,18 @@ func anchor() {
 // release lets the anchor go, for a caller that knows no run needs it any more.
 func release() {
 	anchorRelease()
+}
+
+// stopAnchor is release followed by a bounded wait for the shell to end, so
+// the goroutine waiting on it is gone before the leak check. It returns at
+// once when nothing was started.
+func stopAnchor() {
+	if !anchored.Load() {
+		return
+	}
+	release()
+	select {
+	case <-anchorExited:
+	case <-time.After(anchorStopWait):
+	}
 }

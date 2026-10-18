@@ -22,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // Main is the whole TestMain of a package: it isolates the run, runs m, removes
@@ -42,6 +44,15 @@ func runIsolated(run func() int) int {
 	}
 	code := run()
 	RemoveAll(root)
+	stopAnchor()
+	if code == 0 {
+		// Every goroutine a test starts must have ended by now: a leak is a
+		// failure of the package, reported once, after its own tests passed.
+		if err := goleak.Find(); err != nil {
+			fmt.Fprintln(os.Stderr, "testiso: goroutine leak:", err)
+			return 1
+		}
+	}
 	return code
 }
 
