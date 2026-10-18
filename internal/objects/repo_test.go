@@ -2,7 +2,9 @@ package objects
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -128,9 +130,9 @@ func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *te
 }
 
 func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
-	repo := testiso.Repo(t)
+	repo := canonical(testiso.Repo(t))
 	testiso.Git(t, repo, "config", "remote.origin.url", "https://example.invalid/o/r.git")
-	lane := testiso.AddLane(t, repo, "lane", "lane/x")
+	lane := canonical(testiso.AddLane(t, repo, "lane", "lane/x"))
 
 	got, err := Open(filepath.Join(repo, "no", "such", "dir"))
 	if err != nil {
@@ -138,7 +140,7 @@ func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 	}
 	want := Repo{
 		Root: repo, Common: filepath.Join(repo, ".git"), GitDir: filepath.Join(repo, ".git"),
-		Branch: "main", Primary: true, Remote: "https://example.invalid/o/r.git", Default: "main",
+		Branch: "main", Primary: true, Remote: "https://example.invalid/o/r.git", Default: "main", History: "refs/heads/main",
 	}
 	if got != want {
 		t.Errorf("Open(primary) = %+v, want %+v", got, want)
@@ -154,5 +156,58 @@ func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 	}
 	if _, err := Open(filepath.Dir(repo)); !errors.Is(err, ErrNotARepo) {
 		t.Errorf("Open outside a repo: %v, want ErrNotARepo", err)
+	}
+}
+
+func TestOpen_PathsAreCanonicalWhateverSpellingTheCallerUses(t *testing.T) {
+	repo := canonical(testiso.Repo(t))
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	got, err := Open(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != repo || got.Common != filepath.Join(repo, ".git") {
+		t.Errorf("Open(symlink) root %q common %q, want %q and its .git", got.Root, got.Common, repo)
+	}
+}
+
+func TestOpen_AnUnreadableRemoteDoesNotMakeTheRepoUnknown(t *testing.T) {
+	repo := testiso.Repo(t)
+	cfg := filepath.Join(repo, ".git", "config")
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A line over bufio.Scanner's 64KB limit makes the config read fail.
+	_, werr := f.WriteString("[remote \"origin\"]\n\turl = " + strings.Repeat("x", 70000) + "\n")
+	if cerr := f.Close(); werr != nil || cerr != nil {
+		t.Fatal(werr, cerr)
+	}
+	got, err := Open(repo)
+	if err != nil || got.Branch != "main" || got.Remote != "" {
+		t.Errorf("Open = %+v, %v; want the repo on main with no remote", got, err)
+	}
+}
+
+func TestHistoryRef_PrefersTheRemoteThenTheLocalBranchThenHEAD(t *testing.T) {
+	repo := testiso.Repo(t)
+	common, _, err := GitDirs(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := HistoryRef(common); got != "refs/heads/main" {
+		t.Errorf("local main only: HistoryRef = %q, want refs/heads/main", got)
+	}
+	testiso.Git(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	if got := HistoryRef(common); got != "refs/remotes/origin/main" {
+		t.Errorf("origin/main exists: HistoryRef = %q, want refs/remotes/origin/main", got)
+	}
+	testiso.Git(t, repo, "update-ref", "-d", "refs/remotes/origin/main")
+	testiso.Git(t, repo, "branch", "-m", "trunk")
+	if got := HistoryRef(common); got != "HEAD" {
+		t.Errorf("no main or master: HistoryRef = %q, want HEAD", got)
 	}
 }

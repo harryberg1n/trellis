@@ -102,43 +102,70 @@ func IsPrimary(repo string) (bool, error) {
 	return filepath.Clean(common) == filepath.Clean(gitDir), nil
 }
 
-// Repo is everything the callers ask of a repository, read from files.
+// Repo is everything the callers ask of a repository, read from files. The
+// paths are canonical: symlinks and 8.3 short names resolved, one spelling per
+// checkout, so repo ids and containment tests agree on every platform.
 type Repo struct {
 	Root    string // the working tree
 	Common  string // the git dir that holds objects, refs and config
 	GitDir  string // its own git dir (the worktree's, in a linked worktree)
 	Branch  string // the branch HEAD names, or "detached-<sha>"
 	Primary bool   // the main working tree, not a linked worktree
-	Remote  string // the URL of remote origin in the repo config, "" if none
+	// Remote is the URL of remote origin in the repo config, "" if it has none
+	// or the config cannot be read: the remote is best effort, so an unreadable
+	// config never makes a repository unknown to the walls.
+	Remote  string
 	Default string // the default branch, as DefaultBranch reads it
+	History string // the ref to read the default branch's history from, as HistoryRef picks it
+}
+
+// canonical is p with symlinks and short names resolved, else cleaned.
+func canonical(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // Open reads the repository around dir without starting a process. It is the
 // one place a directory becomes a repository description.
 func Open(dir string) (Repo, error) {
-	root, err := FindRoot(dir)
+	found, err := FindRoot(dir)
 	if err != nil {
 		return Repo{}, err
 	}
-	common, gitDir, err := GitDirs(root)
+	root := canonical(found)
+	common, gitDir, err := GitDirs(found)
 	if err != nil {
 		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
 	}
+	common, gitDir = canonical(common), canonical(gitDir)
 	branch, err := Branch(gitDir)
 	if err != nil {
 		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
 	}
-	remote, _, err := ConfigValue(gitDir, `remote "origin"`, "url")
-	if err != nil {
-		return Repo{}, fmt.Errorf("remote of %s: %w", root, err)
-	}
+	remote, _, _ := ConfigValue(gitDir, `remote "origin"`, "url") // best effort, see Repo.Remote
 	return Repo{
 		Root:    root,
 		Common:  common,
 		GitDir:  gitDir,
 		Branch:  branch,
-		Primary: filepath.Clean(common) == filepath.Clean(gitDir),
+		Primary: common == gitDir,
 		Remote:  remote,
 		Default: DefaultBranch(common),
+		History: HistoryRef(common),
 	}, nil
+}
+
+// HistoryRef is the ref to read the default branch's history from: the
+// remote-tracking refs/remotes/origin/<default> when it exists (a local branch
+// that lags must not hide merges), else the local branch, else HEAD.
+func HistoryRef(common string) string {
+	def := DefaultBranch(common)
+	for _, ref := range []string{"refs/remotes/origin/" + def, "refs/heads/" + def} {
+		if _, found, _ := readRef(common, ref); found {
+			return ref
+		}
+	}
+	return "HEAD"
 }

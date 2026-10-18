@@ -237,3 +237,34 @@ func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing
 		t.Errorf("report lacks %q (an empty log?):\n%s", want, out.String())
 	}
 }
+
+func TestReport_ReadsOriginsHistoryWhenTheLocalDefaultLags(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	testiso.Git(t, env.Repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	testiso.Git(t, env.Repo, "update-ref", "refs/heads/main", "HEAD~2")
+	var out, errb bytes.Buffer
+
+	code := reportCmd(nil, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "lanes merged: 3"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q: the lagging local main hid merges:\n%s", want, out.String())
+	}
+}
+
+func TestReport_ReadsHEADWhenThereIsNoMainOrMaster(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	testiso.Git(t, env.Repo, "branch", "-m", "trunk")
+	var out, errb bytes.Buffer
+
+	code := reportCmd(nil, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "lanes merged: 3"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+}

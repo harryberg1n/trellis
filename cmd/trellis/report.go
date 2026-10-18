@@ -193,7 +193,7 @@ var (
 // readHistory is `git log --first-parent` on the default branch within the
 // window, each commit with the line ranges it touched.
 func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
-	root, branch := repo.Root, repo.Default
+	root, branch := repo.Root, repo.History
 	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
 	out, err := objects.Git(r, root, nil, "log", "--first-parent", "--since="+since,
 		"--format=%H"+fieldSep+"%cI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)
