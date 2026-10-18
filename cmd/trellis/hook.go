@@ -37,9 +37,14 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 		Runner: runner.Exec{Clock: clk},
 		Clock:  clk,
 		Rows:   kernel.Table,
-		// Under the OS temp dir, not the state root: it is for when the state
-		// root is what failed.
-		Fallback: filepath.Join(os.TempDir(), "trellis-fallback"),
+	}
+	// In the user's cache dir (private to them, unlike a shared temp dir), not
+	// under the state root: it is for when the state root is what failed.
+	if cache, err := os.UserCacheDir(); err == nil {
+		deps.Fallback = filepath.Join(cache, "trellis", "fallback")
+		if os.MkdirAll(deps.Fallback, 0o700) != nil {
+			deps.Fallback = ""
+		}
 	}
 	if repo, err := hook.Locate(hook.PayloadCwd(raw)); err != nil {
 		deps.Err = err
