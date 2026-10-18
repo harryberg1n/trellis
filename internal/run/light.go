@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +40,11 @@ type Spec struct {
 	Dir     string
 	Timeout time.Duration
 	Stdin   []byte
+	// Stdout and Stderr, when set, take the child's output as it is written, and
+	// Light keeps no copy of that stream: the matching Result field is empty. The
+	// same writer given to both is written from one goroutine; two different
+	// writers are written from two, and each must serialise itself.
+	Stdout, Stderr io.Writer
 	// Direct marks a child the user's own verb asked for (trellis tree ...):
 	// it may write git state, which the refusal of ErrOwnGitState keeps from
 	// the children of tools.
@@ -115,7 +121,7 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}
 	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	cmd.Stdout, cmd.Stderr = streamTo(spec.Stdout, &out), streamTo(spec.Stderr, &errb)
 	// A grandchild that holds the pipes open must not hold Wait for ever.
 	cmd.WaitDelay = waitDelay
 	if spec.WaitDelay > 0 {
@@ -175,6 +181,14 @@ func Light(c clock.Clock, spec Spec) (Result, error) {
 		return res, fmt.Errorf("%s: %w: %s", spec.Name, waitErr, bytes.TrimSpace(errb.Bytes()))
 	}
 	return res, nil
+}
+
+// streamTo is w when the caller gave one, else the buffer that keeps the output.
+func streamTo(w io.Writer, keep *bytes.Buffer) io.Writer {
+	if w != nil {
+		return w
+	}
+	return keep
 }
 
 func isGit(name string) bool {

@@ -10,13 +10,16 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/install"
 	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
@@ -45,12 +48,14 @@ type world struct {
 	smoke  func(run.Spec) (run.Result, error)
 	runner *testsupport.FakeRunner
 	out    *bytes.Buffer
+	onPath string    // what LookPath finds for trellis; "" is nothing
+	now    time.Time // what the clock says
 }
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	dir := store.Canonical(t.TempDir())
-	w := &world{t: t, dir: dir, root: filepath.Join(dir, "state"), config: filepath.Join(dir, "claude"), assets: filepath.Join(dir, "assets"), latest: "v0.0.4", out: &bytes.Buffer{}}
+	w := &world{t: t, dir: dir, now: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC), root: filepath.Join(dir, "state"), config: filepath.Join(dir, "claude"), assets: filepath.Join(dir, "assets"), latest: "v0.0.4", out: &bytes.Buffer{}}
 	src := filepath.Join(dir, "src", "trellis")
 	testiso.Write(t, src, "v0.0.3-binary")
 	w.src = src
@@ -115,7 +120,16 @@ func (w *world) answer(spec run.Spec) (run.Result, error) {
 }
 
 func (w *world) env() Env {
-	return Env{Runner: w.runner, Out: w.out, Root: w.root, ConfigDir: w.config, Exe: w.exe, Version: "v0.0.3", GOOS: "linux", GOARCH: "amd64"}
+	return Env{
+		Runner: w.runner, Out: w.out, Root: w.root, ConfigDir: w.config, Exe: w.exe, Version: "v0.0.3", GOOS: "linux", GOARCH: "amd64",
+		Clock: clock.Fake(w.now),
+		LookPath: func(string) (string, error) {
+			if w.onPath == "" {
+				return "", exec.ErrNotFound
+			}
+			return w.onPath, nil
+		},
+	}
 }
 
 func (w *world) run(o Options) error { return Run(w.env(), o) }
@@ -964,5 +978,102 @@ func TestUpdate_AfterEjectTheHooksStayOut(t *testing.T) {
 
 	if got := w.referenced(); len(got) != 0 {
 		t.Errorf("update brought the hooks back: %v", got)
+	}
+}
+
+// 9. update says when the trellis a shell runs is another file.
+
+func TestUpdate_SaysWhenTheTrellisOnPathIsAnotherFileThanTheOneItReplaced(t *testing.T) {
+	w := newWorld(t)
+	w.onPath = filepath.Join(w.dir, "elsewhere", "trellis")
+	testiso.Write(t, w.onPath, "another trellis")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "trellis on PATH resolves to " + w.onPath + ", not " + w.exe + ": put " + filepath.Dir(w.exe) + " first on PATH"
+	if !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+	if got := w.lines(); got[len(got)-1] != "update: v0.0.3 -> v0.0.4" {
+		t.Errorf("last line = %q, want the summary last", got[len(got)-1])
+	}
+}
+
+func TestUpdate_SaysWhenNoTrellisIsOnPathAtAll(t *testing.T) {
+	w := newWorld(t)
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "trellis is not on PATH: put " + filepath.Dir(w.exe) + " first on PATH"
+	if !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestUpdate_SaysNothingWhenPathResolvesToTheReplacedFile(t *testing.T) {
+	w := newWorld(t)
+	w.onPath = w.exe
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(w.out.String(), "on PATH resolves") || strings.Contains(w.out.String(), "not on PATH") {
+		t.Errorf("output = %q, want no PATH line when PATH runs the replaced file", w.out)
+	}
+}
+
+// 15. update sweeps the stage directories an earlier update left.
+
+func TestUpdate_SweepsStageDirectoriesOlderThanADay(t *testing.T) {
+	w := newWorld(t)
+	old, young := filepath.Join(w.root, "stage", "v0.0.1"), filepath.Join(w.root, "stage", "v0.0.2")
+	testiso.Write(t, filepath.Join(old, "trellis-linux-amd64"), "half a download")
+	testiso.Write(t, filepath.Join(young, "trellis-linux-amd64"), "another update's, running now")
+	setAge(t, old, w.now, 25*time.Hour)
+	setAge(t, young, w.now, time.Hour)
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the stage directory of 25 hours ago is still there: %v", err)
+	}
+	if _, err := os.Stat(young); err != nil {
+		t.Errorf("the stage directory of an hour ago was removed: %v", err)
+	}
+	if want := "remove stale stage " + old; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestUpdate_DryNamesTheStaleStageItWouldRemoveAndKeepsIt(t *testing.T) {
+	w := newWorld(t)
+	old := filepath.Join(w.root, "stage", "v0.0.1")
+	testiso.Write(t, filepath.Join(old, "x"), "stale")
+	setAge(t, old, w.now, 48*time.Hour)
+
+	if err := w.run(Options{Dry: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "would remove stale stage " + old; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("a dry run removed the stage directory: %v", err)
+	}
+}
+
+// setAge dates path (and what it holds) age before now.
+func setAge(t *testing.T, path string, now time.Time, age time.Duration) {
+	t.Helper()
+	if err := os.Chtimes(path, now.Add(-age), now.Add(-age)); err != nil {
+		t.Fatal(err)
 	}
 }

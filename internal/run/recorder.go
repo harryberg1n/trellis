@@ -37,8 +37,8 @@ func (r *Recorder) Count() int {
 func (r *Recorder) Kinds() []string {
 	specs := r.Specs()
 	out := make([]string, 0, len(specs))
-	for _, s := range specs {
-		out = append(out, Kind(s))
+	for i := range specs {
+		out = append(out, Kind(specs[i]))
 	}
 	return out
 }

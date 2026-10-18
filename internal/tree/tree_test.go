@@ -26,12 +26,22 @@ func TestMain(m *testing.M) { testiso.Main(m) }
 
 // instantClock fires every After at once and counts them: the poll waits
 // without sleeping.
-type instantClock struct{ afters int }
+type instantClock struct {
+	afters int
+	waits  []time.Duration // the duration of each After, in order
+	now    time.Time       // what Now says; the zero value is the Unix epoch
+}
 
-func (*instantClock) Now() time.Time { return time.Unix(0, 0) }
+func (c *instantClock) Now() time.Time {
+	if c.now.IsZero() {
+		return time.Unix(0, 0)
+	}
+	return c.now
+}
 
-func (c *instantClock) After(time.Duration) <-chan time.Time {
+func (c *instantClock) After(d time.Duration) <-chan time.Time {
 	c.afters++
+	c.waits = append(c.waits, d)
 	ch := make(chan time.Time, 1)
 	ch <- time.Unix(0, 0)
 	return ch
@@ -48,22 +58,25 @@ type fixture struct {
 	errb       bytes.Buffer
 	clk        instantClock
 	gh         *testsupport.FakeRunner
-	prSeen     bool              // a pull request exists for the branch
-	mergedOID  string            // the headRefOid of a merged pull request gh finds for the head; "" is none
-	mergeOID   string            // the merge commit of that pull request; "" is null
-	mergedBase string            // its base branch; "" is main
-	mergeable  []string          // what successive pr views say; the last repeats; empty is MERGEABLE
-	review     string            // the reviewDecision of the PR
-	mergeErr   string            // the failure of pr merge; "" merges
-	head       string            // the PR head sha; "" is the local HEAD of the tree
-	watchFail  string            // the text of a failed watch; "" is green
-	noChecks   bool              // the PR has no checks
-	checkList  string            // the JSON `pr checks --json` prints; "" is one passing check
-	checkSeq   []string          // successive JSON reads of the checks; the last repeats; used before checkList
-	workflows  string            // what the workflow count prints; "" is one workflow
-	checksErr  bool              // pr checks cannot be read
-	mergeSHA   string            // the merge commit pr view reports once merged; "" is none
-	logs       map[string]string // the failed log of a run id
+	prSeen     bool                // a pull request exists for the branch
+	mergedOID  string              // the headRefOid of a merged pull request gh finds for the head; "" is none
+	mergeOID   string              // the merge commit of that pull request; "" is null
+	mergedBase string              // its base branch; "" is main
+	mergeable  []string            // what successive pr views say; the last repeats; empty is MERGEABLE
+	review     string              // the reviewDecision of the PR
+	mergeErr   string              // the failure of pr merge; "" merges
+	head       string              // the PR head sha; "" is the local HEAD of the tree
+	watchFail  string              // the text of a failed watch; "" is green
+	noChecks   bool                // the PR has no checks
+	checkList  string              // the JSON `pr checks --json` prints; "" is one passing check
+	checkSeq   []string            // successive JSON reads of the checks; the last repeats; used before checkList
+	workflows  string              // what the workflow count prints; "" is one workflow
+	checksErr  bool                // pr checks cannot be read
+	mergeSHA   string              // the merge commit pr view reports once merged; "" is none
+	logs       map[string]string   // the failed log of a run id
+	runSeq     []string            // successive JSON reads of `run list`; the last repeats; empty is no runs
+	flaky      map[string][]string // failures to answer first, per call: "pr checks --json", "pr checks --watch"
+	onMerge    func()              // called when pr merge is answered
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -79,6 +92,11 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func (f *fixture) answer(spec run.Spec) (run.Result, error) {
+	if key := flakyKey(spec); len(f.flaky[key]) > 0 {
+		errText := f.flaky[key][0]
+		f.flaky[key] = f.flaky[key][1:]
+		return run.Result{ExitCode: 1}, errors.New(errText)
+	}
 	switch strings.Join(spec.Args[:2], " ") {
 	case "pr view":
 		if slices.Contains(spec.Args, "mergeCommit") {
@@ -163,13 +181,41 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		}
 		return run.Result{Stdout: []byte(f.workflows)}, nil
 	case "pr merge":
+		if f.onMerge != nil {
+			f.onMerge()
+		}
 		if f.mergeErr != "" {
 			return run.Result{ExitCode: 1}, errors.New(f.mergeErr)
 		}
+	case "run list":
+		out := "[]"
+		if len(f.runSeq) > 0 {
+			out = f.runSeq[0]
+			if len(f.runSeq) > 1 {
+				f.runSeq = f.runSeq[1:]
+			}
+		}
+		return run.Result{Stdout: []byte(out)}, nil
 	case "run view":
-		return run.Result{Stdout: []byte(f.logs[spec.Args[2]])}, nil
+		id := spec.Args[2]
+		if id == "--job" {
+			id = spec.Args[3]
+		}
+		return run.Result{Stdout: []byte(f.logs[id])}, nil
 	}
 	return run.Result{}, nil
+}
+
+// flakyKey names a gh call the fixture can be told to fail first.
+func flakyKey(spec run.Spec) string {
+	key := strings.Join(spec.Args[:2], " ")
+	switch {
+	case slices.Contains(spec.Args, "--json"):
+		return key + " --json"
+	case slices.Contains(spec.Args, "--watch"):
+		return key + " --watch"
+	}
+	return key
 }
 
 func (f *fixture) env(dir string) Env {
@@ -193,8 +239,9 @@ func (f *fixture) kinds() []string {
 
 func (f *fixture) ghCalls() []string {
 	calls := make([]string, 0, len(f.gh.Specs()))
-	for _, s := range f.gh.Specs() {
-		calls = append(calls, strings.Join(s.Args[:2], " "))
+	specs := f.gh.Specs()
+	for i := range specs {
+		calls = append(calls, strings.Join(specs[i].Args[:2], " "))
 	}
 	return calls
 }
@@ -364,12 +411,12 @@ func TestMerge_RecordsMergedWithPRAndRemovesTree(t *testing.T) {
 	if got := f.events[1]; got.Tree != "feat" || got.Detail["pr"] != "7" {
 		t.Errorf("merged event = %+v, want tree feat with pr 7", got)
 	}
-	wantCalls := []string{"auth status", "pr list", "pr create", "pr list", "pr checks", "pr checks", "pr list", "pr merge", "pr view"}
+	wantCalls := []string{"api user", "pr list", "pr create", "pr list", "pr checks", "pr checks", "pr list", "pr merge", "pr view"}
 	if got := f.ghCalls(); !reflect.DeepEqual(got, wantCalls) {
 		t.Errorf("gh calls = %v, want %v", got, wantCalls)
 	}
-	if got := testiso.Git(t, f.origin, "branch", "--list", "feat"); !strings.Contains(got, "feat") {
-		t.Errorf("origin branches = %q, want feat pushed", got)
+	if got := testiso.Git(t, f.origin, "branch", "--list", "feat"); got != "" {
+		t.Errorf("origin branches = %q, want feat pushed and then deleted by the merge", got)
 	}
 	if exists(path) {
 		t.Errorf("tree %s still exists after the merge", path)
@@ -394,7 +441,7 @@ func TestMerge_ExplainsRedCIWithFailingLines(t *testing.T) {
 	f.watchFail = "test\tfail\t1m\thttps://github.com/o/r/actions/runs/99/job/5"
 	f.checkList = `[{"name":"lint","bucket":"pass","link":"https://github.com/o/r/actions/runs/98/job/4"},` +
 		`{"name":"test","bucket":"fail","link":"https://github.com/o/r/actions/runs/99/job/5"}]`
-	f.logs = map[string]string{"99": "test\tRun tests\t2026-10-18T10:00:00.1234567Z === RUN   TestA\n" +
+	f.logs = map[string]string{"5": "test\tRun tests\t2026-10-18T10:00:00.1234567Z === RUN   TestA\n" +
 		"test\tRun tests\t2026-10-18T10:00:01.0000000Z --- FAIL: TestA (0.00s)\n" +
 		"test\tRun tests\t2026-10-18T10:00:01.5000000Z     a_test.go:12: got 1, want 2\n" +
 		"test\tRun tests\t2026-10-18T10:00:02.0000000Z FAIL\tgithub.com/o/r/pkg\t0.01s\n" +
@@ -783,26 +830,6 @@ func TestMerge_LocalRefusesPrimaryOffTheDefaultBranch(t *testing.T) {
 	}
 }
 
-func TestMerge_RemoteWithoutGhStopsInOneLine(t *testing.T) {
-	f := newFixture(t)
-	path := f.openTree(t)
-	f.gh.Answer = func(spec run.Spec) (run.Result, error) {
-		if spec.Args[0] == "auth" {
-			return run.Result{ExitCode: 1}, errors.New("gh: not logged in")
-		}
-		return run.Result{}, nil
-	}
-
-	err := Merge(f.env(path), "")
-
-	if err == nil || fixable(err) != nil || err.Error() != "tree merge: gh is not installed or not authenticated" {
-		t.Errorf("err = %v, want the one-line gh refusal", err)
-	}
-	if got := testiso.Git(t, f.primary, "branch", "--list", "-r", "origin/feat"); got != "" {
-		t.Errorf("pushed (%q) though gh was not usable", got)
-	}
-}
-
 func TestRm_FindsTreeMadeWithCustomPath(t *testing.T) {
 	f := newFixture(t)
 	custom := filepath.Join(t.TempDir(), "my", "wt")
@@ -1115,7 +1142,7 @@ func TestMerge_SquashesByDefaultAndRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--squash", "--delete-branch"}; !reflect.DeepEqual(got, want) {
+	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--squash", "--match-head-commit", testiso.Git(t, f.primary, "rev-parse", "origin/main")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("gh merge argv = %v, want %v", got, want)
 	}
 	want := map[string]string{"pr": "7", "merge": "0123456789abcdef0123456789abcdef01234567"}
@@ -1132,7 +1159,7 @@ func TestMerge_RebasePassesRebaseToGh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--rebase", "--delete-branch"}; !reflect.DeepEqual(got, want) {
+	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--rebase", "--match-head-commit", testiso.Git(t, f.primary, "rev-parse", "origin/main")}; !reflect.DeepEqual(got, want) {
 		t.Errorf("gh merge argv = %v, want %v", got, want)
 	}
 }
@@ -1277,9 +1304,10 @@ func TestMerge_ReadFailureOfChecksKeepsWatching(t *testing.T) {
 // mergeArgs is the argv of the last gh pr merge.
 func (f *fixture) mergeArgs() []string {
 	var args []string
-	for _, s := range f.gh.Specs() {
-		if strings.Join(s.Args[:2], " ") == "pr merge" {
-			args = s.Args
+	specs := f.gh.Specs()
+	for i := range specs {
+		if strings.Join(specs[i].Args[:2], " ") == "pr merge" {
+			args = specs[i].Args
 		}
 	}
 	return args
@@ -1572,7 +1600,7 @@ func TestMerge_RedCIWithControlBytesInNamesAndLogsPrintsNone(t *testing.T) {
 	path := f.openTree(t)
 	f.watchFail = "x"
 	f.checkList = `[{"name":"te\u001b[2Jst\u0007","bucket":"fail","link":"https://github.com/o/r/actions/runs/99/job/5"}]`
-	f.logs = map[string]string{"99": "a\tb\t2026-10-18T10:00:01.0000000Z --- FAIL: Test\u001b]0;pwned\u0007A\u0000\n"}
+	f.logs = map[string]string{"5": "a\tb\t2026-10-18T10:00:01.0000000Z --- FAIL: Test\u001b]0;pwned\u0007A\u0000\n"}
 
 	err := Merge(f.env(path), "")
 

@@ -263,3 +263,16 @@ func TestUsage_NamesTheFlagsOfInstallDoctorEjectAndExit130(t *testing.T) {
 		t.Error("tree usage lacks the interrupted exit code")
 	}
 }
+
+func TestTreeUsage_NamesEveryRefusalThatExitsTwo(t *testing.T) {
+	for _, want := range []string{
+		"uncommitted changes (sync)",
+		"commits on origin the tree lacks",
+		"a head that moved after the checks judged it",
+		"still queued after 30 minutes",
+	} {
+		if !strings.Contains(treeUsage, want) {
+			t.Errorf("tree usage lacks %q", want)
+		}
+	}
+}

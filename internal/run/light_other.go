@@ -3,7 +3,8 @@
 // Copied from aphrollo-tools internal/run/tree_unix.go and
 // internal/proc/killtree_unix.go at 12b3724e. Incident: #997, a timed-out
 // child's descendants kept running because only the child was killed. The
-// child leads its own process group and a signal to the group reaches the tree.
+// child leads its own process group and a signal to the group reaches the tree;
+// where the kernel can, it also dies with its parent (dieWithParent).
 package run
 
 import (
@@ -17,6 +18,7 @@ type groupTree struct{ pid int }
 
 func prepare(cmd *exec.Cmd) (tree, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	dieWithParent(cmd.SysProcAttr)
 	return &groupTree{}, nil
 }
 

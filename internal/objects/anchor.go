@@ -16,8 +16,12 @@ import (
 	"github.com/harryberg1n/trellis/internal/run"
 )
 
-// gitTimeout bounds each git child an anchor starts.
-const gitTimeout = 30 * time.Second
+// The deadlines of a git child: a hook's read, a fetch or a push, any other git.
+const (
+	gitTimeout        = 30 * time.Second
+	gitNetworkTimeout = 120 * time.Second
+	gitLocalTimeout   = 10 * time.Minute
+)
 
 const (
 	modeFile = "100644"
@@ -297,12 +301,37 @@ func parseLsTree(out []byte) (map[string]entry, error) {
 	return list, nil
 }
 
-// Git runs one git child through r and returns its stdout. A child that fails
-// still returns what it printed: git writes a conflict list to stdout.
+// Git runs one git child through r and returns its stdout, for at most thirty
+// seconds: the reads of a hook. A child that fails still returns what it
+// printed: git writes a conflict list to stdout. A verb that moves objects or
+// the working tree is GitFor.
 func Git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
-	res, err := r.Light(run.Spec{Name: "git", Args: args, Dir: repo, Timeout: gitTimeout, Stdin: stdin})
+	return gitWithin(r, gitTimeout, repo, stdin, args...)
+}
+
+// GitFor is Git with the deadline of what the command does: two minutes for a
+// fetch or a push, which wait on the network, ten minutes for any other git,
+// whose work grows with the repository (a worktree add, a rebase, a squash).
+// A hung command fails on its deadline and says which, instead of holding the
+// verb. Source: aphrollo-tools internal/workspace/netexec.go and runchild.go at
+// 12b3724e (gitNetworkTimeout, lightCeiling); incidents #290, #351, #997.
+func GitFor(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
+	timeout := gitLocalTimeout
+	switch run.Kind(run.Spec{Name: "git", Args: args}) {
+	case "fetch", "push":
+		timeout = gitNetworkTimeout
+	}
+	return gitWithin(r, timeout, repo, stdin, args...)
+}
+
+func gitWithin(r run.Runner, timeout time.Duration, repo string, stdin []byte, args ...string) ([]byte, error) {
+	spec := run.Spec{Name: "git", Args: args, Dir: repo, Timeout: timeout, Stdin: stdin}
+	res, err := r.Light(spec)
 	if err != nil {
-		return res.Stdout, fmt.Errorf("objects: git %s: %w", run.Kind(run.Spec{Name: "git", Args: args}), err)
+		if errors.Is(err, run.ErrTimeout) {
+			return res.Stdout, fmt.Errorf("objects: git %s: timed out after %ds: %w", run.Kind(spec), int(timeout.Seconds()), err)
+		}
+		return res.Stdout, fmt.Errorf("objects: git %s: %w", run.Kind(spec), err)
 	}
 	return res.Stdout, nil
 }

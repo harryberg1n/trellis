@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/install"
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -45,6 +47,10 @@ type Env struct {
 	Version   string // buildinfo.Version of that binary
 	GOOS      string
 	GOARCH    string
+	// Clock dates the stage directories; nil is the wall clock.
+	Clock clock.Clock
+	// LookPath finds a program on PATH; nil is exec.LookPath.
+	LookPath func(file string) (string, error)
 }
 
 // Options are the flags of the verb.
@@ -172,6 +178,7 @@ func (u updater) pin(tag string) (string, error) {
 		return bin, nil
 	}
 	stage := filepath.Join(u.Root, "stage", tag)
+	u.sweepStages()
 	if u.dry {
 		u.step("download %s and %s from %s into %s", u.asset(), sumsAsset, tag, stage)
 		u.step("verify its sha256 and smoke-check the staged binary")
@@ -412,6 +419,7 @@ func (u updater) replaceOnPath(bin string) error {
 		return err
 	default:
 		u.say("replace %s", u.Exe)
+		u.checkPath()
 	}
 	return nil
 }
@@ -486,4 +494,73 @@ func pinned(root string) []string {
 		}
 	}
 	return out
+}
+
+// checkPath says so when the trellis a shell runs is not the file just
+// replaced: the update then changed a binary nobody types. A process keeps the
+// PATH it started with, which is also what the next shell is given unless the
+// shell's startup files change it. Source: aphrollo-tools
+// internal/userbin/launcher.go at 12b3724e (PathCheck, pathVerdict); incident
+// pathcheck-new-shell, an update that printed success while `aphrollo` kept
+// resolving to the old install.
+func (u updater) checkPath() {
+	lookPath := u.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	fix := "put " + filepath.Dir(u.Exe) + " first on PATH"
+	found, err := lookPath("trellis")
+	if err != nil {
+		u.say("trellis is not on PATH: %s", fix)
+		return
+	}
+	if !sameFile(found, u.Exe) {
+		u.say("trellis on PATH resolves to %s, not %s: %s", found, u.Exe, fix)
+	}
+}
+
+// sameFile reports whether a and b are the same file on disk.
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && os.SameFile(fa, fb)
+}
+
+// staleStageAge is how old a staging directory must be before an update
+// removes it: a younger one may be another update's, running now.
+const staleStageAge = 24 * time.Hour
+
+// sweepStages removes the staging directories under <root>/stage that are older
+// than a day: an interrupted update leaves its own, and only the next update to
+// the same tag would have cleared it. Source: aphrollo-tools
+// internal/cli/update_userspace.go at 12b3724e (sweepStageDirs). A dry run says
+// what it would remove.
+func (u updater) sweepStages() {
+	clk := u.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
+	entries, err := os.ReadDir(filepath.Join(u.Root, "stage"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || clk.Now().Sub(info.ModTime()) <= staleStageAge {
+			continue
+		}
+		path := filepath.Join(u.Root, "stage", e.Name())
+		if u.dry {
+			u.step("remove stale stage %s", path)
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			u.say("keep stale stage %s: %s", path, oneLine(err))
+			continue
+		}
+		u.say("remove stale stage %s", path)
+	}
 }

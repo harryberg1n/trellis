@@ -90,7 +90,10 @@ func conflictFiles(env Env, dir, base string) []string {
 	return files
 }
 
-var runIDInLink = regexp.MustCompile(`/runs/(\d+)`)
+var (
+	runIDInLink = regexp.MustCompile(`/runs/(\d+)`)
+	jobIDInLink = regexp.MustCompile(`/job/(\d+)`)
+)
 
 // checksError explains a failed wait. Checks that failed or were cancelled are
 // one block (see unpassedChecks). A wait that failed with no such check to
@@ -156,11 +159,10 @@ func unpassedChecks(env Env, gh host.GH, pr int, why string) *Fixable {
 			continue
 		}
 		fmt.Fprintf(&b, "\n%s  %s", plain(c.Name), plain(c.Link))
-		m := runIDInLink.FindStringSubmatch(c.Link)
-		if m == nil {
+		log, ok, lerr := failedLogOf(gh, c.Link)
+		if !ok {
 			continue
 		}
-		log, lerr := gh.FailedLog(m[1])
 		if lerr != nil && log == "" {
 			env.warn("no log for %s: %v", plain(c.Name), lerr)
 			continue
@@ -170,6 +172,23 @@ func unpassedChecks(env Env, gh host.GH, pr int, why string) *Fixable {
 		}
 	}
 	return &Fixable{Msg: b.String()}
+}
+
+// failedLogOf is the failed-step log of the job a check's link names. A run holds
+// several jobs, and each check shows its own: reading the run once would put
+// the failures of every job under every check (landing PR #36 printed the same
+// two tests under test-windows and test-linux, which had one each). A link with
+// a run but no job gives the run's log; one with neither gives ok false.
+func failedLogOf(gh host.GH, link string) (log string, ok bool, err error) {
+	if m := jobIDInLink.FindStringSubmatch(link); m != nil {
+		log, err = gh.FailedJobLog(m[1])
+		return log, true, err
+	}
+	if m := runIDInLink.FindStringSubmatch(link); m != nil {
+		log, err = gh.FailedLog(m[1])
+		return log, true, err
+	}
+	return "", false, nil
 }
 
 // logPrefix is what gh run view --log-failed puts before every line: the job
