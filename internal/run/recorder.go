@@ -54,3 +54,15 @@ func Kind(s Spec) string {
 	}
 	return s.Name
 }
+
+// Direct is a Runner that marks every Spec it runs as Direct: the children of
+// a verb the user typed, which may write git state.
+type Direct struct{ Inner Runner }
+
+var _ Runner = Direct{}
+
+// Light runs spec on Inner with Direct set.
+func (d Direct) Light(spec Spec) (Result, error) {
+	spec.Direct = true
+	return d.Inner.Light(spec)
+}

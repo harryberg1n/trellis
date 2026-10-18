@@ -20,6 +20,7 @@ verbs:
   install   pin this binary and add its hooks to the repo: trellis install [--repo R] [--dry]
   doctor    check the installed hooks against this binary and the state root
   eject     remove the hooks install added
+  tree      worktrees over plain git and gh: trellis tree new|sync|merge|rm
   help      print this text
 `
 
@@ -55,6 +56,8 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return allowVerb(args[1:], stdout, stderr)
 	case "install", "eject", "doctor":
 		return installVerb(args, stdout, stderr)
+	case "tree":
+		return treeVerb(args[1:], stdout, stderr)
 	case "help":
 		_, _ = io.WriteString(stdout, usage)
 		return 0

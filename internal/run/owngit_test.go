@@ -19,6 +19,19 @@ func gitSpec(dir, stdin string, args ...string) Spec {
 	return s
 }
 
+func TestDirect_AllowsAGitWriteTheUserAsked(t *testing.T) {
+	repo := testiso.Repo(t)
+	if _, err := (Direct{Inner: Exec{Clock: clock.Real()}}).Light(gitSpec(repo, "", "branch", "feature")); err != nil {
+		t.Fatalf("direct git branch feature: %v, want it allowed", err)
+	}
+	if got := testiso.Git(t, repo, "branch", "--list", "feature"); !strings.Contains(got, "feature") {
+		t.Errorf("branch --list feature = %q, want the branch created", got)
+	}
+	if _, err := Light(clock.Real(), gitSpec(repo, "", "branch", "other")); !errors.Is(err, ErrOwnGitState) {
+		t.Errorf("plain git branch other: err %v, want ErrOwnGitState", err)
+	}
+}
+
 func TestOwnGitState_RefWriteOutsideTrellisIsRefused(t *testing.T) {
 	repo := testiso.Repo(t)
 	_, err := Light(clock.Real(), gitSpec(repo, "", "update-ref", "refs/heads/x", "HEAD"))

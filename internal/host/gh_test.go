@@ -1,10 +1,12 @@
 package host
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/testiso"
 	"github.com/harryberg1n/trellis/internal/testsupport"
 )
@@ -42,6 +44,51 @@ func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
 	wantArgs := []string{"pr", "list", "--state", "merged", "--limit", "500", "--json", "number,headRefName"}
 	if !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
 		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, wantArgs)
+	}
+}
+
+func TestGH_PRViewDecodesAndNamesAMissingPR(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`{"number":7,"state":"OPEN"}`)}
+	got, err := GH{Runner: r, Dir: "d"}.PRView("feat")
+	if err != nil || got != (PRState{Number: 7, State: "OPEN"}) {
+		t.Fatalf("PRView = %+v, %v; want #7 OPEN", got, err)
+	}
+	if want := []string{"pr", "view", "feat", "--json", "number,state"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
+		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, want)
+	}
+
+	none := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New(`no pull requests found for branch "feat"`)
+	}}
+	if _, err := (GH{Runner: none}).PRView("feat"); !errors.Is(err, ErrNoPR) {
+		t.Errorf("err = %v, want ErrNoPR", err)
+	}
+}
+
+func TestGH_CreateWatchAndMergeArgv(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("out\n")}
+	g := GH{Runner: r, Dir: "d"}
+	if url, err := g.CreatePR("main"); err != nil || url != "out" {
+		t.Fatalf("CreatePR = %q, %v", url, err)
+	}
+	if _, err := g.WatchChecks(7); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.MergePR(7); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"pr", "create", "--fill", "--base", "main"},
+		{"pr", "checks", "7", "--watch"},
+		{"pr", "merge", "7", "--rebase", "--delete-branch"},
+	}
+	for i, s := range r.Specs() {
+		if !reflect.DeepEqual(s.Args, want[i]) {
+			t.Errorf("call %d argv = %v, want %v", i, s.Args, want[i])
+		}
+	}
+	if got := r.Specs()[1].Timeout; got != 45*time.Minute {
+		t.Errorf("watch timeout = %v, want 45m", got)
 	}
 }
 
