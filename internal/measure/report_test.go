@@ -55,6 +55,7 @@ func TestReport_GoldenBytes(t *testing.T) {
 		if err := os.WriteFile("testdata/golden_report.txt", first, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		t.Skip("golden updated; review the diff")
 	}
 	want := fixture(t, "golden_report.txt")
 	if !bytes.Equal(first, want) {

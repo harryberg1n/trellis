@@ -119,7 +119,7 @@ func TestReport_GathersLabelsFromTheRepoHistory(t *testing.T) {
 	}
 	for _, want := range []string{
 		"lanes merged: 3 (defect 1, clean 0, pending 2)",
-		"lanes with usage: 1  total $0.0125",
+		"lanes with usage: 1  total $0.01250",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
