@@ -49,6 +49,7 @@ type Store struct {
 	skipped   map[int64]bool
 	mu        sync.Mutex // in-process; the file lock covers other processes
 	rename    func(oldpath, newpath string) error
+	fsync     func(*os.File) error
 }
 
 var _ Log = (*Store)(nil)
@@ -58,7 +59,7 @@ func Open(repoDir string, c clock.Clock) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{dir: repoDir, clock: c, rename: os.Rename, skipped: map[int64]bool{}}, nil
+	return &Store{dir: repoDir, clock: c, rename: os.Rename, fsync: (*os.File).Sync, skipped: map[int64]bool{}}, nil
 }
 
 func (s *Store) logPath() string    { return filepath.Join(s.dir, "events.jsonl") }
@@ -71,6 +72,7 @@ type Tx struct {
 	tail   uint64 // the log's last Seq when the lock was taken
 	last   uint64
 	folded bool
+	mode   Durability
 }
 
 // Locked runs fn holding the in-process mutex and the file lock. It returns
@@ -230,9 +232,11 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 		f.Close()
 		return nil, err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return nil, err
+	if tx.mode == Durable {
+		if err := tx.s.fsync(f); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	if err := f.Close(); err != nil {
 		return nil, err
