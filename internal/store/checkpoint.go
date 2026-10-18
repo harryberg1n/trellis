@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -48,27 +47,11 @@ func (tx *Tx) Save(cp Checkpoint) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(tx.s.dir, "state.json.*.tmp")
-	if err != nil {
-		return err
+	opts := []AtomicOption{WithRename(tx.s.rename)}
+	if tx.mode == Durable {
+		opts = append(opts, WithSync(tx.s.fsync))
 	}
-	tmp := f.Name()
-	_, err = f.Write(raw)
-	if err == nil && tx.mode == Durable {
-		err = tx.s.fsync(f)
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = tx.s.rename(tmp, tx.s.statePath())
-	}
-	if err != nil {
-		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-			err = errors.Join(err, rerr)
-		}
-	}
-	return err
+	return WriteAtomic(tx.s.dir, filepath.Base(tx.s.statePath()), raw, opts...)
 }
 
 // SetRename replaces the rename used to publish state.json. A test injects a

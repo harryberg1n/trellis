@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // WriteBlob stores the file at path as a loose blob in gitDir's object store
@@ -68,21 +70,10 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 	if err := zw.Close(); err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, "tmp_obj_")
+	// The object file is read-only, git's own loose-object mode, and its temp
+	// file carries git's tmp_obj_ prefix so git's cleanup knows it.
+	err = store.WriteAtomic(dir, filepath.Base(final), packed.Bytes(), store.WithMode(0o444), store.WithTempPattern("tmp_obj_*"))
 	if err != nil {
-		return "", err
-	}
-	_, werr := tmp.Write(packed.Bytes())
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		_ = os.Remove(tmp.Name()) // best effort: werr is the error worth reporting
-		return "", werr
-	}
-	_ = os.Chmod(tmp.Name(), 0o444) // best effort, git's own loose-object mode
-	if err := os.Rename(tmp.Name(), final); err != nil {
-		_ = os.Remove(tmp.Name()) // best effort: the rename outcome is decided below
 		// A concurrent writer may have won the rename; the object is then there.
 		if _, serr := os.Stat(final); serr == nil {
 			return id, nil

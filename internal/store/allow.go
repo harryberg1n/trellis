@@ -46,7 +46,7 @@ func (s *Store) Allow(id string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(p, []byte(s.clock.Now().UTC().Format(stamp)+"\n"), 0o644)
+	return WriteAtomic(filepath.Dir(p), filepath.Base(p), []byte(s.clock.Now().UTC().Format(stamp)+"\n"), WithMode(0o644))
 }
 
 // valid reports whether the row has a token younger than AllowTTL. An expired
