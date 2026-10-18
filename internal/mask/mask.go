@@ -1,0 +1,54 @@
+// Package mask blanks the contents of string literals and comments in a shell
+// command, replacing each masked byte with a space while preserving length,
+// byte offsets and newlines, so a token that only appears inside a string or
+// a comment never trips a wall. Detectors run on masked text.
+//
+// lex.go is copied from aphrollo-tools internal/mask at 12b3724e. This file
+// keeps the idea of mask.go there (StringsAndComments over one lexer) without
+// its language table: the rows are in shells.go.
+package mask
+
+import (
+	"bytes"
+	"unicode/utf8"
+)
+
+// StringsAndComments blanks both the strings and the comments of cmd, read as
+// bash. A string's own quotes stay, so `echo "x"` masks to `echo " "`.
+func StringsAndComments(cmd string) string {
+	return NewLexer(Bash()).Lex(cmd, true, true)
+}
+
+// ForTool is cmd masked by the row of the tool that runs it: PowerShell for
+// the PowerShell tool, bash for anything else.
+func ForTool(tool, cmd string) string {
+	row := Bash()
+	if tool == "PowerShell" {
+		row = PowerShell()
+	}
+	return NewLexer(row).Lex(cmd, true, true)
+}
+
+// charLiteralLen is copied from aphrollo-tools internal/mask/mask.go at
+// 12b3724e. It returns the offset from b[i] of the quote closing the char
+// literal that opens at b[i], and false when b[i] opens none. The body is one
+// char, or a backslash and the escape it starts, whose tail runs to the next
+// quote. The search stops at the line's end: a char literal never spans a
+// line. No shell row sets CharLiteral; the lexer still calls it.
+func charLiteralLen(b []byte, i int) (int, bool) {
+	line, _, _ := bytes.Cut(b[i:], []byte{'\n'})
+	j := 1
+	if j < len(line) && line[j] == '\\' {
+		j += 2 // the backslash and the byte it escapes, which may be a quote
+		for j < len(line) && line[j] != '\'' {
+			j++
+		}
+	} else {
+		_, size := utf8.DecodeRune(line[j:])
+		j += size
+	}
+	if j < len(line) && line[j] == '\'' {
+		return j, true
+	}
+	return 0, false
+}
