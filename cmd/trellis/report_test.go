@@ -79,11 +79,21 @@ const sentinel = "SENTINEL-PROMPT-7f3a"
 // sentinel in it.
 func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 	t.Helper()
+	return reportFixtureWithRemote(t, "https://example.invalid/repo.git")
+}
+
+// reportFixtureWithRemote is reportFixture with origin set to remote, or no
+// remote at all when remote is empty.
+func reportFixtureWithRemote(t *testing.T, remote string) (reportEnv, *ghFake, string) {
+	t.Helper()
 	repo := repoWithHistory(t)
+	if remote != "" {
+		testiso.Git(t, repo, "remote", "add", "origin", remote)
+	}
 	stateRoot := t.TempDir()
 
 	c := clock.Fake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
-	st, err := store.Open(store.RepoDir(stateRoot, store.RepoID("", repo)), c)
+	st, err := store.Open(store.RepoDir(stateRoot, store.RepoID(remote, repo)), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +232,7 @@ func hasPair(args []string, k, v string) bool {
 }
 
 func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing.T) {
-	env, _, _ := reportFixture(t)
+	env, _, _ := reportFixtureWithRemote(t, "")
 	// The hook reads the repo's own config file only. A remote that only the
 	// user's global config names must not move the report to another store.
 	testiso.Git(t, env.Repo, "config", "--global", "remote.origin.url", "https://example.invalid/global.git")
@@ -263,6 +273,26 @@ func TestReport_ReadsHEADWhenThereIsNoMainOrMaster(t *testing.T) {
 
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "trees merged: 3"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestReport_NoRemoteSkipsGitHubReads(t *testing.T) {
+	env, gh, _ := reportFixtureWithRemote(t, "")
+	var out, errb bytes.Buffer
+
+	code := reportCmd(nil, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if n := len(gh.Specs()); n != 0 {
+		t.Errorf("gh was called %d times with no remote: %+v", n, gh.Specs())
+	}
+	if want := "trellis report: no remote: issues and pull requests not read\n"; errb.String() != want {
+		t.Errorf("stderr = %q, want %q", errb.String(), want)
 	}
 	if want := "trees merged: 3"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, out.String())
