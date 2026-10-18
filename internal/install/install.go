@@ -131,6 +131,9 @@ func Install(o Options) ([]string, error) {
 			return nil, err
 		}
 	}
+	if err := RecordRepo(o.Root, o.Repo); err != nil {
+		return nil, err
+	}
 	return actions, nil
 }
 
@@ -234,8 +237,17 @@ func writeSettings(repo string, doc []byte) error {
 
 // Eject removes the entries Install added, from this repo's settings, and
 // returns one line per removal. Everything else in the file is left byte for
-// byte. The pinned binaries stay: other repos may point at them.
+// byte. The pinned binaries stay: other repos may point at them. The repo is
+// then dropped from the record `trellis update` reads.
 func Eject(o Options) ([]string, error) {
+	actions, err := eject(o)
+	if err != nil {
+		return actions, err
+	}
+	return actions, ForgetRepo(o.Root, o.Repo)
+}
+
+func eject(o Options) ([]string, error) {
 	doc, err := readSettings(o.Repo)
 	if err != nil {
 		return nil, err
