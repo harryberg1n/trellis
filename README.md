@@ -23,6 +23,16 @@ Install: download the binary for your platform from the latest GitHub release, c
 
 A repository is on once `trellis.toml` is committed at its root, found by walking up from the working directory to the first `.git`; a linked worktree of it is on too. Anywhere else, and under `TRELLIS_OFF=1`, the hook exits 0 with no output and writes nothing. Everything a tree writes goes to the store of the primary checkout.
 
+## Walls
+
+A deny is `trellis: <row>: <cause>. Override: <command>.`, one line except the secrets deny, which lists its findings under it; the command is `trellis allow <row>` or `none`. What the walls read, where it is not obvious:
+
+- Command names are matched without case on Windows (`Git reset --hard`, `GIT.EXE commit --no-verify` are `git`); elsewhere `Git` is not `git`.
+- `discard-uncommitted` measures `git clean` with `-x` or `-X` over the ignored files too: `clean -fdx discards 1 untracked file, 1 ignored file` (`-X` counts only the ignored ones). `git stash drop` and `git stash clear` on a repository with no stash entry pass; with one they say `stash drop discards a stash entry for good`.
+- `undercover` reads the text of `git commit` and `git merge` (`-m`, `-F`), the title, squash subject and body of `gh pr create|edit|merge` (`-t`, `--title`, `--subject`, `-b`, `--body-file`), and the identity a commit is made with: `--author=` or `--author <ident>`, and `-c user.name=` or `-c user.email=` before the verb, for the verbs that write a commit (`commit`, `merge`, `cherry-pick`, `revert`, `am`, `rebase`, `pull`; `git log --author=` is a search and passes). A vendor address (`@anthropic.com`, `noreply@openai.com`, `cursoragent@cursor.com`, `<digits>+copilot@users.noreply.github.com`) is a deny on any line or in an identity: `the author or committer identity of this commit carries a vendor address ("noreply@anthropic.com")`. A name alone is not a tell.
+- `secrets` runs gitleaks over the staged changes (`gitleaks git --staged` from 8.19, `protect --staged` before; the version is asked once per binary path and mtime and kept in `tool-versions.json` in the state root) and, for a commit that stages as it goes, over the uncommitted changes. A finding is listed as `file:line  rule  fingerprint <fingerprint>`, followed by the three ways to clear a false positive: `gitleaks:allow` in a comment on that line, the fingerprint in `.gitleaksignore`, or an `[allowlist]` in `.gitleaks.toml`. The row has no override.
+- A rebase in progress keeps its branch: the recorder reads `rebase-merge/head-name` and `rebase-apply/head-name` from the worktree's own git directory, so edits during a conflict stay on the tree, not on `detached-<sha>`. A rebase of the default branch in the primary checkout therefore counts as being on it, so `primary-write` denies the edits of its conflict resolution: the primary is merge-only, and `trellis tree merge` refuses a primary stuck mid-rebase.
+
 ## Exit codes
 
 0 done. 1 an error. 2 a failure you can fix and run again (red or cancelled checks, a conflict, a branch that is behind or blocked, a head that moved), or a usage mistake. 130 `tree`, `update` or `report` was interrupted by Ctrl-C or a terminate signal; the running child and its process tree are ended first, and a local squash in flight is undone.

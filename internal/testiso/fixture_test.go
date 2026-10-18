@@ -114,3 +114,19 @@ func TestTreePathError_NamesTheLimitAndTheLength(t *testing.T) {
 		t.Errorf("no limit, yet: %v", err)
 	}
 }
+
+func TestFakeGitleaks_AnswersVersionAndPrintsTheReportAndLogsItsCalls(t *testing.T) {
+	calls := FakeGitleaks(t, "8.18.2", 2, `[{"RuleID":"r"}]`)
+	out, err := exec.Command("gitleaks", "version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "8.18.2" {
+		t.Fatalf("version: %q, %v; want 8.18.2", out, err)
+	}
+	out, err = exec.Command("gitleaks", "git", "--staged", "--report-path", "-").Output()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || strings.TrimSpace(string(out)) != `[{"RuleID":"r"}]` {
+		t.Errorf("scan: %q, %v; want the report and exit 2", out, err)
+	}
+	if got, want := strings.Join(calls(), "|"), "version|git --staged --report-path -"; got != want {
+		t.Errorf("calls = %q, want %q", got, want)
+	}
+}

@@ -25,7 +25,7 @@ func (s *Store) statePath() string { return filepath.Join(s.dir, "state.json") }
 // log from Seq 1, as it does for any checkpoint behind the log.
 func (tx *Tx) Checkpoint() (Checkpoint, error) {
 	var cp Checkpoint
-	raw, err := os.ReadFile(tx.s.statePath())
+	raw, err := readFileShared(tx.s.statePath())
 	if errors.Is(err, os.ErrNotExist) {
 		return cp, nil
 	}
@@ -47,7 +47,7 @@ func (tx *Tx) Save(cp Checkpoint) error {
 	if err != nil {
 		return err
 	}
-	opts := []AtomicOption{WithRename(tx.s.rename)}
+	opts := []AtomicOption{WithRename(tx.s.rename), WithClock(tx.s.clock)}
 	if tx.mode == Durable {
 		opts = append(opts, WithSync(tx.s.fsync))
 	}

@@ -1900,3 +1900,17 @@ func TestRm_FromThePrimarySaysOnlyRemoved(t *testing.T) {
 		t.Errorf("printed %q, want %q", got, want)
 	}
 }
+
+func TestMerge_LocalRefusesAPrimaryStuckMidRebase(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	testiso.Git(t, f.primary, "checkout", "-q", "--detach")
+	testiso.Write(t, filepath.Join(f.primary, ".git", "rebase-merge", "head-name"), "refs/heads/main\n")
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: the primary checkout is in the middle of a rebase of main; finish or abort it first"
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}

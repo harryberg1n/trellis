@@ -74,7 +74,7 @@ func Open(repoDir string, c clock.Clock, opts ...Option) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), dirMode); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: repoDir, clock: c, rename: os.Rename, remove: os.Remove, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
+	s := &Store{dir: repoDir, clock: c, rename: replaceFile, remove: os.Remove, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
 	for _, o := range opts {
 		o(s)
 	}
@@ -363,7 +363,7 @@ func (s *Store) Park(ev kernel.Event) error {
 	// Synced through the file's own Sync, not the store's seam: a parked event
 	// is never a Lazy write.
 	return WriteAtomic(s.pendingDir(), name+".json", raw,
-		WithSync((*os.File).Sync), WithMode(fileMode))
+		WithSync((*os.File).Sync), WithMode(fileMode), WithClock(s.clock))
 }
 
 // BytesRead is how many log bytes this Store has read, for tests that pin

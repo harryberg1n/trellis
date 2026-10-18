@@ -137,3 +137,32 @@ const ForeignSettings = `{ "zeta":{"b":1,"a":2},
   "alpha": [3, 2.50, 1]
 }
 `
+
+// FakeGitleaks puts a gitleaks stub first on PATH for the test. `gitleaks
+// version` prints version; any other call prints report on its standard output
+// and exits with code. The returned func lists the calls so far, one line of
+// arguments each, so a test can see which form was run and how often.
+func FakeGitleaks(t testing.TB, version string, code int, report string) (calls func() []string) {
+	t.Helper()
+	dir := t.TempDir()
+	reportFile, logFile := filepath.Join(dir, "report.json"), filepath.Join(dir, "calls.log")
+	for path, content := range map[string]string{reportFile: report, logFile: "", filepath.Join(dir, "gitleaks"+toolExt): gitleaksScript(version, reportFile, logFile, code)} {
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() []string {
+		raw, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, l := range strings.Split(string(raw), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+}

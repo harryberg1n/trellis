@@ -44,11 +44,11 @@ func discardUncommitted(a *analysis) (cause, unmeasured string) {
 
 // cost is what an invocation would destroy.
 type cost struct {
-	Unstaged, Staged, Untracked, Commits int
+	Unstaged, Staged, Untracked, Ignored, Commits int
 }
 
 func (c cost) zero() bool {
-	return c.Unstaged == 0 && c.Staged == 0 && c.Untracked == 0 && c.Commits == 0
+	return c.Unstaged == 0 && c.Staged == 0 && c.Untracked == 0 && c.Ignored == 0 && c.Commits == 0
 }
 
 func (c cost) String() string {
@@ -62,6 +62,9 @@ func (c cost) String() string {
 	if c.Untracked > 0 {
 		parts = append(parts, plural(c.Untracked, "untracked file"))
 	}
+	if c.Ignored > 0 {
+		parts = append(parts, plural(c.Ignored, "ignored file"))
+	}
 	if c.Commits > 0 {
 		parts = append(parts, plural(c.Commits, "commit")+" unreachable from any other ref")
 	}
@@ -74,11 +77,15 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	if a.r == nil {
 		return "", ""
 	}
-	if _, ok := repoAt(c.Dir); !ok && form != "worktree remove --force" {
+	repo, ok := repoAt(c.Dir)
+	if !ok && form != "worktree remove --force" {
 		return "", ""
 	}
 	switch {
 	case strings.HasPrefix(form, "stash "):
+		if objects.StashEmpty(repo.Common) {
+			return "", "" // nothing to drop
+		}
 		return form + " discards a stash entry for good", ""
 	case strings.HasPrefix(form, "branch -D "):
 		return measureBranch(a, c, form), ""
@@ -100,7 +107,8 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	if dir == "" {
 		return "", ""
 	}
-	got, err := statusCost(a.r, dir, paths)
+	cleans, only := cleanReach(form)
+	got, err := statusCost(a.r, dir, paths, cleans)
 	if err != nil {
 		return "", fmt.Sprintf("could not measure what %s would discard (%s); allowed", form, firstLine(err.Error()))
 	}
@@ -111,7 +119,10 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	case form == "checkout -- <paths>", form == "restore <paths>":
 		want = cost{Unstaged: got.Unstaged}
 	case strings.HasPrefix(form, "clean "):
-		want = cost{Untracked: got.Untracked}
+		want = cost{Untracked: got.Untracked, Ignored: got.Ignored}
+		if only {
+			want.Untracked = 0 // -X removes only what is ignored
+		}
 	default: // worktree remove --force
 		want = got
 	}
@@ -123,8 +134,12 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 
 // statusCost counts the files git status lists in dir, for paths or for the
 // whole tree: the measurement of discard-uncommitted.
-func statusCost(r run.Runner, dir string, paths []string) (cost, error) {
-	args := append([]string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
+func statusCost(r run.Runner, dir string, paths []string, ignored bool) (cost, error) {
+	args := []string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"}
+	if ignored {
+		args = append(args, "--ignored=matching")
+	}
+	args = append(args, pathArgs(paths)...)
 	out, err := objects.Git(r, dir, nil, args...)
 	if err != nil {
 		return cost{}, err
@@ -146,7 +161,7 @@ func IgnoreUntracked() DirtyOption {
 // measures it, or "" for a clean tree. Files git ignores, including the
 // repository's own exclude list, are never counted.
 func Dirty(r run.Runner, dir string, opts ...DirtyOption) (string, error) {
-	c, err := statusCost(r, dir, nil)
+	c, err := statusCost(r, dir, nil, false)
 	if err != nil {
 		return "", err
 	}
@@ -200,6 +215,7 @@ func parseStatus(out []byte) cost {
 		case x == '?' && y == '?':
 			c.Untracked++
 		case x == '!' && y == '!':
+			c.Ignored++
 		default:
 			if x != ' ' {
 				c.Staged++
@@ -439,4 +455,22 @@ func splitDashDash(rest []string) (opts, paths []string) {
 		}
 	}
 	return rest, nil
+}
+
+// cleanReach reads the short flags of a clean form: whether it reaches ignored
+// files (`x` or `X`), and whether it reaches only those (`X`, which leaves the
+// untracked files alone). A long option such as --exclude is no flag cluster.
+// Source: aphrollo-tools 12b3724e internal/cli/git_shim_discard.go (cleanCost,
+// untrackedCost). Incident: `git clean -fdx` on a clean tree deleted .env,
+// which the measure never listed.
+func cleanReach(form string) (ignored, only bool) {
+	var hasX, hasBigX bool
+	for _, f := range strings.Fields(form)[1:] {
+		if !strings.HasPrefix(f, "-") || strings.HasPrefix(f, "--") {
+			continue
+		}
+		hasX = hasX || strings.Contains(f, "x")
+		hasBigX = hasBigX || strings.Contains(f, "X")
+	}
+	return hasX || hasBigX, hasBigX && !hasX
 }

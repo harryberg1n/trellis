@@ -92,7 +92,7 @@ func (a *analysis) gitCalls() []gitCall {
 		return a.calls
 	}
 	a.callsDone = true
-	if !a.isShell() || !strings.Contains(a.command, "git") {
+	if !a.isShell() || !strings.Contains(foldName(a.command), "git") {
 		return nil
 	}
 	walk(a.tool, a.command, a.cwd, false, func(seg []word, dir string) {
