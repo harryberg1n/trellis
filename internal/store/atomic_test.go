@@ -64,6 +64,17 @@ func TestWriteAtomic_RenameFailureKeepsTheOldFileAndRemovesTheTemp(t *testing.T)
 	}
 }
 
+func TestWriteAtomic_SoftModeStillSetsTheMode(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteAtomic(dir, "obj", []byte("x"), WithSoftMode(0o444)); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "obj"))
+	if err != nil || info.Mode().Perm()&0o200 != 0 {
+		t.Errorf("obj: %v, %v; want read-only", info, err)
+	}
+}
+
 func TestWriteAtomic_ModeAndTempPattern(t *testing.T) {
 	dir := t.TempDir()
 	var tmpName string
