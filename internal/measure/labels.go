@@ -54,6 +54,17 @@ type Issue struct {
 type Usage struct {
 	Tree, Session string
 	Transcript    []byte
+	// Marks are the moments the session's turns ended (its Stop events) and the
+	// tree current at each. A reply belongs to the tree of the first mark at or
+	// after it; one after the last mark belongs to the last mark's tree. With
+	// no marks the whole transcript belongs to Tree.
+	Marks []TreeMark
+}
+
+// TreeMark is the tree a session was on when a turn ended at At.
+type TreeMark struct {
+	At   time.Time
+	Tree string
 }
 
 // PR is a merged pull request: its number and head branch.
@@ -69,7 +80,9 @@ type Facts struct {
 	PRs    []PR
 	Events []kernel.Event
 	Usage  []Usage
-	Now    time.Time
+	// MissingTranscripts is how many sessions had no readable transcript.
+	MissingTranscripts int
+	Now                time.Time
 }
 
 // linked is the merges with a tree filled in for each squash or rebase merge
