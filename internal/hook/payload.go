@@ -23,12 +23,24 @@ type payload struct {
 	TranscriptPath string `json:"transcript_path"`
 	Cwd            string `json:"cwd"`
 	ToolName       string `json:"tool_name"`
-	ToolInput      struct {
-		FilePath     string `json:"file_path"`
-		NotebookPath string `json:"notebook_path"`
-		Command      string `json:"command"`
-	} `json:"tool_input"`
-	Reason string `json:"reason"` // SessionEnd
+	// ToolInput is kept raw: its fields depend on the tool, and an MCP tool may
+	// put an object where Bash has a string. Read a field with input.
+	ToolInput json.RawMessage `json:"tool_input"`
+	Reason    string          `json:"reason"` // SessionEnd
+}
+
+// input is the string field key of tool_input, "" if tool_input is absent, is
+// not an object, or has no string there.
+func (p payload) input(key string) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(p.ToolInput, &fields) != nil {
+		return ""
+	}
+	var v string
+	if json.Unmarshal(fields[key], &v) != nil {
+		return ""
+	}
+	return v
 }
 
 // maxPayload bounds what a hook reads from stdin. A Write of a large file is
