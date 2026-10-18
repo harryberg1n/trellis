@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -120,12 +119,7 @@ func TestTable_ShipsTheTreeSixRows(t *testing.T) {
 	}
 }
 
-func TestTable_NamesNoOtherProduct(t *testing.T) {
-	for _, r := range Table {
-		if s := strings.ToLower(r.Incident + r.Decision + r.Experiment); strings.Contains(s, "aphrollo") {
-			t.Errorf("%s: %q names another product; trellis is its own", r.ID, r.Incident)
-		}
-	}
+func TestTable_HookBypassIncident(t *testing.T) {
 	for _, r := range Table {
 		if r.ID == "hook-bypass" && r.Incident != "2026-09 bypass refusals (no-verify)" {
 			t.Errorf("hook-bypass incident %q, want %q", r.Incident, "2026-09 bypass refusals (no-verify)")

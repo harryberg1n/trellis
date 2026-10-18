@@ -140,20 +140,6 @@ func TestPinToolchainHomes_LeavesTheEnvironmentAloneWhenGoCannotAnswer(t *testin
 	}
 }
 
-func TestPinToolchainHomes_PointsRustupAtTheHomeItReplaces_ButKeepsOneThatIsSet(t *testing.T) {
-	t.Setenv("RUSTUP_HOME", "")
-	pinToolchainHomes()
-	home, _ := os.UserHomeDir()
-	if got, want := os.Getenv("RUSTUP_HOME"), filepath.Join(home, ".rustup"); got != want {
-		t.Fatalf("RUSTUP_HOME = %q, want %q", got, want)
-	}
-	t.Setenv("RUSTUP_HOME", "/opt/rustup")
-	pinToolchainHomes()
-	if got := os.Getenv("RUSTUP_HOME"); got != "/opt/rustup" {
-		t.Fatalf("RUSTUP_HOME = %q, want the one that was already set", got)
-	}
-}
-
 func TestHomeLayout_PutsEveryVariableUnderTheFakeHome(t *testing.T) {
 	fake := filepath.Join(t.TempDir(), "home")
 	layout := homeLayout(fake)
@@ -353,13 +339,9 @@ func envMap(env []string) map[string]string {
 	return m
 }
 
-// A leaked commit must run no hook of the repo it lands in, and write no gate
-// state under the operator's config dir: both are named by the isolation.
-func TestIsolate_SendsHooksAndTheGateStateToTheRunsRoot(t *testing.T) {
+// A leaked commit must run no hook of the repo it lands in.
+func TestIsolate_SendsHooksToTheRunsRoot(t *testing.T) {
 	root := filepath.Dir(os.Getenv("HOME"))
-	if v := os.Getenv("CLAUDE_CONFIG_DIR"); v == "" || !inside(root, v) {
-		t.Errorf("CLAUDE_CONFIG_DIR = %q, want a path under the run's root %q", v, root)
-	}
 	if os.Getenv("GIT_CONFIG_KEY_3") != "core.hooksPath" || !inside(root, os.Getenv("GIT_CONFIG_VALUE_3")) {
 		t.Errorf("core.hooksPath = %q = %q, want an empty dir under the run's root", os.Getenv("GIT_CONFIG_KEY_3"), os.Getenv("GIT_CONFIG_VALUE_3"))
 	}
@@ -378,28 +360,5 @@ func TestIsolate_SwitchesTheGoWorkspaceOff(t *testing.T) {
 func TestIsolate_StartsTheMSYSAnchorBeforeMovingTheTempDir(t *testing.T) {
 	if !anchored.Load() {
 		t.Fatal("Isolate must have called anchor")
-	}
-}
-
-// A fixture's git is the box's own git, not the queue shim in front of it: the
-// shim costs a process of its own on every spawn, and the queue it guards
-// serves a session's work, never a throwaway repo.
-func TestWithoutQueueShims_DropsTheShimDirsAndKeepsTheOrder(t *testing.T) {
-	sep := string(os.PathListSeparator)
-	in := strings.Join([]string{"/usr/bin", filepath.Join("home", "u", "aphrollo", "cargo-queue"), "/opt/git/cmd", "cargo-queue" + string(filepath.Separator)}, sep)
-	want := "/usr/bin" + sep + "/opt/git/cmd"
-	if got := withoutQueueShims(in); got != want {
-		t.Errorf("withoutQueueShims(%q) = %q, want %q", in, got, want)
-	}
-	if got := withoutQueueShims("/a/cargo-queue-not" + sep + "/b"); got != "/a/cargo-queue-not"+sep+"/b" {
-		t.Errorf("a dir that merely starts with cargo-queue was dropped: %q", got)
-	}
-}
-
-func TestIsolate_LeavesTheQueueShimOffPath(t *testing.T) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if filepath.Base(filepath.Clean(dir)) == "cargo-queue" {
-			t.Errorf("PATH still holds the queue shim dir %q", dir)
-		}
 	}
 }

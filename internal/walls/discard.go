@@ -5,7 +5,7 @@ package walls
 // per-verb functions, splitDashDash, nonFlagOperands). Incidents: #650, a
 // `git checkout -- <path>` that threw away a day of uncommitted work, and #857,
 // the same through a Bash tool call that never met the git shim. What changed:
-// the cost is measured with one `git status` (aphrollo ran a diff and an
+// the cost is measured with one `git status` (the source ran a diff and an
 // ls-files, and a rev-list for a branch) through objects.Git and run.Light,
 // and the refusal is the trellis deny line.
 

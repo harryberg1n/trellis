@@ -8,7 +8,7 @@ name: nightly flake hunt
 # -count=5 so a flake with any real rate has several tries, -shuffle=on
 # against ordering assumptions, on both runners since the Windows one is
 # where trellis's own surprises came from. A red night is read by a person;
-# the issue filer aphrollo had is left out.
+# the issue filer of the source is left out.
 
 on:
   schedule:
