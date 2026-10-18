@@ -22,7 +22,7 @@ const trellisRefs = "refs/trellis/"
 var readVerbs = map[string]bool{
 	"status": true, "ls-tree": true, "mktree": true, "commit-tree": true, "hash-object": true, "cat-file": true,
 	"rev-parse": true, "rev-list": true, "log": true, "diff": true, "show": true, "for-each-ref": true,
-	"merge-base": true,
+	"merge-base": true, "check-ignore": true,
 }
 
 // branchWrites are the git branch options that create, move, copy, delete or

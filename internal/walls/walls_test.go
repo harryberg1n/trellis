@@ -591,3 +591,34 @@ func TestWalls_AnUnreadableRemoteDoesNotOpenTheMainCommitWall(t *testing.T) {
 		t.Errorf("denies %+v, want main-commit: the config read failed but the repo is still known", denies)
 	}
 }
+
+func TestPrimaryWrite_ExemptsIgnoredPathsAndTheGitDir(t *testing.T) {
+	w := newWorld(t)
+	testiso.Write(t, filepath.Join(w.primary, ".gitignore"), "docs/sdd/\n*.log\n")
+	r := quiet(t)
+	edit := func(file string) []byte {
+		return testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolEdit, w.primary, map[string]string{"file_path": file}, testiso.WithSession("s"))
+	}
+	for _, c := range []struct {
+		file string
+		deny bool
+	}{
+		{filepath.Join(w.primary, "docs", "sdd", "plan.md"), false},
+		{filepath.Join(w.primary, "build.log"), false},
+		{filepath.Join(w.primary, ".git", "info", "exclude"), false},
+		{filepath.Join(w.primary, "docs", "a.md"), true},
+		{filepath.Join(w.primary, "README.md"), true},
+	} {
+		d := verdicts(decide(t, edit(c.file), r), kernel.VerdictDeny)
+		if got := len(d) == 1 && d[0].RowID == "primary-write"; got != c.deny {
+			t.Errorf("Edit of %s: denies %+v, want deny=%v", c.file[len(w.primary):], d, c.deny)
+		}
+	}
+	// A shell write is judged the same way.
+	if d := verdicts(decide(t, bash(t, w.primary, "echo x > docs/sdd/notes.md", true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("shell write to an ignored path: denies %+v, want none", d)
+	}
+	if d := verdicts(decide(t, bash(t, w.primary, "echo x > notes.md", true), r), kernel.VerdictDeny); len(d) != 1 {
+		t.Errorf("shell write to a tracked-to-be path: denies %+v, want one", d)
+	}
+}
