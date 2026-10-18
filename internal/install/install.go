@@ -167,7 +167,8 @@ func addExclude(common string) (next []byte, action string, err error) {
 }
 
 // removeExclude returns the exclude list without the entry, or nil when it
-// holds none. Every other byte stays.
+// holds none. Every other byte stays. A line the user wrote before install,
+// identical to the entry, cannot be told from ours and goes with it.
 func removeExclude(common string) (next []byte, action string, err error) {
 	if common == "" {
 		return nil, "", nil
@@ -202,10 +203,11 @@ func hasLine(text []byte, line string) bool {
 }
 
 func writeExclude(common string, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(excludePath(common)), 0o755); err != nil {
+	dir := filepath.Dir(excludePath(common))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(excludePath(common), content, 0o644)
+	return store.WriteAtomic(dir, filepath.Base(excludePath(common)), content, store.WithMode(0o644), store.WithTempPattern(".exclude-*"))
 }
 
 // pin copies the binary at src to bin through a temp file, so a half copy
@@ -235,12 +237,15 @@ func writeSettings(repo string, doc []byte) error {
 // byte. The pinned binaries stay: other repos may point at them.
 func Eject(o Options) ([]string, error) {
 	doc, err := readSettings(o.Repo)
-	if err != nil || doc == nil {
+	if err != nil {
 		return nil, err
 	}
-	next, actions, err := removeEntries(doc, ownedBy(o.Root))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+	var next []byte
+	var actions []string
+	if doc != nil {
+		if next, actions, err = removeEntries(doc, ownedBy(o.Root)); err != nil {
+			return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+		}
 	}
 	exclude, excludeAction, err := removeExclude(o.Common)
 	if err != nil {
