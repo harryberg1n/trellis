@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-10-01T09:00:00Z","sessionId":"s1","message":{"role":"user","content":"SENTINEL-PROMPT-7f3a do the thing"}}
+{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","sessionId":"s1","requestId":"req1","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"SENTINEL-REPLY-91bc"}],"usage":{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":5000}}}
