@@ -34,7 +34,7 @@ func TestLatency_NearestRankPerKind(t *testing.T) {
 
 	got := Latency(evs)
 	want := []HookLatency{
-		{Hook: "PreToolUse", N: 3, P50: 5, P95: 9, Criterion: 20, Holds: true},
+		{Hook: "PreToolUse (denies only)", N: 3, P50: 5, P95: 9, Criterion: 0, Holds: true},
 		{Hook: "PostToolUse", N: 20, P50: 10, P95: 19, Criterion: 20, Holds: true},
 		{Hook: "Stop", N: 5, P50: 30, P95: 400, Criterion: 300, Holds: false},
 		{Hook: "SessionEnd", N: 1, P50: 7, P95: 7, Criterion: 0, Holds: true},

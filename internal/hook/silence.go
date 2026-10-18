@@ -35,8 +35,8 @@ type Deps struct {
 	Repo *objects.Repo
 	// Start is when the hook command began, read from the real clock once at its
 	// entry. Each event Run appends carries the time from Start to just before
-	// the append, so the lock wait and the turn anchor are inside it. The time
-	// from process start to main is not, and is a few milliseconds. The zero
+	// the append: lock wait and anchor included; append, checkpoint, fsync and
+	// process start excluded (the last is a few milliseconds). The zero
 	// value leaves events unmeasured.
 	Start time.Time
 }

@@ -97,11 +97,11 @@ func TestReport_HookLatencyBlock(t *testing.T) {
 	evs = append(evs, tooks(kernel.EvSessionUsage, 9)...)
 	got := string(Report(Facts{Now: day(20), Events: evs}))
 	want := "\n" +
-		"hook latency: p50 / p95 ms over 26 events (lock wait and anchor included; process start excluded)\n" +
-		"  PreToolUse   p50 3  p95 11  n 2     (criterion 20: ok)\n" +
-		"  PostToolUse  p50 20 p95 38  n 20    (criterion 20: over)\n" +
-		"  Stop         p50 180 p95 400 n 3     (criterion 300: over)\n" +
-		"  SessionEnd   p50 9  p95 9   n 1     (no criterion)\n" +
+		"hook latency: p50 / p95 ms over 26 timed events (lock wait and anchor included; append, checkpoint, fsync and process start excluded)\n" +
+		"  PreToolUse (denies only) p50 3    p95 11   n 2     (no criterion)\n" +
+		"  PostToolUse              p50 20   p95 38   n 20    (criterion 20: over)\n" +
+		"  Stop                     p50 180  p95 400  n 3     (criterion 300: over)\n" +
+		"  SessionEnd               p50 9    p95 9    n 1     (no criterion)\n" +
 		"\nas of "
 	if !strings.Contains(got, want) {
 		t.Fatalf("report lacks the block\n--- want\n%s\n--- got\n%s", want, got)

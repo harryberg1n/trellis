@@ -98,7 +98,7 @@ func latencyBlock(p func(string, ...any), lat []HookLatency) {
 	for _, l := range lat {
 		n += l.N
 	}
-	p("hook latency: p50 / p95 ms over %d events (lock wait and anchor included; process start excluded)", n)
+	p("hook latency: p50 / p95 ms over %d timed events (lock wait and anchor included; append, checkpoint, fsync and process start excluded)", n)
 	for _, l := range lat {
 		verdict := "(no criterion)"
 		if l.Criterion > 0 {
@@ -108,6 +108,6 @@ func latencyBlock(p func(string, ...any), lat []HookLatency) {
 			}
 			verdict = fmt.Sprintf("(criterion %d: %s)", l.Criterion, ok)
 		}
-		p("  %-12s p50 %-2d p95 %-3d n %-5d %s", l.Hook, l.P50, l.P95, l.N, verdict)
+		p("  %-24s p50 %-4d p95 %-4d n %-5d %s", l.Hook, l.P50, l.P95, l.N, verdict)
 	}
 }

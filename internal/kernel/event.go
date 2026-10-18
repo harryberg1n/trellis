@@ -41,8 +41,10 @@ type Event struct {
 	Arms    map[string]string `json:"arms,omitempty"`
 	Detail  map[string]string `json:"detail,omitempty"`
 	// TookMS is how long a hook ran, in whole milliseconds rounded up, from the
-	// start of `trellis hook` to just before this event was appended. 0 means
-	// not measured: records written before it existed, and events no hook wrote.
+	// start of `trellis hook` to just before this event was appended: lock wait
+	// and anchor included; append, checkpoint, fsync and process start excluded
+	// (an event cannot carry the time of its own write). 0 means not measured:
+	// records written before it existed, and events no hook wrote.
 	TookMS int64 `json:"took_ms,omitempty"`
 }
 

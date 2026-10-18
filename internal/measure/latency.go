@@ -17,22 +17,27 @@ type HookLatency struct {
 	Holds     bool
 }
 
-// The p95 limits, on the owner's box: the edit path (PreToolUse and
-// PostToolUse) and Stop.
+// The p95 limits, on the owner's box: the edit path
+// (PostToolUse) and Stop. The PreToolUse sample has none; see preLabel.
 const (
 	editCriterionMS = 20
 	stopCriterionMS = 300
 )
 
+// preLabel names the PreToolUse line: its sample is the denies only.
+const preLabel = kernel.HookPreToolUse + " (denies only)"
+
 // latencyHooks is the hooks in report order with the event kinds each one
 // writes. A PreToolUse writes only when a wall or the policy acts, so its
-// sample is the calls that were denied or overridden.
+// sample is the denied and overridden calls, the slow ones: it says nothing of
+// the allowed calls and carries no criterion. Timing every allowed call needs
+// an event per call, which is for the M1 plan.
 var latencyHooks = []struct {
 	hook      string
 	kinds     []string
 	criterion int64
 }{
-	{kernel.HookPreToolUse, []string{kernel.EvWallDenied, kernel.EvWallOverridden, kernel.EvPolicyDenied}, editCriterionMS},
+	{preLabel, []string{kernel.EvWallDenied, kernel.EvWallOverridden, kernel.EvPolicyDenied}, 0},
 	{kernel.HookPostToolUse, []string{kernel.EvEdit}, editCriterionMS},
 	{kernel.HookStop, []string{kernel.EvTurnAnchored}, stopCriterionMS},
 	{kernel.HookSessionEnd, []string{kernel.EvSessionUsage}, 0},
