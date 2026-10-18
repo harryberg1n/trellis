@@ -212,3 +212,19 @@ func TestCanonical_AcceptsEveryEventTheKernelNamesAndKeepsItsSpelling(t *testing
 		}
 	}
 }
+
+func TestParse_PayloadInAnotherSpellingOfTheRepoStillFindsTheEdit(t *testing.T) {
+	repo := newEnv(t).repo
+	alias := testiso.AltSpelling(t, repo)
+	file := filepath.Join(alias, "internal", "x.go")
+	ev, ctx, err := Parse("PostToolUse", fill(readShape(t, "edit_01_full"), vars(alias, file, "package x\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "edit" || ev.Detail["path"] != "internal/x.go" {
+		t.Errorf("event %+v, want an edit of internal/x.go: the alias must not read as outside the repo", ev)
+	}
+	if ctx.Args["repo"] != repo || ctx.Args["cwd"] != alias || ctx.Args["path"] != "internal/x.go" {
+		t.Errorf("args %v, want repo %q (canonical), cwd %q as sent, path internal/x.go", ctx.Args, repo, alias)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -130,9 +131,9 @@ func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *te
 }
 
 func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
-	repo := canonical(testiso.Repo(t))
+	repo := store.Canonical(testiso.Repo(t))
 	testiso.Git(t, repo, "config", "remote.origin.url", "https://example.invalid/o/r.git")
-	lane := canonical(testiso.AddLane(t, repo, "lane", "lane/x"))
+	lane := store.Canonical(testiso.AddLane(t, repo, "lane", "lane/x"))
 
 	got, err := Open(filepath.Join(repo, "no", "such", "dir"))
 	if err != nil {
@@ -160,17 +161,13 @@ func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 }
 
 func TestOpen_PathsAreCanonicalWhateverSpellingTheCallerUses(t *testing.T) {
-	repo := canonical(testiso.Repo(t))
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(repo, link); err != nil {
-		t.Skipf("no symlinks here: %v", err)
-	}
-	got, err := Open(link)
+	repo := store.Canonical(testiso.Repo(t))
+	got, err := Open(testiso.AltSpelling(t, repo))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Root != repo || got.Common != filepath.Join(repo, ".git") {
-		t.Errorf("Open(symlink) root %q common %q, want %q and its .git", got.Root, got.Common, repo)
+	if got.Root != repo || got.Common != filepath.Join(repo, ".git") || got.GitDir != got.Common {
+		t.Errorf("Open(alias) root %q common %q gitdir %q, want %q and its .git", got.Root, got.Common, got.GitDir, repo)
 	}
 }
 

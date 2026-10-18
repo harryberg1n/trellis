@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // ErrNotARepo is what FindRoot returns when no .git lies at or above the path.
@@ -119,14 +121,6 @@ type Repo struct {
 	History string // the ref to read the default branch's history from, as HistoryRef picks it
 }
 
-// canonical is p with symlinks and short names resolved, else cleaned.
-func canonical(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return filepath.Clean(p)
-}
-
 // Open reads the repository around dir without starting a process. It is the
 // one place a directory becomes a repository description.
 func Open(dir string) (Repo, error) {
@@ -134,12 +128,12 @@ func Open(dir string) (Repo, error) {
 	if err != nil {
 		return Repo{}, err
 	}
-	root := canonical(found)
+	root := store.Canonical(found)
 	common, gitDir, err := GitDirs(found)
 	if err != nil {
 		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
 	}
-	common, gitDir = canonical(common), canonical(gitDir)
+	common, gitDir = store.Canonical(common), store.Canonical(gitDir)
 	branch, err := Branch(gitDir)
 	if err != nil {
 		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
