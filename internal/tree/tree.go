@@ -187,10 +187,24 @@ func Sync(env Env) error {
 	return nil
 }
 
+// MergeOption changes how Merge lands a tree.
+type MergeOption func(*mergeOpts)
+
+type mergeOpts struct{ rebase bool }
+
+// Rebase lands the tree's commits one by one (a rebase merge, or in a
+// repository with no remote a --no-ff merge) instead of as one squash commit.
+func Rebase() MergeOption { return func(o *mergeOpts) { o.rebase = true } }
+
 // Merge ships the current tree: the optional local check, a push, a pull
-// request (found or opened), its checks, a rebase merge, then the tree and
-// branch are removed. Any step that fails stops the rest.
-func Merge(env Env, check string) error {
+// request (found or opened), its checks, a squash merge (a rebase merge with
+// Rebase), then the tree and branch are removed. Any step that fails stops
+// the rest.
+func Merge(env Env, check string, opts ...MergeOption) error {
+	var o mergeOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
 	w, err := locate(env.Dir)
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
@@ -209,7 +223,7 @@ func Merge(env Env, check string) error {
 		return err
 	}
 	if repo.Remote == "" {
-		return mergeLocal(env, w, check)
+		return mergeLocal(env, w, check, o.rebase)
 	}
 	if check != "" {
 		if err := runCheck(env, repo.Root, name, check); err != nil {
@@ -241,25 +255,32 @@ func Merge(env Env, check string) error {
 	case st.MergeUnknown():
 		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
-	switch _, err := gh.WatchChecks(pr); {
-	case errors.Is(err, host.ErrNoChecks):
-		env.say("no checks on this PR")
-	case err != nil:
-		return checksError(env, gh, pr, err)
-	default:
-		env.say("checks passed on #%d", pr)
-	}
-	if err := readyToMerge(env, gh, repo, name); err != nil {
+	seen, err := awaitChecks(env, gh, pr, name)
+	if err != nil {
 		return err
 	}
-	if err := gh.MergePR(pr); err != nil {
+	if !seen {
+		env.say("no checks on this PR")
+	}
+	if err := watchAndReady(env, gh, repo, name, pr, seen); err != nil {
+		return err
+	}
+	method := host.MergeSquash
+	if o.rebase {
+		method = host.MergeRebase
+	}
+	if err := gh.MergePR(pr, method); err != nil {
 		// gh merges first and then tries to move this checkout off the branch,
 		// which it cannot while the default branch is checked out elsewhere.
 		if st, verr := gh.PRView(name); verr != nil || st.State != "MERGED" {
 			return fmt.Errorf("tree merge: merge failed: %s", firstLine(err))
 		}
 	}
-	env.record(mergedEvent(name, pr))
+	sha, err := gh.MergeCommit(pr)
+	if err != nil {
+		env.warn("merge commit of #%d not read: %s", pr, firstLine(err))
+	}
+	env.record(mergedEvent(name, pr, sha))
 	env.say("merged #%d", pr)
 	return removeTree(env, w, repo.Root, name, false)
 }
@@ -313,30 +334,36 @@ func ensurePullRequest(gh host.GH, branch, base string) error {
 
 // readyToMerge reads the pull request once more after the checks and is a
 // Fixable unless gh would merge it: the head must still be the commit this
-// tree is on (the checks judged it), and the merge state must be clean.
-func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) error {
+// tree is on (the checks judged it), and the merge state must be clean. A
+// state that is not clean only because a check is still pending is no verdict:
+// pending is true and the error nil.
+func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) (pending bool, err error) {
 	st, err := gh.PRView(branch)
 	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return false, fmt.Errorf("tree merge: %w", err)
 	}
 	local, err := env.runGit(repo.Root, "rev-parse", "HEAD")
 	if err != nil {
-		return fmt.Errorf("tree merge: %w", err)
+		return false, fmt.Errorf("tree merge: %w", err)
+	}
+	notClean := strings.EqualFold(st.MergeStateStatus, "BLOCKED") || strings.EqualFold(st.MergeStateStatus, "UNSTABLE")
+	if notClean && anyPending(gh, st.Number) {
+		return true, nil
 	}
 	switch {
 	case st.HeadSHA != "" && !strings.EqualFold(st.HeadSHA, local):
-		return &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
+		return false, &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
 	case st.IsConflicting():
-		return conflictError(env, repo)
+		return false, conflictError(env, repo)
 	case st.IsBehind():
-		return &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+		return false, &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
 	case strings.EqualFold(st.MergeStateStatus, "BLOCKED"):
-		return &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
+		return false, &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
 	case strings.EqualFold(st.MergeStateStatus, "UNSTABLE"):
 		// the watch said green, so this is our read being wrong: red all the same
-		return unpassedChecks(env, gh, st.Number, "merge state UNSTABLE after a green watch")
+		return false, unpassedChecks(env, gh, st.Number, "merge state UNSTABLE after a green watch")
 	}
-	return nil
+	return false, nil
 }
 
 // blockReason is ": <why>" for a review decision gh names, else "".

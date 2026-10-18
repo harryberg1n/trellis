@@ -13,13 +13,19 @@ func openedEvent(name string) kernel.Event {
 	return kernel.Event{Kind: kernel.EvTreeOpened, Tree: name}
 }
 
-func mergedEvent(name string, pr int) kernel.Event {
-	return kernel.Event{Kind: kernel.EvTreeMerged, Tree: name, Detail: map[string]string{"pr": strconv.Itoa(pr)}}
+// mergedEvent is a merged pull request. sha is the commit it landed as, when
+// GitHub named one; the report links the history to the tree by it.
+func mergedEvent(name string, pr int, sha string) kernel.Event {
+	detail := map[string]string{kernel.DetailPR: strconv.Itoa(pr)}
+	if sha != "" {
+		detail[kernel.DetailMerge] = sha
+	}
+	return kernel.Event{Kind: kernel.EvTreeMerged, Tree: name, Detail: detail}
 }
 
 // localMergedEvent is a merge that made a commit, not a pull request.
 func localMergedEvent(name, sha string) kernel.Event {
-	return kernel.Event{Kind: kernel.EvTreeMerged, Tree: name, Detail: map[string]string{"merge": sha}}
+	return kernel.Event{Kind: kernel.EvTreeMerged, Tree: name, Detail: map[string]string{kernel.DetailMerge: sha}}
 }
 
 func checkEvent(name, result string) kernel.Event {

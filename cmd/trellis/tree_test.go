@@ -20,7 +20,7 @@ func TestTree_NoVerbPrintsUsage(t *testing.T) {
 	if code := run([]string{"tree"}, &out, &errb); code != 2 {
 		t.Errorf("exit %d, want 2", code)
 	}
-	for _, want := range []string{"usage: trellis tree <verb>", "new <name>", "sync", "merge [--check CMD]", "rm [<name>]"} {
+	for _, want := range []string{"usage: trellis tree <verb>", "new <name>", "sync", "merge [--check CMD] [--rebase]", "rm [<name>]"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("usage lacks %q:\n%s", want, errb.String())
 		}
@@ -78,7 +78,7 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 		{[]string{"allow", "--help"}, "usage: trellis allow <row-id>\n"},
 		{[]string{"tree", "new", "--help"}, "usage: trellis tree new <name> [--path P]\n"},
 		{[]string{"tree", "sync", "--help"}, "usage: trellis tree sync\n"},
-		{[]string{"tree", "merge", "--help"}, "usage: trellis tree merge [--check CMD]\n"},
+		{[]string{"tree", "merge", "--help"}, "usage: trellis tree merge [--check CMD] [--rebase]\n"},
 		{[]string{"tree", "rm", "--help"}, "usage: trellis tree rm [<name>] [--force]\n"},
 	}
 	for _, c := range cases {

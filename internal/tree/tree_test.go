@@ -53,7 +53,10 @@ type fixture struct {
 	head      string            // the PR head sha; "" is the local HEAD of the tree
 	watchFail string            // the text of a failed watch; "" is green
 	noChecks  bool              // the PR has no checks
-	checkList string            // the JSON `pr checks --json` prints
+	checkList string            // the JSON `pr checks --json` prints; "" is one passing check
+	checkSeq  []string          // successive JSON reads of the checks; the last repeats; used before checkList
+	workflows string            // what the workflow count prints; "" is one workflow
+	mergeSHA  string            // the merge commit pr view reports once merged; "" is none
 	logs      map[string]string // the failed log of a run id
 }
 
@@ -71,6 +74,9 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 	switch strings.Join(spec.Args[:2], " ") {
 	case "pr view":
+		if slices.Contains(spec.Args, "mergeCommit") {
+			return run.Result{Stdout: []byte(`{"mergeCommit":{"oid":"` + f.mergeSHA + `"}}`)}, nil
+		}
 		if !f.prSeen {
 			return run.Result{ExitCode: 1}, errors.New("gh: no pull requests found for branch")
 		}
@@ -103,7 +109,19 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		return run.Result{Stdout: []byte("https://github.com/o/r/pull/7\n")}, nil
 	case "pr checks":
 		if slices.Contains(spec.Args, "--json") {
-			return run.Result{Stdout: []byte(f.checkList), ExitCode: 1}, errors.New("gh: exit status 1")
+			out := f.checkList
+			switch {
+			case len(f.checkSeq) > 0:
+				out = f.checkSeq[0]
+				if len(f.checkSeq) > 1 {
+					f.checkSeq = f.checkSeq[1:]
+				}
+			case f.noChecks:
+				return run.Result{ExitCode: 1}, errors.New("gh: no checks reported on the 'feat' branch")
+			case out == "":
+				out = `[{"name":"ci","bucket":"pass","link":"L"}]`
+			}
+			return run.Result{Stdout: []byte(out), ExitCode: 1}, errors.New("gh: exit status 1")
 		}
 		if f.noChecks {
 			return run.Result{ExitCode: 1}, errors.New("gh: no checks reported on the 'feat' branch")
@@ -111,6 +129,11 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		if f.watchFail != "" {
 			return run.Result{Stdout: []byte(f.watchFail), ExitCode: 1}, errors.New("gh: exit status 1")
 		}
+	case "api repos/{owner}/{repo}/actions/workflows":
+		if f.workflows == "" {
+			return run.Result{Stdout: []byte("1\n")}, nil
+		}
+		return run.Result{Stdout: []byte(f.workflows)}, nil
 	case "pr merge":
 		if f.mergeErr != "" {
 			return run.Result{ExitCode: 1}, errors.New(f.mergeErr)
@@ -313,7 +336,7 @@ func TestMerge_RecordsMergedWithPRAndRemovesTree(t *testing.T) {
 	if got := f.events[1]; got.Tree != "feat" || got.Detail["pr"] != "7" {
 		t.Errorf("merged event = %+v, want tree feat with pr 7", got)
 	}
-	wantCalls := []string{"auth status", "pr view", "pr create", "pr view", "pr checks", "pr view", "pr merge"}
+	wantCalls := []string{"auth status", "pr view", "pr create", "pr view", "pr checks", "pr checks", "pr view", "pr merge", "pr view"}
 	if got := f.ghCalls(); !reflect.DeepEqual(got, wantCalls) {
 		t.Errorf("gh calls = %v, want %v", got, wantCalls)
 	}
@@ -455,6 +478,113 @@ func TestMerge_PollsUnknownMergeableWithoutSleeping(t *testing.T) {
 	}
 }
 
+const pendingCheck = `[{"name":"ci","bucket":"pending","link":"L"}]`
+
+func TestMerge_WaitsForChecksToAppearAfterThePush(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.checkSeq = []string{"[]", "[]", pendingCheck, `[{"name":"ci","bucket":"pass","link":"L"}]`}
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 2 {
+		t.Errorf("waits on the clock = %d, want 2 (two empty reads)", f.clk.afters)
+	}
+	if !strings.Contains(f.out.String(), "checks passed on #7\n") || strings.Contains(f.out.String(), "no checks") {
+		t.Errorf("output = %q, want checks passed and no 'no checks'", f.out.String())
+	}
+	if !slices.Contains(f.kinds(), "tree.merged") || exists(path) {
+		t.Errorf("kinds %v, tree exists %v; want merged and removed", f.kinds(), exists(path))
+	}
+}
+
+func TestMerge_NoChecksAfterTheWindowAndCleanMerges(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.noChecks = true
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 18 {
+		t.Errorf("waits on the clock = %d, want 18 (90 s in 5 s steps)", f.clk.afters)
+	}
+	if !strings.Contains(f.out.String(), "no checks on this PR\n") || !slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("output %q, kinds %v; want the no-checks line and a merge", f.out.String(), f.kinds())
+	}
+}
+
+func TestMerge_NoChecksAfterTheWindowAndNotCleanStopsWithoutMerging(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.noChecks = true
+	f.mergeable = []string{"MERGEABLE", "UNSTABLE"}
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: no checks appeared in 90s and the merge state is UNSTABLE: run again"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") {
+		t.Errorf("merged without checks on an unclean PR")
+	}
+}
+
+func TestMerge_RepositoryWithoutWorkflowsMergesAtOnce(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.noChecks = true
+	f.workflows = "0\n"
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 0 {
+		t.Errorf("waits on the clock = %d, want 0", f.clk.afters)
+	}
+	if !strings.Contains(f.out.String(), "no checks on this PR\n") || !slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("output %q, kinds %v; want the no-checks line and a merge", f.out.String(), f.kinds())
+	}
+}
+
+func TestMerge_UnstableWhileChecksPendingKeepsWatching(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeable = []string{"MERGEABLE", "UNSTABLE", "MERGEABLE"}
+	f.checkSeq = []string{pendingCheck}
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 1 {
+		t.Errorf("waits on the clock = %d, want 1 (one more watch)", f.clk.afters)
+	}
+	if !slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("kinds %v, want merged", f.kinds())
+	}
+}
+
+func TestMerge_RecordsTheMergeCommitOnTheRemotePath(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeSHA = "0123456789abcdef0123456789abcdef01234567"
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{"pr": "7", "merge": "0123456789abcdef0123456789abcdef01234567"}
+	if got := f.events[len(f.events)-1]; got.Kind != "tree.merged" || got.Tree != "feat" || !reflect.DeepEqual(got.Detail, want) {
+		t.Errorf("merged event = %+v, want tree feat with detail %v", got, want)
+	}
+}
+
 func TestFailingLines_KeepsMatchesStripsPrefixesAndCapsAtForty(t *testing.T) {
 	var log strings.Builder
 	log.WriteString("job\tstep\t2026-10-18T10:00:00.0000000Z noise\n")
@@ -518,12 +648,12 @@ func TestNew_LocalRepoBranchesFromTheLocalDefault(t *testing.T) {
 	}
 }
 
-func TestMerge_LocalRepoMergesNoFFIntoDefaultAndRecords(t *testing.T) {
+func TestMerge_LocalRebaseIsTheNoFFMerge(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)
 	commitFile(t, path, "mine.txt", "mine\n")
 
-	if err := Merge(f.env(path), "exit 0"); err != nil {
+	if err := Merge(f.env(path), "exit 0", Rebase()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -554,13 +684,13 @@ func TestMerge_LocalRepoMergesNoFFIntoDefaultAndRecords(t *testing.T) {
 	}
 }
 
-func TestMerge_LocalConflictAbortsNamesFilesExit2(t *testing.T) {
+func TestMerge_LocalRebaseConflictAbortsNamesFilesExit2(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)
 	commitFile(t, path, "README.md", "mine\n")
 	commitFile(t, f.primary, "README.md", "theirs\n")
 
-	err := Merge(f.env(path), "")
+	err := Merge(f.env(path), "", Rebase())
 
 	want := "tree merge: conflicts with main in: README.md\nrun trellis tree sync in the tree, resolve, merge again"
 	if fixable(err) == nil || err.Error() != want {
@@ -771,7 +901,7 @@ func TestMerge_LocalConflictWithUnreadableFileListStillAborts(t *testing.T) {
 	env := f.env(path)
 	env.Runner = failing{Inner: f.gh, Verb: []string{"diff", "--name-only"}}
 
-	err := Merge(env, "")
+	err := Merge(env, "", Rebase())
 
 	want := "tree merge: conflicts with main (files unknown)\nrun trellis tree sync in the tree, resolve, merge again"
 	if fixable(err) == nil || err.Error() != want {
@@ -790,7 +920,7 @@ func TestMerge_LocalAbortFailureIsItsOwnLine(t *testing.T) {
 	env := f.env(path)
 	env.Runner = failing{Inner: f.gh, Verb: []string{"merge", "--abort"}}
 
-	err := Merge(env, "")
+	err := Merge(env, "", Rebase())
 
 	if err == nil || fixable(err) != nil || !strings.HasPrefix(err.Error(), "tree merge: could not abort the merge in "+f.primary+": ") {
 		t.Errorf("err = %v, want the abort failure on its own", err)
@@ -947,4 +1077,104 @@ func TestRm_RefusesPrimaryCheckout(t *testing.T) {
 	if !exists(f.primary) {
 		t.Errorf("primary checkout removed")
 	}
+}
+
+func TestMerge_SquashesByDefaultAndRecords(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeSHA = "0123456789abcdef0123456789abcdef01234567"
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--squash", "--delete-branch"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("gh merge argv = %v, want %v", got, want)
+	}
+	want := map[string]string{"pr": "7", "merge": "0123456789abcdef0123456789abcdef01234567"}
+	if got := f.events[len(f.events)-1]; got.Kind != "tree.merged" || !reflect.DeepEqual(got.Detail, want) {
+		t.Errorf("merged event = %+v, want detail %v", got, want)
+	}
+}
+
+func TestMerge_RebasePassesRebaseToGh(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+
+	if err := Merge(f.env(path), "", Rebase()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := f.mergeArgs(), []string{"pr", "merge", "7", "--rebase", "--delete-branch"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("gh merge argv = %v, want %v", got, want)
+	}
+}
+
+func TestMerge_LocalSquashMakesOneCommitWithTheTreeSubject(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "one.txt", "1\n")
+	commitFile(t, path, "two.txt", "2\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
+		t.Errorf("subject = %q, want Merge tree feat", got)
+	}
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%b"); got != "- edit one.txt\n- edit two.txt" {
+		t.Errorf("body = %q, want the branch's subject lines", got)
+	}
+	if got := len(strings.Fields(testiso.Git(t, f.primary, "rev-list", "--parents", "-n1", "HEAD"))); got != 2 {
+		t.Errorf("HEAD has %d fields in rev-list --parents, want 2 (one parent, not a merge)", got)
+	}
+	if got := testiso.Git(t, f.primary, "ls-files", "one.txt", "two.txt"); got != "one.txt\ntwo.txt" {
+		t.Errorf("tracked = %q, want both files", got)
+	}
+	if detail := f.events[len(f.events)-1].Detail; detail["merge"] != testiso.Git(t, f.primary, "rev-parse", "HEAD") {
+		t.Errorf("merged detail = %v, want merge = the commit", detail)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+}
+
+func TestMerge_LocalSquashConflictLeavesThePrimaryClean(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "README.md", "mine\n")
+	commitFile(t, path, "added.txt", "new\n")
+	commitFile(t, f.primary, "README.md", "theirs\n")
+	before := testiso.Git(t, f.primary, "rev-parse", "HEAD")
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: conflicts with main in: README.md\nrun trellis tree sync in the tree, resolve, merge again"
+	if fixable(err) == nil || err.Error() != want {
+		t.Fatalf("err = %v, want fixable %q", err, want)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Errorf("primary status = %q, want clean", got)
+	}
+	if exists(filepath.Join(f.primary, "added.txt")) {
+		t.Errorf("added.txt left in the primary")
+	}
+	if got := testiso.Git(t, f.primary, "rev-parse", "HEAD"); got != before {
+		t.Errorf("HEAD moved to %s, want %s", got, before)
+	}
+	if !exists(path) || slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("tree exists %v, kinds %v; want the tree kept and no merge recorded", exists(path), f.kinds())
+	}
+}
+
+// mergeArgs is the argv of the last gh pr merge.
+func (f *fixture) mergeArgs() []string {
+	var args []string
+	for _, s := range f.gh.Specs() {
+		if strings.Join(s.Args[:2], " ") == "pr merge" {
+			args = s.Args
+		}
+	}
+	return args
 }

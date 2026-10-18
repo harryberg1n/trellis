@@ -8,10 +8,12 @@ import (
 	"github.com/harryberg1n/trellis/internal/walls"
 )
 
-// mergeLocal lands the current tree in a repository with no remote: a --no-ff
-// merge into the default branch, in the primary checkout. --no-ff keeps the
-// tree visible in history, which is what the report reads a merge from.
-func mergeLocal(env Env, w where, check string) error {
+// mergeLocal lands the current tree in a repository with no remote, in the
+// primary checkout: one squash commit on the default branch, or with rebase a
+// --no-ff merge. Both are "Merge tree <name>" with the branch's subjects as
+// the body, which keeps the tree visible in history; the event it records
+// names the commit, which is what the report reads a merge from.
+func mergeLocal(env Env, w where, check string, rebase bool) error {
 	repo := w.Repo
 	name := repo.Branch
 	if check != "" {
@@ -38,25 +40,18 @@ func mergeLocal(env Env, w where, check string) error {
 		return fmt.Errorf("tree merge: the primary checkout has %s; commit or discard it first", dirty)
 	}
 
-	args := []string{"merge", "--no-ff", "--no-edit", "-m", "Merge tree " + name}
-	if body := mergeBody(env, w.Primary, repo.Default, name); body != "" {
-		args = append(args, "-m", body)
-	}
-	if _, err := env.runGit(w.Primary, append(args, name)...); err != nil {
-		// a merge that stopped on conflicts leaves MERGE_HEAD: whatever else
-		// fails below, the primary checkout must not be left merging
-		if _, herr := env.runGit(w.Primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr != nil {
-			return fmt.Errorf("tree merge: %w", err)
+	subject := "Merge tree " + name
+	body := mergeBody(env, w.Primary, repo.Default, name)
+	if rebase {
+		args := []string{"merge", "--no-ff", "--no-edit", "-m", subject}
+		if body != "" {
+			args = append(args, "-m", body)
 		}
-		files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
-		if _, aerr := env.runGit(w.Primary, "merge", "--abort"); aerr != nil {
-			return fmt.Errorf("tree merge: could not abort the merge in %s: %w", w.Primary, aerr)
+		if _, err := env.runGit(w.Primary, append(args, name)...); err != nil {
+			return abortMerge(env, w, err)
 		}
-		where := "(files unknown)"
-		if len(files) > 0 {
-			where = "in: " + strings.Join(files, ", ")
-		}
-		return &Fixable{Msg: fmt.Sprintf("tree merge: conflicts with %s %s\nrun trellis tree sync in the tree, resolve, merge again", repo.Default, where)}
+	} else if err := squashLocal(env, w, subject, body); err != nil {
+		return err
 	}
 	sha, err := env.runGit(w.Primary, "rev-parse", "HEAD")
 	if err != nil {
@@ -65,6 +60,86 @@ func mergeLocal(env Env, w where, check string) error {
 	env.record(localMergedEvent(name, sha))
 	env.say("merged %s into %s at %s", name, repo.Default, short(sha))
 	return removeTree(env, w, repo.Root, name, false)
+}
+
+// conflictFixable is the Fixable for a local merge that conflicted in files.
+func conflictFixable(repo objects.Repo, files []string) error {
+	where := "(files unknown)"
+	if len(files) > 0 {
+		where = "in: " + strings.Join(files, ", ")
+	}
+	return &Fixable{Msg: fmt.Sprintf("tree merge: conflicts with %s %s\nrun trellis tree sync in the tree, resolve, merge again", repo.Default, where)}
+}
+
+// abortMerge answers a failed --no-ff merge. A merge that stopped on
+// conflicts leaves MERGE_HEAD: whatever else fails, the primary checkout must
+// not be left merging.
+func abortMerge(env Env, w where, cause error) error {
+	if _, herr := env.runGit(w.Primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); herr != nil {
+		return fmt.Errorf("tree merge: %w", cause)
+	}
+	files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
+	if _, aerr := env.runGit(w.Primary, "merge", "--abort"); aerr != nil {
+		return fmt.Errorf("tree merge: could not abort the merge in %s: %w", w.Primary, aerr)
+	}
+	return conflictFixable(w.Repo, files)
+}
+
+// squashLocal stages the tree's changes in the primary with git merge
+// --squash and commits them as one commit. A squash that conflicts leaves no
+// MERGE_HEAD but a dirty index, so it is undone by hand (see undoSquash).
+func squashLocal(env Env, w where, subject, body string) error {
+	if _, err := env.runGit(w.Primary, "merge", "--squash", w.Repo.Branch); err != nil {
+		files := lines(mustGit(env, w.Primary, "diff", "--name-only", "--diff-filter=U"))
+		if uerr := undoSquash(env, w.Primary); uerr != nil {
+			return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("tree merge: %w", err)
+		}
+		return conflictFixable(w.Repo, files)
+	}
+	args := []string{"commit", "-m", subject}
+	if body != "" {
+		args = append(args, "-m", body)
+	}
+	if _, err := env.runGit(w.Primary, args...); err != nil {
+		if uerr := undoSquash(env, w.Primary); uerr != nil {
+			return fmt.Errorf("tree merge: could not undo the squash in %s: %w", w.Primary, uerr)
+		}
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	return nil
+}
+
+// undoSquash puts the primary back to HEAD after a squash that stopped. It
+// touches only the paths the squash changed, read from the diff against HEAD:
+// the primary was verified clean (untracked files aside) before the merge, so
+// every tracked path that differs is the squash's, and no work of the
+// user's is discarded. A path HEAD has is restored from HEAD; one it lacks
+// was added by the squash and is removed.
+func undoSquash(env Env, dir string) error {
+	var have, added []string
+	for _, p := range lines(mustGit(env, dir, "diff", "--no-renames", "--name-only", "HEAD")) {
+		if _, err := env.runGit(dir, "cat-file", "-e", "HEAD:"+p); err == nil {
+			have = append(have, p)
+		} else {
+			added = append(added, p)
+		}
+	}
+	if len(have) > 0 {
+		args := append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, have...)
+		if _, err := env.runGit(dir, args...); err != nil {
+			return err
+		}
+	}
+	if len(added) > 0 {
+		args := append([]string{"rm", "-f", "-q", "--"}, added...)
+		if _, err := env.runGit(dir, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // mergeBody is the first-parent subject lines of the commits name adds to

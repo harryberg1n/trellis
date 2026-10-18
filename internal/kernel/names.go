@@ -33,6 +33,7 @@ const (
 	DetailLine       = "line"
 	DetailResult     = "result"
 	DetailPR         = "pr"
+	DetailMerge      = "merge" // the sha of the commit a tree.merged event landed as
 	DetailTranscript = "transcript"
 	DetailReason     = "reason"
 	DetailPath       = "path"
