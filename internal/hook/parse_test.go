@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"github.com/harryberg1n/trellis/internal/testsupport"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -87,7 +88,7 @@ func TestParse_EventsAndContext(t *testing.T) {
 func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 	e := newEnv(t)
 	file := filepath.Join(e.repo, "a.txt")
-	writeFile(t, file, "a\n")
+	testsupport.Write(t, file, "a\n")
 	payload := fill(readShape(t, "edit_01_full"), vars(e.repo, file, ""))
 	laneOf := func(t *testing.T, payload []byte) string {
 		t.Helper()
@@ -98,7 +99,7 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 		return ev.Lane
 	}
 
-	gitOut(t, e.repo, "checkout", "-q", "-b", "feature/deep/x")
+	testsupport.Git(t, e.repo, "checkout", "-q", "-b", "feature/deep/x")
 	if got := laneOf(t, payload); got != "feature/deep/x" {
 		t.Errorf("branch lane %q, want feature/deep/x", got)
 	}
@@ -113,8 +114,8 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 
 	// A linked worktree has its own HEAD in .git/worktrees/<name>.
 	wt := filepath.Join(filepath.Dir(e.repo), "wt")
-	gitOut(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
-	writeFile(t, filepath.Join(wt, "w.txt"), "w\n")
+	testsupport.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	testsupport.Write(t, filepath.Join(wt, "w.txt"), "w\n")
 	wp := fill(readShape(t, "edit_01_full"), vars(wt, filepath.Join(wt, "w.txt"), ""))
 	ev, ctx, err := Parse("PostToolUse", wp)
 	if err != nil {
@@ -124,7 +125,7 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 		t.Errorf("worktree: lane %q path %q repo %q, want side/lane w.txt %s", ev.Lane, ev.Detail["path"], ctx.Args["repo"], wt)
 	}
 
-	gitOut(t, e.repo, "checkout", "-q", "--detach")
+	testsupport.Git(t, e.repo, "checkout", "-q", "--detach")
 	if got := laneOf(t, payload); got != "detached" {
 		t.Errorf("detached HEAD lane %q, want detached", got)
 	}

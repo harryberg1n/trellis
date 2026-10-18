@@ -11,9 +11,12 @@ import (
 // Option changes how Step writes.
 type Option func(*store.Durability)
 
-// Lazy makes Step append and save without fsync; the caller flushes later with
-// Store.Sync. Without it Step is durable.
-func Lazy(d *store.Durability) { *d = store.Lazy }
+// WithDurability sets whether Step fsyncs its append and checkpoint. The
+// default is store.Durable; with store.Lazy the caller flushes later with
+// Store.Sync.
+func WithDurability(d store.Durability) Option {
+	return func(mode *store.Durability) { *mode = d }
+}
 
 // Step records ev and returns the actions the rows give it. Under the repo
 // lock it loads the checkpoint, folds in parked events, stamps ev.Arms from
