@@ -22,5 +22,6 @@ func tryLock(f *os.File) (bool, error) {
 
 func unlock(f *os.File) {
 	ol := new(windows.Overlapped)
-	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, ol)
+	// Best effort: closing the handle releases the lock regardless.
+	_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, ol)
 }

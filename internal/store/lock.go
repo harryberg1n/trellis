@@ -24,7 +24,12 @@ func openLockFile(dir string) (*os.File, error) {
 
 func releaser(f *os.File) func() {
 	var once sync.Once
-	return func() { once.Do(func() { unlock(f); f.Close() }) }
+	return func() {
+		once.Do(func() {
+			unlock(f)
+			_ = f.Close() // release has no error to return and the lock is gone with the handle
+		})
+	}
 }
 
 // acquire takes the cross-process file lock, polling on the store clock so a
@@ -38,14 +43,14 @@ func (s *Store) acquire() (release func(), err error) {
 	for {
 		ok, err := tryLock(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close() // the lock error is the one to report
 			return nil, err
 		}
 		if ok {
 			return releaser(f), nil
 		}
 		if !s.clock.Now().Before(deadline) {
-			f.Close()
+			_ = f.Close() // nothing was written; the timeout is the one to report
 			return nil, ErrLockTimeout
 		}
 		<-s.clock.After(lockPollWait)

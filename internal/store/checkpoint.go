@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -63,7 +64,9 @@ func (tx *Tx) Save(cp Checkpoint) error {
 		err = tx.s.rename(tmp, tx.s.statePath())
 	}
 	if err != nil {
-		os.Remove(tmp)
+		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
 	}
 	return err
 }

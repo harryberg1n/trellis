@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -151,7 +153,9 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 			err = json.Unmarshal(raw, &ev)
 		}
 		if err != nil {
-			os.Rename(name, name+".bad") // keep it for a human; never wedge the lock
+			// Keep it for a human; never wedge the lock. If the rename fails the
+			// file is simply tried and set aside again on the next fold.
+			_ = os.Rename(name, name+".bad")
 			continue
 		}
 		ps = append(ps, parked{name, ev})
@@ -172,7 +176,9 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		kept := ps[:0]
 		for _, p := range ps {
 			if id := p.ev.Detail[parkIDKey]; id != "" && have[id] {
-				os.Remove(p.name)
+				if rerr := os.Remove(p.name); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+					return nil, fmt.Errorf("store: dropping logged pending event: %w", rerr)
+				}
 				continue
 			}
 			kept = append(kept, p)
@@ -197,7 +203,9 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		return nil, err
 	}
 	for _, p := range ps {
-		os.Remove(p.name)
+		// The events are in the log: a leftover file is dropped by the dedupe
+		// above on the next fold, so failing the Tx here would only mislead.
+		_ = os.Remove(p.name)
 	}
 	return out, nil
 }
@@ -337,8 +345,10 @@ func (s *Store) skip(l logLine) {
 	if err != nil {
 		return
 	}
-	f.Write(append(append([]byte(nil), l.raw...), newline))
-	f.Close()
+	// Best effort, as documented above: a failed write or close only means the
+	// line is not quarantined, and the read must not fail for it.
+	_, _ = f.Write(append(append([]byte(nil), l.raw...), newline))
+	_ = f.Close()
 }
 
 type logLine struct {
@@ -420,12 +430,13 @@ func (s *Store) scanTail(from uint64, locked bool) ([]kernel.Event, uint64, erro
 		}
 		var evs []kernel.Event
 		var last uint64
-		for i, l := range lines {
+		for i := range lines {
+			l := &lines[i]
 			if !l.ok {
 				// An unterminated fragment may be a write in flight unless we
 				// hold the lock; anything else unparsable is junk to keep.
 				if i > cut && (l.terminated || locked) {
-					s.skip(l)
+					s.skip(*l)
 				}
 				continue
 			}
