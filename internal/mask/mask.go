@@ -20,13 +20,29 @@ func StringsAndComments(cmd string) string {
 }
 
 // ForTool is cmd masked by the row of the tool that runs it: PowerShell for
-// the PowerShell tool, bash for anything else.
-func ForTool(tool, cmd string) string {
+// the PowerShell tool, bash for anything else. Strings and comments are blanked.
+func ForTool(tool, cmd string) string { return Blank(tool, cmd, true, true) }
+
+// Blank is cmd read by the tool's row with the contents of its strings, its
+// comments, or both blanked. The result is as long as cmd, byte for byte.
+func Blank(tool, cmd string, strs, comments bool) string {
 	row := Bash()
 	if tool == "PowerShell" {
 		row = PowerShell()
 	}
-	return NewLexer(row).Lex(cmd, true, true)
+	return NewLexer(row).Lex(cmd, strs, comments)
+}
+
+// Code is cmd with its strings and comments blanked, newlines inside strings
+// included: every newline left is one that ends a command. As long as cmd.
+func Code(tool, cmd string) string {
+	row := Bash()
+	if tool == "PowerShell" {
+		row = PowerShell()
+	}
+	lx := NewLexer(row)
+	lx.StringNewlines = true
+	return lx.Lex(cmd, true, true)
 }
 
 // charLiteralLen is copied from aphrollo-tools internal/mask/mask.go at

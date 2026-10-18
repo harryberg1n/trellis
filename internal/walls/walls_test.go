@@ -155,6 +155,7 @@ func TestWalls_TokenInsideAStringNeverBlocks(t *testing.T) {
 		`grep -rn "git stash drop" .`,
 		`git commit -m "document git -c core.hooksPath=x and git push origin main"`,
 		`echo "git branch -D unmerged" "git worktree remove --force x"`,
+		`echo '$(git reset --hard)'`,
 		`cat <<'EOF'` + "\n" + `git reset --hard` + "\n" + `EOF`,
 	} {
 		got := decide(t, bash(t, w.lane, cmd, true), r)
@@ -162,9 +163,14 @@ func TestWalls_TokenInsideAStringNeverBlocks(t *testing.T) {
 			t.Errorf("%q: actions %+v, want none: the token is inside a string, a comment or data", cmd, got)
 		}
 	}
-	ps := []byte(`{"session_id":"s","cwd":` + quote(w.lane) + `,"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Write-Host 'git reset --hard'"}}`)
-	if got := decide(t, ps, r); len(got) != 0 {
+	psPayload := []byte(`{"session_id":"s","cwd":` + quote(w.lane) + `,"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Write-Host 'git reset --hard'"}}`)
+	if got := decide(t, psPayload, r); len(got) != 0 {
 		t.Errorf("PowerShell string: actions %+v, want none", got)
+	}
+	for _, cmd := range []string{"<# git reset --hard #>", "git status <# ; git reset --hard #>", "@\"\ngit reset --hard \"x\"\n\"@"} {
+		if got := decide(t, ps(t, w.lane, cmd), r); len(got) != 0 {
+			t.Errorf("PowerShell %q: actions %+v, want none", cmd, got)
+		}
 	}
 }
 
@@ -525,5 +531,67 @@ func TestDiscard_BranchDeleteCountsCommitsNoOtherRefReaches(t *testing.T) {
 	testsupport.Git(t, w.primary, "branch", "-D", "feat")
 	if d := verdicts(decide(t, bash(t, w.lane, "git branch -D unmerged", true), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("branch -D of the only holder of a commit: denies %+v, want one", d)
+	}
+}
+
+// ps is a PreToolUse payload of a PowerShell call in dir.
+func ps(t testing.TB, dir, command string) []byte {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{
+		"session_id": "s-1", "cwd": dir, "hook_event_name": "PreToolUse", "tool_name": "PowerShell",
+		"tool_input": map[string]string{"command": command},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestPowerShell_NativePathsReachTheWalls(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	// On Windows these paths hold backslashes, which bash would read as escapes.
+	for _, c := range []struct{ cmd, row string }{
+		{"git -C " + w.primary + " push origin main", "main-commit"},
+		{"Set-Content " + filepath.Join(w.primary, "x.txt") + " hi", "primary-write"},
+		{"Set-Content -Path '" + filepath.Join(w.primary, "x.txt") + "' -Value hi", "primary-write"},
+		{"hi | Out-File " + filepath.Join(w.primary, "y.txt"), "primary-write"},
+		{"echo hi > " + filepath.Join(w.primary, "z.txt"), "primary-write"},
+		{"Set-Location " + w.lane + "; git reset --hard", "discard-uncommitted"},
+	} {
+		denies := verdicts(decide(t, ps(t, w.lane, c.cmd), r), kernel.VerdictDeny)
+		if len(denies) != 1 || denies[0].RowID != c.row {
+			t.Errorf("PowerShell %q: denies %+v, want exactly one from %s", c.cmd, denies, c.row)
+		}
+	}
+}
+
+func TestWalls_CommentsAndMaskedTextNeverSplitOrMatch(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	for _, cmd := range []string{
+		`git status # note; git reset --hard`,
+		`echo '$(git reset --hard)'`,
+		"echo ok # x\n# git reset --hard\nls",
+	} {
+		if got := decide(t, bash(t, w.lane, cmd, true), r); len(got) != 0 {
+			t.Errorf("Bash %q: actions %+v, want none", cmd, got)
+		}
+	}
+	for _, cmd := range []string{
+		"git status <# ; git reset --hard #>",
+		"@\"\ngit reset --hard \"x\"\n\"@",
+		"Write-Host 'a; git reset --hard'",
+	} {
+		if got := decide(t, ps(t, w.lane, cmd), r); len(got) != 0 {
+			t.Errorf("PowerShell %q: actions %+v, want none", cmd, got)
+		}
+	}
+	// The same words in code do deny.
+	if d := verdicts(decide(t, bash(t, w.lane, "git status; git reset --hard", true), r), kernel.VerdictDeny); len(d) != 1 {
+		t.Errorf("git status; git reset --hard: denies %+v, want one", d)
+	}
+	if d := verdicts(decide(t, bash(t, w.lane, "echo $(git reset --hard)", true), r), kernel.VerdictDeny); len(d) != 1 {
+		t.Errorf("echo $(git reset --hard): denies %+v, want one", d)
 	}
 }

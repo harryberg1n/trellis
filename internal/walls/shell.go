@@ -21,8 +21,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/harryberg1n/trellis/internal/mask"
 )
 
 // word is one shell word: text is the argument the program receives (quotes
@@ -41,90 +39,6 @@ func texts(ws []word) []string {
 		out[i] = w.text
 	}
 	return out
-}
-
-// tokenize is the one character-level scanner: words and the operators that
-// end a simple command (`;`, `&&`, `||`, `|`, `&`, `|&`, a newline).
-func tokenize(cmd string) []word {
-	var (
-		words  []word
-		cur    strings.Builder
-		curRaw strings.Builder
-		has    bool
-	)
-	flush := func() {
-		if has {
-			words = append(words, word{text: cur.String(), raw: curRaw.String()})
-			cur.Reset()
-			curRaw.Reset()
-			has = false
-		}
-	}
-	op := func(s string) { words = append(words, word{text: s, raw: s}) }
-	runes := []rune(cmd)
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
-		switch {
-		case c == '\\' && i+1 < len(runes):
-			i++
-			cur.WriteRune(runes[i])
-			curRaw.WriteRune(escapedRune)
-			has = true
-		case c == '\'' || c == '"':
-			quote := c
-			has = true
-			for i++; i < len(runes) && runes[i] != quote; i++ {
-				if quote == '"' && runes[i] == '\\' && i+1 < len(runes) {
-					i++
-				}
-				cur.WriteRune(runes[i])
-				curRaw.WriteRune(escapedRune)
-			}
-		case c == '\n':
-			flush()
-			op("\n")
-		case c == ' ' || c == '\t' || c == '\r':
-			flush()
-		case c == ';':
-			flush()
-			op(";")
-		case c == '&' || c == '|':
-			flush()
-			s := string(c)
-			if i+1 < len(runes) && (runes[i+1] == c || (c == '|' && runes[i+1] == '&')) {
-				i++
-				s += string(runes[i])
-			}
-			op(s)
-		default:
-			cur.WriteRune(c)
-			curRaw.WriteRune(c)
-			has = true
-		}
-	}
-	flush()
-	return words
-}
-
-// segments splits cmd into the simple commands a shell would run.
-func segments(cmd string) [][]word {
-	var segs [][]word
-	var cur []word
-	for _, w := range tokenize(cmd) {
-		switch w.text {
-		case ";", "&&", "||", "|", "&", "\n", "|&":
-			if len(cur) > 0 {
-				segs = append(segs, cur)
-			}
-			cur = make([]word, 0, 4)
-		default:
-			cur = append(cur, w)
-		}
-	}
-	if len(cur) > 0 {
-		segs = append(segs, cur)
-	}
-	return segs
 }
 
 var heredocOpener = regexp.MustCompile(`<<-?[ \t]*(?:'([^']*)'|"([^"]*)"|([A-Za-z_][A-Za-z0-9_]*))`)
@@ -208,7 +122,8 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 		src = stripHeredocBodies(cmd)
 	}
 	dir := cwd
-	for _, seg := range segments(src) {
+	segs, masked := parse(tool, src)
+	for _, seg := range segs {
 		if target, ok := cdTarget(seg); ok {
 			dir = resolve(dir, target)
 			continue
@@ -218,18 +133,21 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 			walkDepth(tool, script, dir, keepBodies, depth+1, fn)
 		}
 	}
-	masked := mask.ForTool(tool, src)
 	for _, body := range substitutionBodies(src, masked) {
 		walkDepth(tool, body, dir, keepBodies, depth+1, fn)
 	}
 }
+
+// changesDir are the commands that move the shell's directory, in bash and
+// PowerShell.
+var changesDir = map[string]bool{"cd": true, "chdir": true, "pushd": true, "set-location": true, "sl": true, "push-location": true}
 
 // cdTarget is the directory a `cd` segment moves into, and whether the segment
 // is a `cd`. The directory is "" for a cd this scanner cannot resolve (a bare
 // `cd`, `cd -`, `cd ~user`): later relative paths are then dropped, not
 // resolved against the wrong directory.
 func cdTarget(seg []word) (string, bool) {
-	if len(seg) == 0 || baseCommand(seg[0].text) != "cd" {
+	if len(seg) == 0 || !changesDir[strings.ToLower(baseCommand(seg[0].text))] {
 		return "", false
 	}
 	if len(seg) > 1 && !strings.HasPrefix(seg[1].text, "-") {

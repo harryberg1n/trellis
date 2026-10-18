@@ -43,3 +43,16 @@ func TestForTool_PowerShell(t *testing.T) {
 		}
 	}
 }
+
+func TestCode_BlanksNewlinesInsideStringsOnly(t *testing.T) {
+	cases := []struct{ name, tool, in, want string }{
+		{"bash message", "Bash", "git commit -m \"a\nb\"\nls", "git commit -m \"   \"\nls"},
+		{"bash comment keeps its terminator", "Bash", "ls # x\nls", "ls    \nls"},
+		{"powershell here-string", "PowerShell", "@\"\nx\n\"@\nls", "@\"   \"@\nls"},
+	}
+	for _, c := range cases {
+		if got := Code(c.tool, c.in); got != c.want {
+			t.Errorf("%s: Code(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
