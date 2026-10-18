@@ -134,20 +134,10 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 		return facts, name, err
 	}
 
-	issues, err := host.GH{Runner: env.Runner, Dir: root}.ListIssues("", "escape:")
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "trellis report: escape issues not read: %v\n", err)
-	}
-	for _, is := range issues {
-		facts.Issues = append(facts.Issues, measure.Issue{Number: is.Number, Title: is.Title, Body: is.Body, At: is.CreatedAt})
-	}
-
-	prs, err := host.GH{Runner: env.Runner, Dir: root}.ListMergedPRs("")
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "trellis report: merged pull requests not read: %v\n", err)
-	}
-	for _, p := range prs {
-		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch})
+	if repo.Remote == "" {
+		_, _ = fmt.Fprintln(stderr, "trellis report: no remote: issues and pull requests not read")
+	} else {
+		readGitHub(&facts, env, root, stderr)
 	}
 
 	seen := map[string]bool{}
@@ -165,6 +155,26 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 		facts.Usage = append(facts.Usage, measure.Usage{Tree: ev.Tree, Session: ev.Session, Transcript: raw})
 	}
 	return facts, name, nil
+}
+
+// readGitHub fills the escape issues and the merged pull requests of the
+// repository's remote; a failed read is reported and leaves its part empty.
+func readGitHub(facts *measure.Facts, env reportEnv, root string, stderr io.Writer) {
+	issues, err := host.GH{Runner: env.Runner, Dir: root}.ListIssues("", "escape:")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: escape issues not read: %v\n", err)
+	}
+	for _, is := range issues {
+		facts.Issues = append(facts.Issues, measure.Issue{Number: is.Number, Title: is.Title, Body: is.Body, At: is.CreatedAt})
+	}
+
+	prs, err := host.GH{Runner: env.Runner, Dir: root}.ListMergedPRs("")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: merged pull requests not read: %v\n", err)
+	}
+	for _, p := range prs {
+		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch})
+	}
 }
 
 // repoName is the last element of the remote URL without ".git", else the
