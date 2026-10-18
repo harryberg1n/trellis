@@ -83,13 +83,13 @@ func PathWithOnly(t testing.TB, tools ...string) {
 	t.Setenv("PATH", strings.Join(dirs, string(os.PathListSeparator)))
 }
 
-// AddLane adds a linked worktree of the repo at primary, on a new branch, in
+// AddTree adds a linked worktree of the repo at primary, on a new branch, in
 // a sibling directory called dir, and returns its path.
-func AddLane(t testing.TB, primary, dir, branch string) string {
+func AddTree(t testing.TB, primary, dir, branch string) string {
 	t.Helper()
-	lane := filepath.Join(filepath.Dir(primary), dir)
-	Git(t, primary, "worktree", "add", "-q", "-b", branch, lane)
-	return lane
+	tree := filepath.Join(filepath.Dir(primary), dir)
+	Git(t, primary, "worktree", "add", "-q", "-b", branch, tree)
+	return tree
 }
 
 // ForeignSettings is a settings file with two foreign hook entries, odd

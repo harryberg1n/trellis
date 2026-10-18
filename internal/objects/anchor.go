@@ -26,10 +26,10 @@ const (
 	modeTree = "040000"
 )
 
-// RefFor is the replay ref of a lane: its branch name with every "/" turned
+// RefFor is the replay ref of a tree: its branch name with every "/" turned
 // into "--". The ref is under refs/trellis/, which no default refspec pushes.
-func RefFor(lane string) string {
-	return "refs/trellis/replay/" + strings.ReplaceAll(lane, "/", "--")
+func RefFor(tree string) string {
+	return "refs/trellis/replay/" + strings.ReplaceAll(tree, "/", "--")
 }
 
 type entry struct{ mode, typ, id string }
@@ -41,7 +41,7 @@ type change struct {
 }
 
 // AnchorTurn snapshots the working tree as a tree object and chains a commit
-// for it onto the lane's replay ref, leaving the index, the branches and the
+// for it onto the tree's replay ref, leaving the index, the branches and the
 // working tree alone.
 //
 // The paths Bash changed come from git status; they are hashed with WriteBlob.
@@ -49,7 +49,7 @@ type change struct {
 // status also names takes the file on disk. The new tree is HEAD's tree with
 // those blobs replaced, built with mktree from the
 // deepest directory up, one process per directory level. The commit's parent
-// is the lane's previous anchor, read from the ref without a process.
+// is the tree's previous anchor, read from the ref without a process.
 //
 // prevTree is accepted for the plan's signature and ignored: status is relative
 // to HEAD, so a base other than HEAD's tree would keep a blob that status no
@@ -58,7 +58,7 @@ type change struct {
 //
 // Git kinds used: status, ls-tree, mktree, commit-tree, update-ref; rev-parse
 // only when the replay ref is not a plain ref file (symbolic, reftable).
-func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tree, commit string, err error) {
+func AnchorTurn(r run.Runner, repo, branch, _ string, blobs map[string]string) (tree, commit string, err error) {
 	common, gitDir, err := GitDirs(repo)
 	if err != nil {
 		return "", "", err
@@ -116,7 +116,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 		return "", "", err
 	}
 
-	ref := RefFor(lane)
+	ref := RefFor(branch)
 	prev, hasPrev, viaGit := readRef(common, ref)
 	if viaGit {
 		if prev, hasPrev, err = resolveRef(r, repo, ref); err != nil {
@@ -127,7 +127,7 @@ func AnchorTurn(r run.Runner, repo, lane, _ string, blobs map[string]string) (tr
 	if hasPrev {
 		args = append(args, "-p", prev)
 	}
-	args = append(args, "-m", "trellis anchor "+lane)
+	args = append(args, "-m", "trellis anchor "+branch)
 	out, err := Git(r, repo, nil, args...)
 	if err != nil {
 		return "", "", err

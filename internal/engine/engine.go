@@ -20,7 +20,7 @@ func WithDurability(d store.Durability) Option {
 
 // Step records ev and returns the actions the rows give it. Under the repo
 // lock it loads the checkpoint, folds in parked events, stamps ev.Arms from
-// the lane sticky record, runs kernel.Decide, appends, saves and unlocks.
+// the tree sticky record, runs kernel.Decide, appends, saves and unlocks.
 // The caller runs the returned actions outside the lock. If the lock is not
 // free in time the event is parked, never dropped, and Step returns the
 // actions for the event as given.
@@ -39,13 +39,13 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		if cp.Arms == nil {
 			cp.Arms = map[string]map[string]string{}
 		}
-		if cp.Lanes == nil {
-			cp.Lanes = map[string]kernel.LaneState{}
+		if cp.Trees == nil {
+			cp.Trees = map[string]kernel.TreeState{}
 		}
 		// Sticky is unsynchronised; it lives and dies inside this lock.
 		sticky := kernel.NewSticky()
-		for lane, arms := range cp.Arms {
-			sticky.Observe(kernel.Event{Lane: lane, Arms: arms})
+		for tree, arms := range cp.Arms {
+			sticky.Observe(kernel.Event{Tree: tree, Arms: arms})
 		}
 		// A save can fail after its append, so the log may be ahead of the
 		// checkpoint. Catch up before deciding; replayed events keep their
@@ -57,17 +57,17 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 			}
 		}
 		for _, e := range missed {
-			cp.Lanes[e.Lane], _ = kernel.Advance(cp.Lanes[e.Lane], e)
+			cp.Trees[e.Tree], _ = kernel.Advance(cp.Trees[e.Tree], e)
 			sticky.Observe(e)
-			cp.Arms[e.Lane] = sticky.Resolve(e.Lane, nil)
+			cp.Arms[e.Tree] = sticky.Resolve(e.Tree, nil)
 			cp.LastSeq = e.Seq
 		}
 		stamp := func(e kernel.Event) kernel.Event {
-			state, e := kernel.Advance(cp.Lanes[e.Lane], e)
-			cp.Lanes[e.Lane] = state
+			state, e := kernel.Advance(cp.Trees[e.Tree], e)
+			cp.Trees[e.Tree] = state
 			sticky.Observe(e)
-			arms := sticky.Resolve(e.Lane, s.Shares)
-			cp.Arms[e.Lane] = arms
+			arms := sticky.Resolve(e.Tree, s.Shares)
+			cp.Arms[e.Tree] = arms
 			e.Arms = arms
 			return e
 		}

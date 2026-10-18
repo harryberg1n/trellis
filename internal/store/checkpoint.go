@@ -9,12 +9,12 @@ import (
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
-// Checkpoint is state.json: the lane arm vectors, the lane states and the
+// Checkpoint is state.json: the tree arm vectors, the tree states and the
 // last Seq folded into them.
 type Checkpoint struct {
 	LastSeq uint64                       `json:"last_seq"`
 	Arms    map[string]map[string]string `json:"arms"`
-	Lanes   map[string]kernel.LaneState  `json:"lanes"`
+	Trees   map[string]kernel.TreeState  `json:"trees"`
 }
 
 func (s *Store) statePath() string { return filepath.Join(s.dir, "state.json") }

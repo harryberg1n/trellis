@@ -8,7 +8,7 @@ import (
 )
 
 // Report is the plain-text report: aggregates only. It names no path, diff,
-// prompt, transcript text, session or lane; table row ids are the only names.
+// prompt, transcript text, session or tree; table row ids are the only names.
 func Report(f Facts) []byte {
 	var b bytes.Buffer
 	p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
@@ -19,10 +19,10 @@ func Report(f Facts) []byte {
 		counts[l]++
 	}
 	p("trellis report")
-	p("lanes merged: %d (defect %d, clean %d, pending %d)", len(labels), counts[Defect], counts[Clean], counts[Pending])
+	p("trees merged: %d (defect %d, clean %d, pending %d)", len(labels), counts[Defect], counts[Clean], counts[Pending])
 
 	p("")
-	p("speed: lane opened to merged, minutes, per ISO week of the merge")
+	p("speed: tree opened to merged, minutes, per ISO week of the merge")
 	speed := Speed(f)
 	if len(speed) == 0 {
 		p("  none")
@@ -41,17 +41,17 @@ func Report(f Facts) []byte {
 
 	p("")
 	p("cost: agent dollars at list price")
-	costs := LaneCosts(f)
-	lanes := sortedKeys(costs)
-	dollars := make([]float64, 0, len(lanes))
+	costs := TreeCosts(f)
+	trees := sortedKeys(costs)
+	dollars := make([]float64, 0, len(trees))
 	var total float64
-	for _, lane := range lanes {
-		dollars = append(dollars, costs[lane])
-		total += costs[lane]
+	for _, tree := range trees {
+		dollars = append(dollars, costs[tree])
+		total += costs[tree]
 	}
 	lo, hi = Bootstrap(dollars)
-	p("  lanes with usage: %d  total $%.5f", len(dollars), total)
-	p("  per lane: mean $%.5f, 90%% interval [$%.5f, $%.5f]", mean(dollars), lo, hi)
+	p("  trees with usage: %d  total $%.5f", len(dollars), total)
+	p("  per tree: mean $%.5f, 90%% interval [$%.5f, $%.5f]", mean(dollars), lo, hi)
 	p("  net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)")
 	rows := RowCosts(f)
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Row < rows[j].Row })

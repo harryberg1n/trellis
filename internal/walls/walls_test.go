@@ -16,28 +16,28 @@ import (
 	"github.com/harryberg1n/trellis/internal/walls"
 )
 
-// world is a primary checkout on main and a linked worktree (a lane) that
+// world is a primary checkout on main and a linked worktree (a tree) that
 // holds one modified tracked file and one untracked file. The branch unmerged
 // has a commit that no other ref reaches.
-type world struct{ primary, lane string }
+type world struct{ primary, tree string }
 
 func newWorld(t testing.TB) world {
 	t.Helper()
 	primary := testiso.Repo(t)
-	lane := testiso.AddLane(t, primary, "lane", "lane/x")
-	tree := testiso.Git(t, primary, "rev-parse", "HEAD^{tree}")
-	c := testiso.Git(t, primary, "commit-tree", tree, "-p", "HEAD", "-m", "unmerged work")
+	tree := testiso.AddTree(t, primary, "tree", "tree/x")
+	tr := testiso.Git(t, primary, "rev-parse", "HEAD^{tree}")
+	c := testiso.Git(t, primary, "commit-tree", tr, "-p", "HEAD", "-m", "unmerged work")
 	testiso.Git(t, primary, "branch", "unmerged", c)
-	testiso.Write(t, filepath.Join(lane, "README.md"), "changed\n")
-	testiso.Write(t, filepath.Join(lane, "scratch.txt"), "scratch\n")
-	return world{primary: primary, lane: lane}
+	testiso.Write(t, filepath.Join(tree, "README.md"), "changed\n")
+	testiso.Write(t, filepath.Join(tree, "scratch.txt"), "scratch\n")
+	return world{primary: primary, tree: tree}
 }
 
 // fill expands the placeholders of a fixture payload.
 func (w world) fill(raw string) []byte {
 	return testiso.Fill([]byte(raw), map[string]string{
-		"@PRIMARY@": w.primary, "@LANE@": w.lane,
-		"@PRIMARY_SLASH@": filepath.ToSlash(w.primary), "@LANE_SLASH@": filepath.ToSlash(w.lane),
+		"@PRIMARY@": w.primary, "@TREE@": w.tree,
+		"@PRIMARY_SLASH@": filepath.ToSlash(w.primary), "@TREE_SLASH@": filepath.ToSlash(w.tree),
 	})
 }
 
@@ -150,17 +150,17 @@ func TestWalls_TokenInsideAStringNeverBlocks(t *testing.T) {
 		`echo '$(git reset --hard)'`,
 		`cat <<'EOF'` + "\n" + `git reset --hard` + "\n" + `EOF`,
 	} {
-		got := decide(t, bash(t, w.lane, cmd, true), r)
+		got := decide(t, bash(t, w.tree, cmd, true), r)
 		if len(got) != 0 {
 			t.Errorf("%q: actions %+v, want none: the token is inside a string, a comment or data", cmd, got)
 		}
 	}
-	psPayload := ps(t, w.lane, "Write-Host 'git reset --hard'")
+	psPayload := ps(t, w.tree, "Write-Host 'git reset --hard'")
 	if got := decide(t, psPayload, r); len(got) != 0 {
 		t.Errorf("PowerShell string: actions %+v, want none", got)
 	}
 	for _, cmd := range []string{"<# git reset --hard #>", "git status <# ; git reset --hard #>", "@\"\ngit reset --hard \"x\"\n\"@"} {
-		if got := decide(t, ps(t, w.lane, cmd), r); len(got) != 0 {
+		if got := decide(t, ps(t, w.tree, cmd), r); len(got) != 0 {
 			t.Errorf("PowerShell %q: actions %+v, want none", cmd, got)
 		}
 	}
@@ -176,8 +176,8 @@ func TestWalls_RealCommandsStillBlock(t *testing.T) {
 	for _, c := range []struct{ cmd, row string }{
 		{`bash -c "git reset --hard"`, "discard-uncommitted"},
 		{`echo $(git reset --hard)`, "discard-uncommitted"},
-		{`cd ` + filepath.ToSlash(w.lane) + ` && git checkout -- README.md`, "discard-uncommitted"},
-		{`git -C ` + filepath.ToSlash(w.lane) + ` clean -fd`, "discard-uncommitted"},
+		{`cd ` + filepath.ToSlash(w.tree) + ` && git checkout -- README.md`, "discard-uncommitted"},
+		{`git -C ` + filepath.ToSlash(w.tree) + ` clean -fd`, "discard-uncommitted"},
 		{`git --config-env foo=BAR reset --hard`, "discard-uncommitted"},
 		{`git --super-prefix sub/ reset --hard`, "discard-uncommitted"},
 		{`git commit -nm "x"`, "hook-bypass"},
@@ -189,7 +189,7 @@ func TestWalls_RealCommandsStillBlock(t *testing.T) {
 		{`sed -i s/a/b/ ` + filepath.ToSlash(w.primary) + `/README.md`, "primary-write"},
 		{`cp x ` + filepath.ToSlash(w.primary) + `/y`, "primary-write"},
 	} {
-		denies := verdicts(decide(t, bash(t, w.lane, c.cmd, true), r), kernel.VerdictDeny)
+		denies := verdicts(decide(t, bash(t, w.tree, c.cmd, true), r), kernel.VerdictDeny)
 		if len(denies) != 1 || denies[0].RowID != c.row {
 			t.Errorf("%q: denies %+v, want exactly one from %s", c.cmd, denies, c.row)
 		}
@@ -200,24 +200,24 @@ func TestWalls_OrdinaryWorkIsAllowed(t *testing.T) {
 	w := newWorld(t)
 	r := quiet(t)
 	for _, c := range []struct{ dir, cmd string }{
-		{w.lane, `git commit -m "fix the parser"`},
-		{w.lane, `git push origin HEAD`},
-		{w.lane, `git status`},
-		{w.lane, `git checkout main`},
-		{w.lane, `git restore --staged README.md`},
-		{w.lane, `git reset --soft HEAD~1`},
-		{w.lane, `git clean -n`},
-		{w.lane, `git stash push -m wip`},
-		{w.lane, `git branch -d lane/y`},
-		{w.lane, `echo hi > out.txt`},
-		{w.lane, `echo hi > /dev/null`},
-		{w.lane, `cp README.md copy.md`},
+		{w.tree, `git commit -m "fix the parser"`},
+		{w.tree, `git push origin HEAD`},
+		{w.tree, `git status`},
+		{w.tree, `git checkout main`},
+		{w.tree, `git restore --staged README.md`},
+		{w.tree, `git reset --soft HEAD~1`},
+		{w.tree, `git clean -n`},
+		{w.tree, `git stash push -m wip`},
+		{w.tree, `git branch -d tree/y`},
+		{w.tree, `echo hi > out.txt`},
+		{w.tree, `echo hi > /dev/null`},
+		{w.tree, `cp README.md copy.md`},
 		{w.primary, `git status`},
 		{w.primary, `git commit --dry-run`},
 		{w.primary, `git merge --abort`},
 		{w.primary, `ls -la > /dev/null`},
-		{w.primary, `git worktree remove ` + filepath.ToSlash(w.lane)},
-		{w.primary, `git branch -D lane/gone`},
+		{w.primary, `git worktree remove ` + filepath.ToSlash(w.tree)},
+		{w.primary, `git branch -D tree/gone`},
 	} {
 		if got := decide(t, bash(t, c.dir, c.cmd, true), r); len(got) != 0 {
 			t.Errorf("%q in %s: actions %+v, want none", c.cmd, filepath.Base(c.dir), got)
@@ -235,10 +235,10 @@ func TestPrimaryWrite_OnlyWhileThePrimaryIsOnTheDefaultBranch(t *testing.T) {
 	if d := verdicts(decide(t, edit(w.primary, file), r), kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "primary-write" {
 		t.Fatalf("Edit in the primary on main: denies %+v, want primary-write", d)
 	}
-	if got := decide(t, edit(w.lane, filepath.Join(w.lane, "docs", "a.md")), r); len(got) != 0 {
-		t.Errorf("Edit in a lane: actions %+v, want none", got)
+	if got := decide(t, edit(w.tree, filepath.Join(w.tree, "docs", "a.md")), r); len(got) != 0 {
+		t.Errorf("Edit in a tree: actions %+v, want none", got)
 	}
-	if got := decide(t, edit(w.lane, filepath.Join(filepath.Dir(w.primary), "outside.md")), r); len(got) != 0 {
+	if got := decide(t, edit(w.tree, filepath.Join(filepath.Dir(w.primary), "outside.md")), r); len(got) != 0 {
 		t.Errorf("Edit outside every repository: actions %+v, want none", got)
 	}
 	// The primary on another branch is not guarded; origin/HEAD names the default.
@@ -257,7 +257,7 @@ func TestSecrets_NotApplicableWithoutGitleaks(t *testing.T) {
 	w := newWorld(t)
 	testiso.PathWithOnly(t, "git")
 	rec := testsupport.Recorder()
-	got := decide(t, bash(t, w.lane, `git commit -m "fix"`, true), rec)
+	got := decide(t, bash(t, w.tree, `git commit -m "fix"`, true), rec)
 	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks not installed"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("actions %+v, want %+v", got, want)
@@ -269,12 +269,12 @@ func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 	testiso.FakeTool(t, "gitleaks", 0, "")
 	rec := testsupport.Recorder()
 	for _, cmd := range []string{"git status", "git push origin HEAD", "echo git commit", "ls"} {
-		decide(t, bash(t, w.lane, cmd, true), rec)
+		decide(t, bash(t, w.tree, cmd, true), rec)
 	}
 	if rec.Count() != 0 {
 		t.Fatalf("spawns %v for non-commit commands, want none", rec.Kinds())
 	}
-	decide(t, bash(t, w.lane, `git commit -m "x"`, true), rec)
+	decide(t, bash(t, w.tree, `git commit -m "x"`, true), rec)
 	spec := rec.Specs()
 	if len(spec) != 1 || spec[0].Name != "gitleaks" || strings.Join(spec[0].Args, " ") != "protect --staged --no-banner --redact --exit-code 2" {
 		t.Errorf("spawns %+v, want one gitleaks protect --staged --no-banner --redact", spec)
@@ -283,19 +283,19 @@ func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 
 func TestDiscard_WorktreeRemoveForceWithUnstagedIsDenied(t *testing.T) {
 	w := newWorld(t)
-	// A lane with exactly one unstaged file, and a clean one.
-	dirty := testiso.AddLane(t, w.primary, "dirty", "dirty/x")
-	clean := testiso.AddLane(t, w.primary, "clean", "clean/x")
+	// A tree with exactly one unstaged file, and a clean one.
+	dirty := testiso.AddTree(t, w.primary, "dirty", "dirty/x")
+	clean := testiso.AddTree(t, w.primary, "clean", "clean/x")
 	testiso.Write(t, filepath.Join(dirty, "README.md"), "edited\n")
 	r := quiet(t)
 
 	got := decide(t, bash(t, w.primary, "git worktree remove --force "+filepath.ToSlash(dirty), true), r)
 	denies := verdicts(got, kernel.VerdictDeny)
 	if len(denies) != 1 || denies[0].RowID != "discard-uncommitted" || !strings.Contains(denies[0].Line, "1 unstaged file") {
-		t.Fatalf("dirty lane: actions %+v, want a discard-uncommitted deny naming \"1 unstaged file\"", got)
+		t.Fatalf("dirty tree: actions %+v, want a discard-uncommitted deny naming \"1 unstaged file\"", got)
 	}
 	if got := decide(t, bash(t, w.primary, "git worktree remove --force "+filepath.ToSlash(clean), true), r); len(got) != 0 {
-		t.Errorf("clean lane: actions %+v, want none", got)
+		t.Errorf("clean tree: actions %+v, want none", got)
 	}
 }
 
@@ -316,13 +316,13 @@ func TestDiscard_SpawnsOnlyForDiscardForms(t *testing.T) {
 		if strings.Contains(cmd, "git commit") {
 			continue // a commit starts the secrets scan, which is not git
 		}
-		decide(t, bash(t, w.lane, cmd+strings.Repeat(" ", i/len(templates)), true), rec)
+		decide(t, bash(t, w.tree, cmd+strings.Repeat(" ", i/len(templates)), true), rec)
 		n++
 	}
 	if rec.Count() != 0 || count() != 0 {
 		t.Fatalf("%d non-discard payloads: %d Light spawns %v, %d git processes; want 0 and 0", n, rec.Count(), rec.Kinds(), count())
 	}
-	decide(t, bash(t, w.lane, "git reset --hard", true), rec)
+	decide(t, bash(t, w.tree, "git reset --hard", true), rec)
 	if rec.Count() != 1 || count() != 1 {
 		t.Errorf("one discard form: %d Light spawns %v, %d git processes; want exactly 1 (the git status)", rec.Count(), rec.Kinds(), count())
 	}
@@ -340,20 +340,20 @@ func TestDiscard_MeasuresWhatEachFormWouldDestroy(t *testing.T) {
 		{"git branch -D unmerged", "branch -D unmerged discards 1 commit unreachable from any other ref"},
 	}
 	for _, c := range cases {
-		denies := verdicts(decide(t, bash(t, w.lane, c.cmd, true), r), kernel.VerdictDeny)
+		denies := verdicts(decide(t, bash(t, w.tree, c.cmd, true), r), kernel.VerdictDeny)
 		if len(denies) != 1 || !strings.Contains(denies[0].Line, ": "+c.want+".") && !strings.Contains(denies[0].Line, ": "+c.want+" ") {
 			t.Errorf("%q: denies %+v, want a cause starting %q", c.cmd, denies, c.want)
 		}
 	}
 	// A clean tree costs nothing, and a pushed branch is recoverable.
-	clean := testiso.AddLane(t, w.primary, "clean", "clean/x")
+	clean := testiso.AddTree(t, w.primary, "clean", "clean/x")
 	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git checkout -- README.md"} {
 		if got := decide(t, bash(t, clean, cmd, true), r); len(got) != 0 {
-			t.Errorf("%q in a clean lane: actions %+v, want none", cmd, got)
+			t.Errorf("%q in a clean tree: actions %+v, want none", cmd, got)
 		}
 	}
 	testiso.Git(t, w.primary, "update-ref", "refs/remotes/origin/unmerged", "unmerged")
-	if got := decide(t, bash(t, w.lane, "git branch -D unmerged", true), r); len(got) != 0 {
+	if got := decide(t, bash(t, w.tree, "git branch -D unmerged", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a branch a remote has: actions %+v, want none", got)
 	}
 }
@@ -362,11 +362,11 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 	w := newWorld(t)
 	r := quiet(t)
 	msg := "fix the parser\n\nIt read past the end of the buffer."
-	if got := decide(t, bash(t, w.lane, "git commit -m "+dq(msg), true), r); len(got) != 0 {
+	if got := decide(t, bash(t, w.tree, "git commit -m "+dq(msg), true), r); len(got) != 0 {
 		t.Fatalf("message without a trailer: actions %+v, want none", got)
 	}
 	with := msg + "\n\nCo-Authored-By: X <x@y>"
-	denies := verdicts(decide(t, bash(t, w.lane, "git commit -m "+dq(with), true), r), kernel.VerdictDeny)
+	denies := verdicts(decide(t, bash(t, w.tree, "git commit -m "+dq(with), true), r), kernel.VerdictDeny)
 	if len(denies) != 1 || denies[0].RowID != "undercover" || !strings.Contains(denies[0].Line, "Override: none.") {
 		t.Fatalf("message with a trailer: denies %+v, want one from undercover with no override", denies)
 	}
@@ -374,24 +374,24 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 		"git commit -am " + dq(with),
 		"git commit --message=" + dq(with),
 		"git commit -m" + dq(with),
-		"git -C " + filepath.ToSlash(w.lane) + " commit -m " + dq("Generated with [Claude Code](https://claude.com/claude-code)"),
+		"git -C " + filepath.ToSlash(w.tree) + " commit -m " + dq("Generated with [Claude Code](https://claude.com/claude-code)"),
 		"git commit -m " + dq("ask Sonnet 5.5"),
 		"git commit -m \"$(cat <<'EOF'\n" + with + "\nEOF\n)\"",
 		"git commit -F - <<'EOF'\n" + with + "\nEOF",
 		"gh pr create --title t --body " + dq("body\n\n"+"Claude-Session: https://claude.ai/code/session_1"),
 		"gh pr edit 7 --body=" + dq("🤖 Generated with Claude Code"),
 	} {
-		d := verdicts(decide(t, bash(t, w.lane, cmd, true), r), kernel.VerdictDeny)
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
 		if len(d) != 1 || d[0].RowID != "undercover" {
 			t.Errorf("%q: denies %+v, want one from undercover", cmd, d)
 		}
 	}
-	file := filepath.Join(w.lane, "msg.txt")
+	file := filepath.Join(w.tree, "msg.txt")
 	testiso.Write(t, file, with)
-	if d := verdicts(decide(t, bash(t, w.lane, "git commit -F msg.txt", true), r), kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "undercover" {
+	if d := verdicts(decide(t, bash(t, w.tree, "git commit -F msg.txt", true), r), kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "undercover" {
 		t.Errorf("-F with a trailer in the file: denies %+v, want one from undercover", d)
 	}
-	if got := decide(t, bash(t, w.lane, "gh pr create --title t --body "+dq(msg), true), r); len(got) != 0 {
+	if got := decide(t, bash(t, w.tree, "gh pr create --title t --body "+dq(msg), true), r); len(got) != 0 {
 		t.Errorf("clean PR body: actions %+v, want none", got)
 	}
 }
@@ -403,17 +403,17 @@ func TestWallsWarnPeople_NonAgentGetsWarning(t *testing.T) {
 
 	// main-commit, as an agent: a deny. Without a session_id: a warn.
 	cmd := "git -C " + filepath.ToSlash(w.primary) + " push origin main"
-	agent := decide(t, bash(t, w.lane, cmd, true), rec)
+	agent := decide(t, bash(t, w.tree, cmd, true), rec)
 	if d := verdicts(agent, kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "main-commit" {
 		t.Fatalf("agent: actions %+v, want a main-commit deny", agent)
 	}
-	person := decide(t, bash(t, w.lane, cmd, false), rec)
+	person := decide(t, bash(t, w.tree, cmd, false), rec)
 	if wn := verdicts(person, kernel.VerdictWarn); len(wn) != 1 || wn[0].RowID != "main-commit" || len(verdicts(person, kernel.VerdictDeny)) != 0 {
 		t.Errorf("person: actions %+v, want one main-commit warn and no deny", person)
 	}
 
 	// secrets is a deny for people too.
-	commit := decide(t, bash(t, w.lane, `git commit -m "add keys"`, false), rec)
+	commit := decide(t, bash(t, w.tree, `git commit -m "add keys"`, false), rec)
 	if d := verdicts(commit, kernel.VerdictDeny); len(d) != 1 || d[0].RowID != "secrets" {
 		t.Errorf("person committing a secret: actions %+v, want a secrets deny", commit)
 	}
@@ -435,7 +435,7 @@ func TestRows_AreTheShippedTable(t *testing.T) {
 
 func TestMatch_RowWithNothingToSayDoesNotMatch(t *testing.T) {
 	w := newWorld(t)
-	ctx := kernel.Context{Tool: "Bash", Args: map[string]string{"cwd": w.lane, "command": "ls"}}
+	ctx := kernel.Context{Tool: "Bash", Args: map[string]string{"cwd": w.tree, "command": "ls"}}
 	for _, row := range walls.Rows() {
 		if a, ok := walls.Match(row, ctx, testsupport.Recorder()); ok {
 			t.Errorf("Match(%s, ls) = %+v, true; want no match", row.ID, a)
@@ -446,7 +446,7 @@ func TestMatch_RowWithNothingToSayDoesNotMatch(t *testing.T) {
 func TestSecrets_OnlyExitCodeTwoIsAFinding(t *testing.T) {
 	w := newWorld(t)
 	testiso.FakeTool(t, "gitleaks", 1, "fatal: not a git repository")
-	got := decide(t, bash(t, w.lane, `git commit -m "x"`, true), testsupport.Recorder())
+	got := decide(t, bash(t, w.tree, `git commit -m "x"`, true), testsupport.Recorder())
 	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks failed (exit 1)"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("exit 1: actions %+v, want %+v", got, want)
@@ -472,7 +472,7 @@ func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
 	} {
 		testiso.FakeTool(t, "gitleaks", 0, "")
 		rec := testsupport.Recorder()
-		decide(t, bash(t, w.lane, c.cmd, true), rec)
+		decide(t, bash(t, w.tree, c.cmd, true), rec)
 		var got []string
 		for _, s := range rec.Specs() {
 			if s.Name == "gitleaks" {
@@ -492,7 +492,7 @@ func (failing) Light(run.Spec) (run.Result, error) { return run.Result{}, run.Er
 
 func TestDiscard_AMeasurementThatFailsIsAWarningNotADeny(t *testing.T) {
 	w := newWorld(t)
-	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git worktree remove --force " + filepath.ToSlash(w.lane)} {
+	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git worktree remove --force " + filepath.ToSlash(w.tree)} {
 		got := decide(t, bash(t, w.primary, cmd, true), failing{})
 		if len(got) != 1 || got[0].Verdict != kernel.VerdictWarn || got[0].RowID != "discard-uncommitted" ||
 			!strings.Contains(got[0].Line, "could not measure") {
@@ -507,14 +507,14 @@ func TestDiscard_BranchDeleteCountsCommitsNoOtherRefReaches(t *testing.T) {
 	// merged: the tip is HEAD's. A second local branch holds the same commits as feat.
 	testiso.Git(t, w.primary, "branch", "merged")
 	testiso.Git(t, w.primary, "branch", "feat", "unmerged")
-	if got := decide(t, bash(t, w.lane, "git branch -D merged", true), r); len(got) != 0 {
+	if got := decide(t, bash(t, w.tree, "git branch -D merged", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a merged branch: actions %+v, want none", got)
 	}
-	if got := decide(t, bash(t, w.lane, "git branch -D feat", true), r); len(got) != 0 {
+	if got := decide(t, bash(t, w.tree, "git branch -D feat", true), r); len(got) != 0 {
 		t.Errorf("branch -D of a branch another local branch holds: actions %+v, want none", got)
 	}
 	testiso.Git(t, w.primary, "branch", "-D", "feat")
-	if d := verdicts(decide(t, bash(t, w.lane, "git branch -D unmerged", true), r), kernel.VerdictDeny); len(d) != 1 {
+	if d := verdicts(decide(t, bash(t, w.tree, "git branch -D unmerged", true), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("branch -D of the only holder of a commit: denies %+v, want one", d)
 	}
 }
@@ -535,9 +535,9 @@ func TestPowerShell_NativePathsReachTheWalls(t *testing.T) {
 		{"Set-Content -Path '" + filepath.Join(w.primary, "x.txt") + "' -Value hi", "primary-write"},
 		{"hi | Out-File " + filepath.Join(w.primary, "y.txt"), "primary-write"},
 		{"echo hi > " + filepath.Join(w.primary, "z.txt"), "primary-write"},
-		{"Set-Location " + w.lane + "; git reset --hard", "discard-uncommitted"},
+		{"Set-Location " + w.tree + "; git reset --hard", "discard-uncommitted"},
 	} {
-		denies := verdicts(decide(t, ps(t, w.lane, c.cmd), r), kernel.VerdictDeny)
+		denies := verdicts(decide(t, ps(t, w.tree, c.cmd), r), kernel.VerdictDeny)
 		if len(denies) != 1 || denies[0].RowID != c.row {
 			t.Errorf("PowerShell %q: denies %+v, want exactly one from %s", c.cmd, denies, c.row)
 		}
@@ -552,7 +552,7 @@ func TestWalls_CommentsAndMaskedTextNeverSplitOrMatch(t *testing.T) {
 		`echo '$(git reset --hard)'`,
 		"echo ok # x\n# git reset --hard\nls",
 	} {
-		if got := decide(t, bash(t, w.lane, cmd, true), r); len(got) != 0 {
+		if got := decide(t, bash(t, w.tree, cmd, true), r); len(got) != 0 {
 			t.Errorf("Bash %q: actions %+v, want none", cmd, got)
 		}
 	}
@@ -561,15 +561,15 @@ func TestWalls_CommentsAndMaskedTextNeverSplitOrMatch(t *testing.T) {
 		"@\"\ngit reset --hard \"x\"\n\"@",
 		"Write-Host 'a; git reset --hard'",
 	} {
-		if got := decide(t, ps(t, w.lane, cmd), r); len(got) != 0 {
+		if got := decide(t, ps(t, w.tree, cmd), r); len(got) != 0 {
 			t.Errorf("PowerShell %q: actions %+v, want none", cmd, got)
 		}
 	}
 	// The same words in code do deny.
-	if d := verdicts(decide(t, bash(t, w.lane, "git status; git reset --hard", true), r), kernel.VerdictDeny); len(d) != 1 {
+	if d := verdicts(decide(t, bash(t, w.tree, "git status; git reset --hard", true), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("git status; git reset --hard: denies %+v, want one", d)
 	}
-	if d := verdicts(decide(t, bash(t, w.lane, "echo $(git reset --hard)", true), r), kernel.VerdictDeny); len(d) != 1 {
+	if d := verdicts(decide(t, bash(t, w.tree, "echo $(git reset --hard)", true), r), kernel.VerdictDeny); len(d) != 1 {
 		t.Errorf("echo $(git reset --hard): denies %+v, want one", d)
 	}
 }

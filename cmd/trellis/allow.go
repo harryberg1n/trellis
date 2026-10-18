@@ -17,7 +17,7 @@ import (
 // wall.overridden. Rows with no override (secrets, undercover, own-git-state)
 // are refused. The token lasts store.AllowTTL (10 minutes) and is keyed by the
 // repo id: a repo with no origin remote is keyed by its worktree path, so a
-// token minted in the primary checkout is not seen from a lane.
+// token minted in the primary checkout is not seen from a tree.
 func allowVerb(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		_, _ = io.WriteString(stderr, "usage: trellis allow <row-id>\n")

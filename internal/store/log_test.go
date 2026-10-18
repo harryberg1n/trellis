@@ -27,14 +27,14 @@ func open(t *testing.T) (*Store, string, *clock.FakeClock) {
 	return s, dir, fc
 }
 
-func ev(kind, lane string) kernel.Event {
-	return kernel.Event{Kind: kind, Lane: lane, Session: "s1", At: t0}
+func ev(kind, tree string) kernel.Event {
+	return kernel.Event{Kind: kind, Tree: tree, Session: "s1", At: t0}
 }
 
 func TestLog_AppendIsOneLinePerEvent(t *testing.T) {
 	s, dir, _ := open(t)
 	for _, k := range []string{kernel.EvEdit, kernel.EvCommit, kernel.EvMerge} {
-		if _, err := s.Append(ev(k, "lane/a")); err != nil {
+		if _, err := s.Append(ev(k, "tree/a")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
-				if _, err := gs.Append(ev("edit", "lane/c")); err != nil {
+				if _, err := gs.Append(ev("edit", "tree/c")); err != nil {
 					errs <- err
 					return
 				}
@@ -180,7 +180,7 @@ func TestLog_LastSeqComesFromALongLog(t *testing.T) {
 	batch := make([]kernel.Event, 600)
 	for i := range batch {
 		batch[i] = kernel.Event{
-			Kind: "edit", Lane: "lane/long", Session: "s", At: t0,
+			Kind: "edit", Tree: "tree/long", Session: "s", At: t0,
 			Detail: map[string]string{"pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
 		}
 	}
@@ -191,7 +191,7 @@ func TestLog_LastSeqComesFromALongLog(t *testing.T) {
 		t.Fatalf("log is %d bytes, need more than the %d-byte tail chunk", fi.Size(), tailChunk)
 	}
 	s2, _ := Open(dir, fc)
-	out, err := s2.Append(ev("commit", "lane/long"))
+	out, err := s2.Append(ev("commit", "tree/long"))
 	if err != nil || out[0].Seq != 601 {
 		t.Fatalf("Append = %+v, %v; want Seq 601", out, err)
 	}
@@ -272,7 +272,7 @@ func TestLog_TornTailDoesNotWedgeTheStore(t *testing.T) {
 
 func TestFold_ParkedEventIsNeverDuplicated(t *testing.T) {
 	s, dir, _ := open(t)
-	if err := s.Park(ev("edit", "lane/d")); err != nil {
+	if err := s.Park(ev("edit", "tree/d")); err != nil {
 		t.Fatal(err)
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json"))
@@ -299,7 +299,7 @@ func TestFold_ParkedEventIsNeverDuplicated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Append(ev("commit", "lane/d")); err != nil {
+	if _, err := s.Append(ev("commit", "tree/d")); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Read(1)
@@ -315,7 +315,7 @@ func TestLog_ReadFromTouchesOnlyTheTail(t *testing.T) {
 	s, dir, fc := open(t)
 	batch := make([]kernel.Event, 10000)
 	for i := range batch {
-		batch[i] = ev("edit", "lane/big")
+		batch[i] = ev("edit", "tree/big")
 	}
 	if _, err := s.Append(batch...); err != nil {
 		t.Fatal(err)
@@ -356,7 +356,7 @@ func TestLog_UnterminatedCompleteTailKeepsItsSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.WriteString(`{"seq":3,"kind":"merge","lane":"l","session":"s1","at":"2026-10-18T12:00:00Z"}`); err != nil {
+	if _, err := f.WriteString(`{"seq":3,"kind":"merge","tree":"l","session":"s1","at":"2026-10-18T12:00:00Z"}`); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.Close(); err != nil {

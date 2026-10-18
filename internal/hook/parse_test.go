@@ -74,8 +74,8 @@ func TestParse_EventsAndContext(t *testing.T) {
 				if ev.Kind != "" {
 					t.Errorf("%s records %q, want nothing", c.event, ev.Kind)
 				}
-			} else if ev.Lane != "main" || ev.Session != sess {
-				t.Errorf("lane %q session %q, want main %s", ev.Lane, ev.Session, sess)
+			} else if ev.Tree != "main" || ev.Session != sess {
+				t.Errorf("tree %q session %q, want main %s", ev.Tree, ev.Session, sess)
 			}
 			if !reflect.DeepEqual(ev.Detail, c.detail) {
 				t.Errorf("detail %v, want %v", ev.Detail, c.detail)
@@ -87,48 +87,48 @@ func TestParse_EventsAndContext(t *testing.T) {
 	}
 }
 
-func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
+func TestParse_TreeFromHeadWithoutASpawn(t *testing.T) {
 	e := newEnv(t)
 	file := filepath.Join(e.repo, "a.txt")
 	testiso.Write(t, file, "a\n")
 	payload := fill(readShape(t, "edit_01_full"), vars(e.repo, file, ""))
-	laneOf := func(t *testing.T, payload []byte) string {
+	treeOf := func(t *testing.T, payload []byte) string {
 		t.Helper()
 		ev, _, err := Parse("PostToolUse", payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return ev.Lane
+		return ev.Tree
 	}
 
 	testiso.Git(t, e.repo, "checkout", "-q", "-b", "feature/deep/x")
-	if got := laneOf(t, payload); got != "feature/deep/x" {
-		t.Errorf("branch lane %q, want feature/deep/x", got)
+	if got := treeOf(t, payload); got != "feature/deep/x" {
+		t.Errorf("branch tree %q, want feature/deep/x", got)
 	}
 
 	// cwd below the repo root still finds the repo.
 	sub := fill(readShape(t, "edit_01_full"), map[string]string{
 		"@CWD@": filepath.Join(e.repo, "no", "such"), "@FILE@": file, "@SESSION@": "s", "@TRANSCRIPT@": "t",
 	})
-	if got := laneOf(t, sub); got != "feature/deep/x" {
-		t.Errorf("lane from a subdirectory cwd %q, want feature/deep/x", got)
+	if got := treeOf(t, sub); got != "feature/deep/x" {
+		t.Errorf("tree from a subdirectory cwd %q, want feature/deep/x", got)
 	}
 
 	// A linked worktree has its own HEAD in .git/worktrees/<name>.
-	wt := testiso.AddLane(t, e.repo, "wt", "side/lane")
+	wt := testiso.AddTree(t, e.repo, "wt", "side/tree")
 	testiso.Write(t, filepath.Join(wt, "w.txt"), "w\n")
 	wp := fill(readShape(t, "edit_01_full"), vars(wt, filepath.Join(wt, "w.txt"), ""))
 	ev, ctx, err := Parse("PostToolUse", wp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Lane != "side/lane" || ev.Detail["path"] != "w.txt" || ctx.Args["repo"] != wt {
-		t.Errorf("worktree: lane %q path %q repo %q, want side/lane w.txt %s", ev.Lane, ev.Detail["path"], ctx.Args["repo"], wt)
+	if ev.Tree != "side/tree" || ev.Detail["path"] != "w.txt" || ctx.Args["repo"] != wt {
+		t.Errorf("worktree: tree %q path %q repo %q, want side/tree w.txt %s", ev.Tree, ev.Detail["path"], ctx.Args["repo"], wt)
 	}
 
 	testiso.Git(t, e.repo, "checkout", "-q", "--detach")
-	if want := "detached-" + testiso.Git(t, e.repo, "rev-parse", "--short=12", "HEAD"); laneOf(t, payload) != want {
-		t.Errorf("detached HEAD lane %q, want %q", laneOf(t, payload), want)
+	if want := "detached-" + testiso.Git(t, e.repo, "rev-parse", "--short=12", "HEAD"); treeOf(t, payload) != want {
+		t.Errorf("detached HEAD tree %q, want %q", treeOf(t, payload), want)
 	}
 }
 

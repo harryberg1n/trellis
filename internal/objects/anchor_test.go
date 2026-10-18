@@ -30,9 +30,9 @@ func TestRefFor(t *testing.T) {
 		"a/b/c":         "refs/trellis/replay/a--b--c",
 		"already--done": "refs/trellis/replay/already--done",
 	}
-	for lane, want := range cases {
-		if got := RefFor(lane); got != want {
-			t.Errorf("RefFor(%q) = %q, want %q", lane, got, want)
+	for tree, want := range cases {
+		if got := RefFor(tree); got != want {
+			t.Errorf("RefFor(%q) = %q, want %q", tree, got, want)
 		}
 	}
 }
@@ -195,7 +195,7 @@ func TestCorpus_NoContentInRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = s.Append(kernel.Event{
-		Kind: kernel.EvTurnAnchored, Lane: "main", Session: "s1", At: time.Unix(1000, 0),
+		Kind: kernel.EvTurnAnchored, Tree: "main", Session: "s1", At: time.Unix(1000, 0),
 		Detail: map[string]string{"tree": tree, "commit": commit, "paths": "secret.txt"},
 	})
 	if err != nil {

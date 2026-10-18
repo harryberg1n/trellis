@@ -61,7 +61,7 @@ type parsed struct {
 }
 
 // Parse reads one payload into the event to record and the context the rules
-// match on. The lane is the repo's current branch, read from HEAD without a
+// match on. The tree is the repo's current branch, read from HEAD without a
 // process; the session is the payload's session_id. ev.At is left for the
 // caller, and ev.Detail holds only what the payload says: an edit's blob and a
 // turn's tree and commit come from the effects Run performs. An event with
@@ -137,7 +137,7 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	case rerr == nil:
 		out.repo = repo
 		args[kernel.ArgRepo] = repo.Root
-		out.ev.Lane = repo.Branch
+		out.ev.Tree = repo.Branch
 	case errors.Is(rerr, objects.ErrNotARepo):
 		// Not a repository: nothing here is ours to record. Silent, not an error.
 		out.ev.Kind, out.ev.Detail = "", nil

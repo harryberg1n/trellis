@@ -26,19 +26,19 @@ func open(t *testing.T) (*store.Store, string, *clock.FakeClock) {
 	return s, dir, fc
 }
 
-func ev(kind, lane string) kernel.Event {
-	return kernel.Event{Kind: kind, Lane: lane, Session: "s1", At: t0}
+func ev(kind, tree string) kernel.Event {
+	return kernel.Event{Kind: kind, Tree: tree, Session: "s1", At: t0}
 }
 
 func TestEngine_StampsArmsFromStickyBeforeAppend(t *testing.T) {
 	s, _, _ := open(t)
 	s.Shares = map[string]int{"exp1": 100, "exp2": 0}
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	// A share change after the lane's first event must not move it.
+	// A share change after the tree's first event must not move it.
 	s.Shares = map[string]int{"exp1": 0, "exp2": 100}
-	if _, err := Step(s, nil, ev(kernel.EvCommit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvCommit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Read(1)
@@ -55,13 +55,13 @@ func TestEngine_StampsArmsFromStickyBeforeAppend(t *testing.T) {
 
 func TestEngine_CallerArmsAreRecordedAndKept(t *testing.T) {
 	s, _, _ := open(t)
-	first := ev(kernel.EvEdit, "lane/b")
+	first := ev(kernel.EvEdit, "tree/b")
 	first.Arms = map[string]string{"exp1": "control"}
 	if _, err := Step(s, nil, first, kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	s.Shares = map[string]int{"exp1": 100}
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/b"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/b"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Read(1)
@@ -70,15 +70,15 @@ func TestEngine_CallerArmsAreRecordedAndKept(t *testing.T) {
 	}
 }
 
-func TestEngine_FlagsEventsAfterMergeAndPersistsLaneState(t *testing.T) {
+func TestEngine_FlagsEventsAfterMergeAndPersistsTreeState(t *testing.T) {
 	s, _, _ := open(t)
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/m"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Step(s, nil, ev(kernel.EvLaneMerged, "lane/m"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvTreeMerged, "tree/m"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/m"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/m"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Read(1)
@@ -93,25 +93,25 @@ func TestEngine_FlagsEventsAfterMergeAndPersistsLaneState(t *testing.T) {
 func TestEngine_ReturnsDecideActions(t *testing.T) {
 	s, _, _ := open(t)
 	rows := []kernel.Row{{ID: "r1", State: kernel.Admitted}}
-	acts, err := Step(s, rows, ev(kernel.EvEdit, "lane/a"), kernel.Context{})
+	acts, err := Step(s, rows, ev(kernel.EvEdit, "tree/a"), kernel.Context{})
 	if err != nil || len(acts) != 0 {
-		t.Fatalf("Step = %v, %v; the lane-2 matcher matches nothing", acts, err)
+		t.Fatalf("Step = %v, %v; the step 2 matcher matches nothing", acts, err)
 	}
 }
 
 func TestEngine_CheckpointCarriesLastSeq(t *testing.T) {
 	s, dir, _ := open(t)
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"last_seq":2,"arms":{"lane/a":{}},"lanes":{"lane/a":1}}`
+	want := `{"last_seq":2,"arms":{"tree/a":{}},"trees":{"tree/a":1}}`
 	if string(raw) != want {
 		t.Fatalf("state.json = %s, want %s", raw, want)
 	}
@@ -127,7 +127,7 @@ func TestLock_TimeoutParksTheEventInsteadOfDropping(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := Step(s, nil, ev(kernel.EvEdit, "lane/p"), kernel.Context{})
+		_, err := Step(s, nil, ev(kernel.EvEdit, "tree/p"), kernel.Context{})
 		done <- err
 	}()
 	fc.BlockUntil(1) // Step is waiting on the lock, on the fake clock
@@ -147,7 +147,7 @@ func TestLock_TimeoutParksTheEventInsteadOfDropping(t *testing.T) {
 	}
 
 	release()
-	if _, err := Step(s, nil, ev(kernel.EvCommit, "lane/p"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvCommit, "tree/p"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.Read(1)
@@ -161,7 +161,7 @@ func TestLock_TimeoutParksTheEventInsteadOfDropping(t *testing.T) {
 
 func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
 	s, dir, _ := open(t)
-	first := ev(kernel.EvEdit, "lane/x")
+	first := ev(kernel.EvEdit, "tree/x")
 	first.Arms = map[string]string{"exp1": "control"}
 
 	s.SetRename(func(string, string) error { return errors.New("injected rename failure") })
@@ -173,16 +173,16 @@ func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
 	}
 	s.SetRename(os.Rename)
 
-	// Without a replay the lane would be assigned treatment here.
+	// Without a replay the tree would be assigned treatment here.
 	s.Shares = map[string]int{"exp1": 100}
-	if _, err := Step(s, nil, ev(kernel.EvCommit, "lane/x"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvCommit, "tree/x"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"last_seq":2,"arms":{"lane/x":{"exp1":"control"}},"lanes":{"lane/x":1}}`
+	want := `{"last_seq":2,"arms":{"tree/x":{"exp1":"control"}},"trees":{"tree/x":1}}`
 	if string(raw) != want {
 		t.Fatalf("state.json = %s, want %s", raw, want)
 	}
@@ -194,7 +194,7 @@ func TestEngine_ReplaysLogIntoCheckpointAfterFailedSave(t *testing.T) {
 
 func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
 	s, dir, _ := open(t)
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(filepath.Join(dir, "events.jsonl"))
@@ -202,7 +202,7 @@ func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := s.BytesRead()
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/a"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
 		t.Fatal(err)
 	}
 	// One read for the next Seq; none to catch the checkpoint up.
@@ -213,16 +213,16 @@ func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
 
 func TestFold_UndeletablePendingFileDoesNotWedge(t *testing.T) {
 	s, dir, _ := open(t)
-	if err := s.Park(ev(kernel.EvEdit, "lane/p")); err != nil {
+	if err := s.Park(ev(kernel.EvEdit, "tree/p")); err != nil {
 		t.Fatal(err)
 	}
 	s.SetRemove(func(string) error { return errors.New("file is held open") })
 	// The first Step folds the parked event; its file cannot be deleted.
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/p"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/p"), kernel.Context{}); err != nil {
 		t.Fatalf("first Step with an undeletable pending file: %v", err)
 	}
 	// The leftover is already logged: the next Step must succeed and not re-append it.
-	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/p"), kernel.Context{}); err != nil {
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/p"), kernel.Context{}); err != nil {
 		t.Fatalf("second Step with an undeletable pending file: %v", err)
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json"))

@@ -1,1 +1,1 @@
-{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@LANE@","tool_name":"Bash","tool_input":{"command":"git -C @PRIMARY_SLASH@ push origin main"}}
+{"session_id":"s-1","transcript_path":"","hook_event_name":"PreToolUse","cwd":"@TREE@","tool_name":"Bash","tool_input":{"command":"git -C @PRIMARY_SLASH@ push origin main"}}

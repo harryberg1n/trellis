@@ -28,12 +28,12 @@ func (e *env) pre(t testing.TB, cwd, command string, session bool) (code int, st
 	return code, out.String(), errb.String()
 }
 
-// lane is a linked worktree of e.repo with one modified tracked file.
-func (e *env) dirtyLane(t testing.TB) string {
+// tree is a linked worktree of e.repo with one modified tracked file.
+func (e *env) dirtyTree(t testing.TB) string {
 	t.Helper()
-	lane := testiso.AddLane(t, e.repo, "lane", "lane/x")
-	testiso.Write(t, filepath.Join(lane, "README.md"), "changed\n")
-	return lane
+	tree := testiso.AddTree(t, e.repo, "tree", "tree/x")
+	testiso.Write(t, filepath.Join(tree, "README.md"), "changed\n")
+	return tree
 }
 
 func details(evs []kernel.Event) []map[string]string {
@@ -61,16 +61,16 @@ func TestPreToolUse_DenyPrintsTheLineExits2AndRecords(t *testing.T) {
 	if got := details(evs); !reflect.DeepEqual(got, want) {
 		t.Errorf("events %v, want %v", got, want)
 	}
-	if evs[0].Session != "s-1" || evs[0].Lane != "main" {
-		t.Errorf("event session %q lane %q, want s-1 main", evs[0].Session, evs[0].Lane)
+	if evs[0].Session != "s-1" || evs[0].Tree != "main" {
+		t.Errorf("event session %q tree %q, want s-1 main", evs[0].Session, evs[0].Tree)
 	}
 }
 
 func TestPreToolUse_APolicyDenialIsPolicyDenied(t *testing.T) {
 	e := newEnv(t)
-	lane := e.dirtyLane(t)
+	tree := e.dirtyTree(t)
 	testiso.FakeTool(t, "gitleaks", 0, "")
-	code, _, stderr := e.pre(t, lane, "git commit -m \"x\n\nCo-Authored-By: A <a@b>\"", true)
+	code, _, stderr := e.pre(t, tree, "git commit -m \"x\n\nCo-Authored-By: A <a@b>\"", true)
 	if code != 2 {
 		t.Fatalf("exit %d (stderr %q), want 2", code, stderr)
 	}
@@ -94,12 +94,12 @@ func TestPreToolUse_AllowPrintsNothingAndRecordsNothing(t *testing.T) {
 
 func TestOverride_OneShot(t *testing.T) {
 	e := newEnv(t)
-	lane := e.dirtyLane(t)
+	tree := e.dirtyTree(t)
 	if err := e.st.Allow("discard-uncommitted"); err != nil {
 		t.Fatal(err)
 	}
 	for i, want := range []int{0, 2} {
-		code, _, stderr := e.pre(t, lane, "git reset --hard", true)
+		code, _, stderr := e.pre(t, tree, "git reset --hard", true)
 		if code != want {
 			t.Fatalf("run %d: exit %d (stderr %q), want %d: allow, then deny", i+1, code, stderr, want)
 		}
@@ -116,17 +116,17 @@ func TestOverride_OneShot(t *testing.T) {
 
 func TestOverride_NotForSecretsOrUndercover(t *testing.T) {
 	e := newEnv(t)
-	lane := e.dirtyLane(t)
+	tree := e.dirtyTree(t)
 	testiso.FakeTool(t, "gitleaks", 2, "leaks found: 1")
 	for _, row := range []string{"secrets", "undercover"} {
 		if err := e.st.Allow(row); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if code, _, _ := e.pre(t, lane, `git commit -m "add keys"`, true); code != 2 {
+	if code, _, _ := e.pre(t, tree, `git commit -m "add keys"`, true); code != 2 {
 		t.Errorf("secrets with a token: exit %d, want 2: the row has no override", code)
 	}
-	if code, _, _ := e.pre(t, lane, "git commit -m \"x\n\nCo-Authored-By: A <a@b>\"", true); code != 2 {
+	if code, _, _ := e.pre(t, tree, "git commit -m \"x\n\nCo-Authored-By: A <a@b>\"", true); code != 2 {
 		t.Errorf("undercover with a token: exit %d, want 2: the row has no override", code)
 	}
 	for _, row := range []string{"secrets", "undercover"} {
@@ -187,9 +187,9 @@ func TestContextJSON_IsValidJSONForControlCharacters(t *testing.T) {
 
 func TestPreToolUse_AnAllowWithALineIsShownAsContext(t *testing.T) {
 	e := newEnv(t)
-	lane := e.dirtyLane(t)
+	tree := e.dirtyTree(t)
 	testiso.PathWithOnly(t, "git")
-	code, stdout, stderr := e.pre(t, lane, `git commit -m "fix"`, true)
+	code, stdout, stderr := e.pre(t, tree, `git commit -m "fix"`, true)
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"not applicable: gitleaks not installed"}}` + "\n"
 	if code != 0 || stdout != want || stderr != "" {
 		t.Errorf("exit %d, stdout %q, stderr %q; want 0, %q, empty", code, stdout, stderr, want)

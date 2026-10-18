@@ -37,7 +37,7 @@ const stamp = time.RFC3339
 // waived, once, within AllowTTL. Allowing a row twice before it denies is
 // still one waiver. Tokens live in this store's directory, so they are per
 // repo id and row. A repo with no origin remote is keyed by its worktree path:
-// a token minted in the primary checkout is not seen from a lane.
+// a token minted in the primary checkout is not seen from a tree.
 func (s *Store) Allow(id string) error {
 	p, err := s.allowPath(id)
 	if err != nil {

@@ -18,7 +18,7 @@ const (
 	Policy
 )
 
-// Stage is the point in a lane's life at which a row is evaluated.
+// Stage is the point in a tree's life at which a row is evaluated.
 type Stage int
 
 // The stages, from the finest grain to the coarsest: a file edit, a commit, a

@@ -4,11 +4,11 @@ import "time"
 
 // Event kinds.
 const (
-	// EvLaneOpened may carry Detail["pr"], the decimal number of the pull request
-	// the lane merges as; the report reads it as an override of the lane a
+	// EvTreeOpened may carry Detail["pr"], the decimal number of the pull request
+	// the tree merges as; the report reads it as an override of the tree a
 	// squash merge "(#N)" is linked to.
-	EvLaneOpened   = "lane.opened"
-	EvLaneMerged   = "lane.merged"
+	EvTreeOpened   = "tree.opened"
+	EvTreeMerged   = "tree.merged"
 	EvEdit         = "edit"
 	EvTurnAnchored = "turn.anchored"
 	EvCommit       = "commit"
@@ -35,7 +35,7 @@ const (
 type Event struct {
 	Seq     uint64            `json:"seq"`
 	Kind    string            `json:"kind"`
-	Lane    string            `json:"lane"`
+	Tree    string            `json:"tree"`
 	Session string            `json:"session"`
 	At      time.Time         `json:"at"`
 	Arms    map[string]string `json:"arms,omitempty"`
