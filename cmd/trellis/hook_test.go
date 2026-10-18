@@ -75,3 +75,33 @@ func TestHook_NoEventIsAUsageErrorThatDoesNotBlock(t *testing.T) {
 func quote(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
+
+func TestHook_FallbackLivesInTheUserCacheDir(t *testing.T) {
+	bin := build(t)
+	repo := testiso.Repo(t)
+	cache := t.TempDir()
+	badRoot := filepath.Join(t.TempDir(), "root")
+	if err := os.WriteFile(badRoot, []byte("a file, not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"session_id":"s-1","cwd":` + quote(repo) + `,"hook_event_name":"PostToolUse","tool_name":"Edit",` +
+		`"tool_input":{"file_path":` + quote(filepath.Join(repo, "hello.txt")) + `}}`
+
+	cmd := exec.Command(bin, "hook", "PostToolUse")
+	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+badRoot, "LocalAppData="+cache, "XDG_CACHE_HOME="+cache, "HOME="+cache)
+	cmd.Stdin = strings.NewReader(payload)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil || out.Len() != 0 || errb.Len() != 0 {
+		t.Fatalf("exit %v, stdout %q, stderr %q; want 0, empty, empty", err, out.String(), errb.String())
+	}
+
+	m, _ := filepath.Glob(filepath.Join(cache, "*", "trellis", "fallback", "events.pending", "*.json"))
+	m2, _ := filepath.Glob(filepath.Join(cache, "trellis", "fallback", "events.pending", "*.json"))
+	if len(m)+len(m2) != 1 {
+		t.Errorf("fallback events under the cache dir %s: %v %v; want exactly one", cache, m, m2)
+	}
+}
