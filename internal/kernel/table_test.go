@@ -89,3 +89,32 @@ func TestValidate_DecisionFormatIsChecked(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_ShippedRowsPass(t *testing.T) {
+	if errs := Validate(Table); len(errs) != 0 {
+		t.Errorf("Validate(Table) = %q, want no errors", errStrings(errs))
+	}
+}
+
+func TestTable_ShipsTheLaneSixRows(t *testing.T) {
+	var got []string
+	for _, r := range Table {
+		got = append(got, r.ID)
+	}
+	want := []string{
+		"primary-write", "main-commit", "hook-bypass", "discard-uncommitted", "own-git-state",
+		"secrets", "undercover", "walls-warn-people", "secrets-everyone",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("row ids = %q, want %q", got, want)
+	}
+	kinds := map[string]Kind{"undercover": Policy, "walls-warn-people": Policy, "secrets-everyone": Policy, "secrets": Wall}
+	for _, r := range Table {
+		if k, ok := kinds[r.ID]; ok && r.Kind != k {
+			t.Errorf("%s: kind %d, want %d", r.ID, r.Kind, k)
+		}
+		if r.State != Admitted {
+			t.Errorf("%s: state %d, want Admitted", r.ID, r.State)
+		}
+	}
+}

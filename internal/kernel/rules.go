@@ -74,3 +74,31 @@ func acts(r Row, ev Event) bool {
 	}
 	return false
 }
+
+// Matcher judges one row on one tool call. It returns the row's action and
+// true, or false when the row has nothing to say about the call. The verdict it
+// returns is what the row would do at Level Block; DecideWith caps it at a warn
+// for a row at Level Warn.
+type Matcher func(Row, Event, Context) (Action, bool)
+
+// DecideWith is Decide with a matcher: the rows that act on ev, in table order,
+// each asked about ctx. The matcher is how effects (a process, a file read)
+// reach the rule evaluation without the kernel owning them.
+func DecideWith(rows []Row, ev Event, ctx Context, m Matcher) []Action {
+	var out []Action
+	for _, r := range rows {
+		if !acts(r, ev) {
+			continue
+		}
+		a, ok := m(r, ev, ctx)
+		if !ok {
+			continue
+		}
+		a.RowID = r.ID
+		if r.Level == Warn && a.Verdict == VerdictDeny {
+			a.Verdict = VerdictWarn
+		}
+		out = append(out, a)
+	}
+	return out
+}
