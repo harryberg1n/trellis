@@ -5,13 +5,14 @@ package walls
 // per-verb functions, splitDashDash, nonFlagOperands). Incidents: #650, a
 // `git checkout -- <path>` that threw away a day of uncommitted work, and #857,
 // the same through a Bash tool call that never met the git shim. What changed:
-// the cost is measured with one `git status` (aphrollo ran a diff and an
+// the cost is measured with one `git status` (the source ran a diff and an
 // ls-files, and a rev-list for a branch) through objects.Git and run.Light,
 // and the refusal is the trellis deny line.
 
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -123,7 +124,7 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 // statusCost counts the files git status lists in dir, for paths or for the
 // whole tree: the measurement of discard-uncommitted.
 func statusCost(r run.Runner, dir string, paths []string) (cost, error) {
-	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
+	args := append([]string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
 	out, err := objects.Git(r, dir, nil, args...)
 	if err != nil {
 		return cost{}, err
@@ -253,20 +254,11 @@ func discardIntent(rest []string) (form string, paths []string, ok bool) {
 	return "", nil, false
 }
 
-func contains(args []string, tok string) bool {
-	for _, a := range args {
-		if a == tok {
-			return true
-		}
-	}
-	return false
-}
-
 func resetIntent(args []string) (string, []string, bool) {
-	if contains(args, "--hard") {
+	if slices.Contains(args, "--hard") {
 		return "reset --hard", nil, true
 	}
-	if contains(args, "--merge") {
+	if slices.Contains(args, "--merge") {
 		return "reset --merge", nil, true
 	}
 	return "", nil, false
@@ -280,10 +272,10 @@ func checkoutIntent(args []string) (string, []string, bool) {
 			return "checkout -- <paths>", append([]string{}, args[i+1:]...), true
 		}
 	}
-	if contains(args, ".") {
+	if slices.Contains(args, ".") {
 		return "checkout -- <paths>", []string{"."}, true
 	}
-	if contains(args, "-f") || contains(args, "--force") {
+	if slices.Contains(args, "-f") || slices.Contains(args, "--force") {
 		return "checkout -f", nil, true
 	}
 	return "", nil, false

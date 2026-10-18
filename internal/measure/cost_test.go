@@ -1,7 +1,10 @@
 package measure
 
 import (
+	"math"
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +26,7 @@ func TestCost_FixtureTranscript(t *testing.T) {
 
 	got := TreeCosts(f)["A"]
 
-	if got != 0.0125 {
+	if math.Abs(got-0.0125) > 1e-9 {
 		t.Errorf("cost of tree A = %v USD, want 0.0125", got)
 	}
 }
@@ -37,15 +40,62 @@ func TestCost_LineOverTheLimitIsSkippedAndLaterTurnsCount(t *testing.T) {
 
 	got := TreeCosts(Facts{Usage: []Usage{{Tree: "A", Transcript: tr}}})["A"]
 
-	if got != 0.025 {
+	if math.Abs(got-0.025) > 1e-9 {
 		t.Errorf("cost = %v USD, want 0.025 (both records around the 9 MiB line)", got)
 	}
 }
 
-func TestCost_UnpricedModelCostsNothing(t *testing.T) {
-	tr := []byte(`{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"mystery-1","usage":{"input_tokens":1000000,"output_tokens":1}}}` + "\n")
-	if got := TreeCosts(Facts{Usage: []Usage{{Tree: "A", Transcript: tr}}})["A"]; got != 0 {
-		t.Errorf("cost = %v, want 0", got)
+func TestCost_UnpricedModelCostsNothingAndIsCounted(t *testing.T) {
+	line := func(id, model string, in, out int) string {
+		return `{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"` + id + `","message":{"model":"` + model + `","usage":{"input_tokens":` + strconv.Itoa(in) + `,"output_tokens":` + strconv.Itoa(out) + `}}}` + "\n"
+	}
+	f := Facts{Usage: []Usage{
+		{Tree: "A", Transcript: []byte(line("q", "mystery-1", 1000000, 1) + line("r", "other-2", 20, 3))},
+		{Tree: "B", Transcript: []byte(line("s", "mystery-1", 7, 0))},
+	}}
+
+	costs, unpriced := Costs(f)
+
+	if len(costs) != 2 || costs["A"] != 0 || costs["B"] != 0 {
+		t.Errorf("costs = %v, want both trees present at 0 for unpriced models", costs)
+	}
+	if unpriced.Tokens != 1000031 {
+		t.Errorf("unpriced tokens = %d, want 1000031", unpriced.Tokens)
+	}
+	if want := []string{"mystery-1", "other-2"}; !reflect.DeepEqual(unpriced.Models, want) {
+		t.Errorf("unpriced models = %v, want %v", unpriced.Models, want)
+	}
+}
+
+func TestCost_TurnsGoToTheTreeCurrentAtTheNextStop(t *testing.T) {
+	rec := func(id, at string) string {
+		return `{"type":"assistant","timestamp":"` + at + `","requestId":"` + id + `","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}` + "\n"
+	}
+	tr := []byte(rec("a", "2026-10-01T09:00:05Z") + rec("b", "2026-10-01T09:10:05Z") + rec("c", "2026-10-01T09:30:05Z"))
+	marks := []TreeMark{
+		{At: time.Date(2026, 10, 1, 9, 5, 0, 0, time.UTC), Tree: "A"},
+		{At: time.Date(2026, 10, 1, 9, 20, 0, 0, time.UTC), Tree: "B"},
+	}
+
+	costs, _ := Costs(Facts{Usage: []Usage{{Tree: "B", Session: "s", Transcript: tr, Marks: marks}}})
+
+	// a ends at the Stop on A; b at the Stop on B; c came after the last Stop
+	// and goes to the last tree.
+	if math.Abs(costs["A"]-0.0125) > 1e-9 || math.Abs(costs["B"]-0.025) > 1e-9 {
+		t.Errorf("costs = %v, want A 0.0125 and B 0.025", costs)
+	}
+}
+
+func TestCost_MarksOutOfLogOrderAreReadByTime(t *testing.T) {
+	tr := []byte(`{"type":"assistant","timestamp":"2026-10-01T10:15:00Z","requestId":"a","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}` + "\n")
+	at := func(m int) time.Time { return time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC) }
+	// Stop Z at 20 was parked and folded last: it is after Y in the log.
+	marks := []TreeMark{{At: at(10), Tree: "X"}, {At: at(30), Tree: "Y"}, {At: at(20), Tree: "Z"}}
+
+	costs, _ := Costs(Facts{Usage: []Usage{{Tree: "Y", Transcript: tr, Marks: marks}}})
+
+	if math.Abs(costs["Z"]-0.0125) > 1e-9 || costs["X"] != 0 || costs["Y"] != 0 {
+		t.Errorf("costs = %v, want the reply at 15 charged to Z", costs)
 	}
 }
 

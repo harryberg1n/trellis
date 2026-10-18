@@ -43,10 +43,10 @@ func (s *Store) Allow(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), dirMode); err != nil {
 		return err
 	}
-	return WriteAtomic(filepath.Dir(p), filepath.Base(p), []byte(s.clock.Now().UTC().Format(stamp)+"\n"), WithMode(0o644))
+	return WriteAtomic(filepath.Dir(p), filepath.Base(p), []byte(s.clock.Now().UTC().Format(stamp)+"\n"), WithMode(fileMode))
 }
 
 // valid reports whether the row has a token younger than AllowTTL. An expired

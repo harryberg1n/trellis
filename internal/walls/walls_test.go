@@ -50,7 +50,7 @@ func bash(t testing.TB, dir, command string, session bool) []byte {
 // sessionIf is the payload option of an agent's call, or none for a person's.
 func sessionIf(session bool) []testiso.PayloadOption {
 	if !session {
-		return nil
+		return []testiso.PayloadOption{testiso.AsPerson()}
 	}
 	return []testiso.PayloadOption{testiso.WithSession("s-1")}
 }
@@ -589,5 +589,82 @@ func TestWalls_AnUnreadableRemoteDoesNotOpenTheMainCommitWall(t *testing.T) {
 	denies := verdicts(decide(t, bash(t, w.primary, `git commit -m "wip"`, true), quiet(t)), kernel.VerdictDeny)
 	if len(denies) != 1 || denies[0].RowID != "main-commit" {
 		t.Errorf("denies %+v, want main-commit: the config read failed but the repo is still known", denies)
+	}
+}
+
+func TestPrimaryWrite_ExemptsIgnoredPathsAndTheGitDir(t *testing.T) {
+	w := newWorld(t)
+	testiso.Write(t, filepath.Join(w.primary, ".gitignore"), "docs/sdd/\n*.log\n")
+	r := quiet(t)
+	edit := func(file string) []byte {
+		return testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolEdit, w.primary, map[string]string{"file_path": file}, testiso.WithSession("s"))
+	}
+	for _, c := range []struct {
+		file string
+		deny bool
+	}{
+		{filepath.Join(w.primary, "docs", "sdd", "plan.md"), false},
+		{filepath.Join(w.primary, "build.log"), false},
+		{filepath.Join(w.primary, ".git", "info", "exclude"), false},
+		{filepath.Join(w.primary, ".git", "hooks", "pre-commit"), true},
+		{filepath.Join(w.primary, ".git", "config"), true},
+		{filepath.Join(w.primary, ".git", "refs", "heads", "main"), true},
+		{filepath.Join(w.primary, ".git", "HEAD"), true},
+		{filepath.Join(w.primary, "docs", "a.md"), true},
+		{filepath.Join(w.primary, "README.md"), true},
+	} {
+		d := verdicts(decide(t, edit(c.file), r), kernel.VerdictDeny)
+		if got := len(d) == 1 && d[0].RowID == "primary-write"; got != c.deny {
+			t.Errorf("Edit of %s: denies %+v, want deny=%v", c.file[len(w.primary):], d, c.deny)
+		}
+	}
+	// A shell write is judged the same way.
+	if d := verdicts(decide(t, bash(t, w.primary, "echo x > docs/sdd/notes.md", true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("shell write to an ignored path: denies %+v, want none", d)
+	}
+	if d := verdicts(decide(t, bash(t, w.primary, "echo x > notes.md", true), r), kernel.VerdictDeny); len(d) != 1 {
+		t.Errorf("shell write to a tracked-to-be path: denies %+v, want one", d)
+	}
+}
+
+func TestMainCommit_FollowsGitDirAndWorkTreeToTheRepoTheyName(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	gitDir := filepath.ToSlash(filepath.Join(w.primary, ".git"))
+	primary := filepath.ToSlash(w.primary)
+	for _, cmd := range []string{
+		`git --git-dir=` + gitDir + ` commit -m x`,
+		`git --git-dir ` + gitDir + ` --work-tree ` + primary + ` commit -m x`,
+		`git --git-dir="` + gitDir + `" push origin main`,
+		`GIT_DIR=` + gitDir + ` git commit -m x`,
+		`cd ` + primary + ` && git commit -m x`,
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "main-commit" {
+			t.Errorf("%q from a tree: denies %+v, want main-commit", cmd, d)
+		}
+	}
+	// A git dir of the tree itself, named in full, is the tree: no deny.
+	treeGit := filepath.ToSlash(filepath.Join(w.tree, ".git"))
+	if d := verdicts(decide(t, bash(t, w.tree, `git --git-dir=`+treeGit+` commit --dry-run -m x`, true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("a tree's own --git-dir: denies %+v, want none", d)
+	}
+}
+
+func TestMainCommit_FollowsAnExportedGitDir(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	gitDir := filepath.ToSlash(filepath.Join(w.primary, ".git"))
+	for _, cmd := range []string{
+		`export GIT_DIR=` + gitDir + `; git commit -m x`,
+		`export A=1 GIT_DIR=` + gitDir + ` && git push origin main`,
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "main-commit" {
+			t.Errorf("%q from a tree: denies %+v, want main-commit", cmd, d)
+		}
+	}
+	if d := verdicts(decide(t, bash(t, w.tree, `export GIT_DIR=`+gitDir+`; echo hi; git status`, true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("an exported GIT_DIR with a harmless git verb: denies %+v, want none", d)
 	}
 }

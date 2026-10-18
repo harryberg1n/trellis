@@ -3,6 +3,7 @@ package walls
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -60,9 +61,9 @@ func messages(seg []word, dir string) (out []string, stdin bool) {
 			next = args[i+1]
 		}
 		switch {
-		case flagIs(a, valueFlags) && next != "":
+		case slices.Contains(valueFlags, a) && next != "":
 			out = append(out, next)
-		case flagIs(a, fileFlags):
+		case slices.Contains(fileFlags, a):
 			if next == "-" {
 				stdin = true
 			} else if next != "" {
@@ -79,15 +80,6 @@ func messages(seg []word, dir string) (out []string, stdin bool) {
 		}
 	}
 	return out, stdin
-}
-
-func flagIs(a string, flags []string) bool {
-	for _, f := range flags {
-		if a == f {
-			return true
-		}
-	}
-	return false
 }
 
 // flagValue is the value of an attached flag: --message=x, or -mx for a short one.

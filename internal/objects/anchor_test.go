@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
@@ -503,5 +505,18 @@ func TestAnchorTurn_FilemodeTrueUsesLstat(t *testing.T) {
 	}
 	if got := testiso.Git(t, repo, "ls-tree", commit, "run.sh"); got != "100644 blob "+idA+"\trun.sh" {
 		t.Fatalf("run.sh: %q", got)
+	}
+}
+
+func TestAnchorTurn_StatusTakesNoOptionalLocks(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := testsupport.Recorder()
+	if _, _, err := AnchorTurn(r, repo, "main", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range r.Specs() {
+		if run.Kind(s) == "status" && !slices.Contains(s.Args, "--no-optional-locks") {
+			t.Errorf("status argv %v lacks --no-optional-locks", s.Args)
+		}
 	}
 }

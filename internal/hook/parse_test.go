@@ -46,7 +46,8 @@ func TestParse_EventsAndContext(t *testing.T) {
 		},
 		{
 			name: "stop", shape: "stop", event: "Stop", kind: "turn.anchored",
-			tool: "", args: map[string]string{"cwd": repo, "repo": repo},
+			detail: map[string]string{"transcript": transcript},
+			tool:   "", args: map[string]string{"cwd": repo, "repo": repo},
 		},
 		{
 			name: "session end", shape: "sessionend", event: "SessionEnd", kind: "session.usage",
@@ -59,7 +60,7 @@ func TestParse_EventsAndContext(t *testing.T) {
 		},
 		{name: "session start", shape: "sessionstart", event: "SessionStart", nothing: true, args: map[string]string{"cwd": repo, "repo": repo}},
 		{name: "prompt", shape: "userpromptsubmit", event: "UserPromptSubmit", nothing: true, args: map[string]string{"cwd": repo, "repo": repo}},
-		{name: "event spelled with dashes", shape: "stop", event: "stop", kind: "turn.anchored", args: map[string]string{"cwd": repo, "repo": repo}},
+		{name: "event spelled with dashes", shape: "stop", event: "stop", kind: "turn.anchored", detail: map[string]string{"transcript": transcript}, args: map[string]string{"cwd": repo, "repo": repo}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -175,7 +176,7 @@ func TestParse_NotOursRecordsNothing(t *testing.T) {
 
 func TestParse_PreToolUseWithoutASessionIsAPerson(t *testing.T) {
 	e := newEnv(t)
-	body := testiso.HookPayload(t, "PreToolUse", "Bash", e.repo, map[string]string{"command": "git status"})
+	body := testiso.HookPayload(t, "PreToolUse", "Bash", e.repo, map[string]string{"command": "git status"}, testiso.AsPerson())
 	ev, ctx, err := Parse("PreToolUse", body)
 	if err != nil {
 		t.Fatalf("Parse: %v, want a PreToolUse with no session_id accepted (a person at a git hook)", err)
@@ -186,6 +187,21 @@ func TestParse_PreToolUseWithoutASessionIsAPerson(t *testing.T) {
 	}
 	if _, _, err := Parse("PostToolUse", body); err == nil || !strings.Contains(err.Error(), "session_id") {
 		t.Errorf("PostToolUse without a session: %v, want the session_id error", err)
+	}
+}
+
+// The harness always sets hook_event_name, so a payload that has it and no
+// session_id is an agent's, odd as it is: the walls deny it as they would any
+// agent, they do not soften to a warning.
+func TestParse_PreToolUseWithAnEventNameButNoSessionIsNoPerson(t *testing.T) {
+	e := newEnv(t)
+	body := testiso.HookPayload(t, "PreToolUse", "Bash", e.repo, map[string]string{"command": "git status"})
+	ev, ctx, err := Parse("PreToolUse", body)
+	if err != nil || ev.Kind != "" {
+		t.Fatalf("Parse: kind %q, %v; want a context-only event and no error", ev.Kind, err)
+	}
+	if v, ok := ctx.Args["person"]; ok {
+		t.Errorf("person = %q, want it absent: the payload names its hook event", v)
 	}
 }
 

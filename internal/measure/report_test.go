@@ -71,3 +71,21 @@ func TestReport_AggregatesOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestReport_NamesUnpricedTokensAndMissingTranscripts(t *testing.T) {
+	f := reportFixture(t)
+	if out := string(Report(f)); strings.Contains(out, "unpriced tokens") || strings.Contains(out, "transcripts missing") {
+		t.Errorf("a report with nothing unpriced or missing names them:\n%s", out)
+	}
+	tr := `{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"q","message":{"model":"mystery-1","usage":{"input_tokens":40,"output_tokens":2}}}` + "\n"
+	f.Usage = append(f.Usage, Usage{Tree: "B", Transcript: []byte(tr)})
+	f.MissingTranscripts = 3
+
+	out := string(Report(f))
+
+	for _, want := range []string{"  unpriced tokens: 42 (models: mystery-1)\n", "  transcripts missing: 3\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -41,7 +42,7 @@ func Report(f Facts) []byte {
 
 	p("")
 	p("cost: agent dollars at list price")
-	costs := TreeCosts(f)
+	costs, unpriced := Costs(f)
 	trees := sortedKeys(costs)
 	dollars := make([]float64, 0, len(trees))
 	var total float64
@@ -51,6 +52,12 @@ func Report(f Facts) []byte {
 	}
 	lo, hi = Bootstrap(dollars)
 	p("  trees with usage: %d  total $%.5f", len(dollars), total)
+	if unpriced.Tokens > 0 {
+		p("  unpriced tokens: %d (models: %s)", unpriced.Tokens, strings.Join(unpriced.Models, ", "))
+	}
+	if f.MissingTranscripts > 0 {
+		p("  transcripts missing: %d", f.MissingTranscripts)
+	}
 	p("  per tree: mean $%.5f, 90%% interval [$%.5f, $%.5f]", mean(dollars), lo, hi)
 	p("  net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)")
 	rows := RowCosts(f)

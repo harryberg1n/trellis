@@ -2,6 +2,7 @@ package walls
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/clock"
@@ -39,5 +40,17 @@ func TestDirty_IgnoreUntrackedCountsOnlyWhatGitTracks(t *testing.T) {
 	got, err := Dirty(r, repo, IgnoreUntracked())
 	if err != nil || got != "1 unstaged file" {
 		t.Errorf("Dirty = %q, %v; want %q", got, err, "1 unstaged file")
+	}
+}
+
+func TestDirty_StatusTakesNoOptionalLocks(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := &run.Recorder{Inner: run.Exec{Clock: clock.Real()}}
+	if _, err := Dirty(r, repo); err != nil {
+		t.Fatal(err)
+	}
+	specs := r.Specs()
+	if len(specs) != 1 || !slices.Contains(specs[0].Args, "--no-optional-locks") {
+		t.Errorf("specs %+v, want one status with --no-optional-locks", specs)
 	}
 }

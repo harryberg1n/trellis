@@ -3,14 +3,13 @@
 
 // Package testiso is the one place a test binary is cut off from the git state
 // of the box it runs on: the repositories around it, the environment a git hook
-// or a gate spawn handed it, and the operator's own git config. Every
+// or a parent process handed it, and the operator's own git config. Every
 // package's TestMain calls Main (or Isolate, when it has setup of its own), so
 // a fixture that runs a bare `git init`, `git config` or `git commit` can only
 // ever reach a repository the test made.
 package testiso
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,8 +205,7 @@ func homeLayout(fake string) map[string]string {
 //     `git config --global` writes a file the test owns, one that already
 //     tells git to take Windows paths past 260 characters, which nested temp
 //     roots reach;
-//   - sends CLAUDE_CONFIG_DIR, where the gate keeps its state, under root, and
-//     points core.hooksPath at an empty dir so no repo hook a test reaches runs;
+//   - points core.hooksPath at an empty dir so no repo hook a test reaches runs;
 //   - switches git's post-commit auto maintenance off.
 //   - sets GOWORK=off, so no go.work of the box, the runner or a directory above
 //     the temp root is in view of a `go` a test spawns in a throwaway module.
@@ -242,8 +240,6 @@ func Isolate(root string) (home string, err error) {
 	env["GIT_CEILING_DIRECTORIES"] = CeilingList(root, enclosingRepo(cwd))
 	env["GIT_CONFIG_GLOBAL"] = gitconfig
 	env["GIT_CONFIG_NOSYSTEM"] = "1"
-	// The gate's state dir is found through CLAUDE_CONFIG_DIR before the home.
-	env["CLAUDE_CONFIG_DIR"] = filepath.Join(root, "claude")
 	// The environment changes only once everything it names exists: a root that
 	// cannot hold them leaves the process as it was.
 	for _, kv := range os.Environ() {
@@ -256,27 +252,8 @@ func Isolate(root string) (home string, err error) {
 		_ = os.Setenv(name, value) // fails only on an empty or malformed name, and these are literals
 	}
 	disableMaintenanceAndHooks(filepath.Join(root, "nohooks"), func(k, v string) { _ = os.Setenv(k, v) })
-	_ = os.Setenv("PATH", withoutQueueShims(os.Getenv("PATH")))
 	sandboxRoot = root
 	return home, nil
-}
-
-// queueShimDir is the name of the directory the box's queue shims (git, cargo)
-// live in.
-const queueShimDir = "cargo-queue"
-
-// withoutQueueShims is a PATH list without the queue shim directories, order
-// kept. A fixture's git is git itself: the shim costs a process of its own on
-// every spawn, and the queue it guards serves a session's work, never a
-// throwaway repo. A box with no shim, and CI, has nothing to drop.
-func withoutQueueShims(path string) string {
-	var keep []string
-	for _, dir := range filepath.SplitList(path) {
-		if filepath.Base(filepath.Clean(dir)) != queueShimDir {
-			keep = append(keep, dir)
-		}
-	}
-	return strings.Join(keep, string(os.PathListSeparator))
 }
 
 // MustIsolate is Isolate for a TestMain that has setup of its own: it panics
@@ -308,7 +285,7 @@ func enclosingRepo(dir string) string {
 }
 
 // pinToolchainHomes writes the Go toolchain's resolved cache and env-file
-// locations, and the rustup home, into the environment where they default
+// locations into the environment where they default
 // under the home dir being replaced. A toolchain that cannot answer leaves the
 // variables as they were.
 func pinToolchainHomes() {
@@ -319,8 +296,6 @@ func pinToolchainHomes() {
 	for name, value := range resolved {
 		_ = os.Setenv(name, value)
 	}
-	home, _ := os.UserHomeDir()
-	_ = os.Setenv("RUSTUP_HOME", cmp.Or(os.Getenv("RUSTUP_HOME"), filepath.Join(home, ".rustup")))
 }
 
 // isGitVar reports whether the "name=value" entry kv is a GIT_* variable.

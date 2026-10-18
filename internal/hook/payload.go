@@ -18,6 +18,7 @@ import (
 // ignored, so a newer harness does not break the recorder.
 type payload struct {
 	SessionID      string `json:"session_id"`
+	HookEventName  string `json:"hook_event_name"`
 	TranscriptPath string `json:"transcript_path"`
 	Cwd            string `json:"cwd"`
 	ToolName       string `json:"tool_name"`

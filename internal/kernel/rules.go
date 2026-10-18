@@ -30,7 +30,8 @@ type Action struct {
 	Line    string
 }
 
-// Context carries the parsed tool call. Step 6 fills it.
+// Context carries the parsed tool call: the tool name and its arguments by the
+// Arg names in names.go.
 type Context struct {
 	Tool string
 	Args map[string]string
@@ -38,11 +39,14 @@ type Context struct {
 
 type matcher func(Row, Event, Context) bool
 
-// noMatch is the step 2 matcher: matching arrives in step 6.
+// noMatch is the matcher of Decide: no row matches. Matching that needs the
+// repository or a process goes through DecideWith.
 func noMatch(Row, Event, Context) bool { return false }
 
-// Decide is the pure rule evaluation. Until step 6 only the state and arm
-// filters exist, and nothing matches yet.
+// Decide is the pure rule evaluation of the state and arm filters, with a
+// matcher that matches nothing: it is the verdict of the rows for an event, with
+// no tool call to read. Walls and policies are matched by walls.Decide, through
+// DecideWith.
 func Decide(rows []Row, ev Event, ctx Context) []Action {
 	return decide(rows, ev, ctx, noMatch)
 }

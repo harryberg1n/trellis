@@ -53,8 +53,7 @@ const (
 	Block
 )
 
-// Class is the cost class of a row. The run package does not exist yet, so it
-// is defined here; move it there when it does.
+// Class is the cost class of a row.
 type Class int
 
 // The cost classes: Light rows run inline, Heavy rows take real time, Bulk rows

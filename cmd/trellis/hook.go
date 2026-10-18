@@ -10,6 +10,7 @@ import (
 	"github.com/harryberg1n/trellis/internal/hook"
 	"github.com/harryberg1n/trellis/internal/objects"
 	runner "github.com/harryberg1n/trellis/internal/run"
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/walls"
 )
 
@@ -38,15 +39,19 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 		Clock:  clk,
 		Rows:   walls.Rows(),
 	}
-	// In the user's cache dir (private to them, unlike a shared temp dir), not
-	// under the state root: it is for when the state root is what failed.
-	if cache, err := os.UserCacheDir(); err == nil {
-		deps.Fallback = filepath.Join(cache, "trellis", "fallback")
-		if os.MkdirAll(deps.Fallback, 0o700) != nil {
-			deps.Fallback = ""
-		}
-	}
 	repo, err := objects.Open(hook.PayloadCwd(raw))
+	// The fallback is for when the state root is what failed, so it sits in
+	// the user's cache dir (private to them), beside the state root and not
+	// inside it, one directory per repo so the next good run folds its own.
+	// Nothing creates it until an event is parked.
+	cache, cerr := os.UserCacheDir()
+	if cerr == nil {
+		id := "unscoped"
+		if err == nil {
+			id = store.RepoID(repo.Remote, repo.Root)
+		}
+		deps.Fallback = filepath.Join(cache, "trellis-fallback", id)
+	}
 	if err == nil {
 		deps.Repo = &repo
 		deps.Store, err = storeOf(repo, clk)

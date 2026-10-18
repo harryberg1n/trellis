@@ -1,17 +1,20 @@
 package mask
 
 // Bash is the row of aphrollo-tools internal/lang/languages/shell.toml at
-// 12b3724e, written as a Go value: `#` opens a comment only at the start of a
-// word, a backslash outside a string escapes the next byte, a single-quoted
-// string has no escapes and a double-quoted one has the backslash. Incident:
-// a quoted `git reset --hard` or `--no-verify` in an echo or a commit message
-// was read as the command it names.
+// 12b3724e, written as a Go value, plus the $'...' form that row lacks: `#`
+// opens a comment only at the start of a word, a backslash outside a string
+// escapes the next byte, a $'...' string takes a backslash escape (so
+// `$'it's'` is one string), a single-quoted string has no escapes and a
+// double-quoted one has the backslash. Incident: a quoted `git reset --hard`
+// or `--no-verify` in an echo or a commit message was read as the command it
+// names.
 func Bash() Language {
 	return Language{
 		Name:         "bash",
 		CodeEscape:   true,
 		LineComments: []LineComment{{Marker: "#", WordStart: true}},
 		Strings: []StringForm{
+			{ID: "ansi-c", Open: "$'", Close: "'", Escape: EscapeBackslash, Multiline: true},
 			{ID: "single", Open: "'", Close: "'", Escape: EscapeNone, Multiline: true},
 			{ID: "double", Open: `"`, Close: `"`, Escape: EscapeBackslash, Multiline: true},
 		},

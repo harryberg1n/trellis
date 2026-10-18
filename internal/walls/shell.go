@@ -108,7 +108,7 @@ const maxDepth = 4
 
 // walk calls fn with every simple command cmd runs and the directory it runs
 // in: cwd, moved by a `cd` segment for the segments after it. It follows the
-// script of a `<shell> -c` segment and the body of each unquoted `$(...)`.
+// script of a `<shell> -c` or `eval` segment and the body of each `$(...)` outside single quotes.
 // With keepBodies set, heredoc bodies are scanned as part of the command (a
 // commit message is one); otherwise they are data and dropped.
 func walk(tool, cmd, cwd string, keepBodies bool, fn func(seg []word, dir string)) {
@@ -124,20 +124,56 @@ func walkDepth(tool, cmd, cwd string, keepBodies bool, depth int, fn func([]word
 		src = stripHeredocBodies(cmd)
 	}
 	dir := cwd
-	segs, masked := parse(tool, src)
+	segs := parse(tool, src)
+	gitDir := "" // GIT_DIR as an earlier `export` of this command left it
 	for _, seg := range segs {
 		if target, ok := cdTarget(seg); ok {
 			dir = resolve(dir, target)
 			continue
 		}
+		if v, ok := exportedGitDir(seg); ok {
+			gitDir = v
+		}
+		if gitDir != "" {
+			seg = withGitDir(seg, gitDir)
+		}
 		fn(seg, dir)
-		if script, ok := dashCScript(seg); ok {
+		if script, ok := inlineScript(seg); ok {
 			walkDepth(tool, script, dir, keepBodies, depth+1, fn)
 		}
 	}
-	for _, body := range substitutionBodies(src, masked) {
+	esc := byte('\\')
+	if isPowerShell(tool) {
+		esc = '`'
+	}
+	for _, body := range substitutionBodies(src, esc) {
 		walkDepth(tool, body, dir, keepBodies, depth+1, fn)
 	}
+}
+
+// exportedGitDir is the GIT_DIR an `export` segment sets.
+func exportedGitDir(seg []word) (string, bool) {
+	i := commandStart(seg)
+	if i >= len(seg) || seg[i].text != "export" {
+		return "", false
+	}
+	for _, w := range seg[i+1:] {
+		if v, ok := strings.CutPrefix(w.text, "GIT_DIR="); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// withGitDir is a git segment with GIT_DIR=dir put in front of its command, as
+// if it had been written there; any other segment is returned as it is.
+func withGitDir(seg []word, dir string) []word {
+	i := commandStart(seg)
+	if i >= len(seg) || baseCommand(seg[i].text) != "git" {
+		return seg
+	}
+	assign := "GIT_DIR=" + dir
+	return append([]word{{text: assign, raw: assign}}, seg...)
 }
 
 // changesDir are the commands that move the shell's directory, in bash and
@@ -160,49 +196,183 @@ func cdTarget(seg []word) (string, bool) {
 	return "", true
 }
 
-// dashCScript is the script a `bash -c`, `sh -c` or `zsh -c` segment runs.
-func dashCScript(seg []word) (string, bool) {
-	if len(seg) == 0 {
+// shells are the programs whose -c argument is a script.
+var shells = map[string]bool{"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true}
+
+// inlineScript is the script a `bash -c` segment (any of -c, -lc, -ec...) or
+// an `eval` segment runs, found behind any env, sudo or xargs prefix.
+func inlineScript(seg []word) (string, bool) {
+	if script, ok := envSplitString(seg); ok {
+		return script, true
+	}
+	i := commandStart(seg)
+	if i >= len(seg) {
 		return "", false
 	}
-	switch baseCommand(seg[0].text) {
-	case "bash", "sh", "zsh":
-	default:
+	name := baseCommand(seg[i].text)
+	args := seg[i+1:]
+	if name == "eval" {
+		if len(args) == 0 {
+			return "", false
+		}
+		return strings.Join(texts(args), " "), true
+	}
+	if !shells[name] {
 		return "", false
 	}
-	for i := 1; i+1 < len(seg); i++ {
-		if seg[i].text == "-c" {
-			return seg[i+1].text, true
+	for j, a := range args {
+		if isDashC(a.text) && j+1 < len(args) {
+			return args[j+1].text, true
 		}
 	}
 	return "", false
 }
 
-// substitutionBodies is the text of every `$(...)` that src runs. masked is
-// src with its strings blanked: a `$(` inside single quotes is data. Nested
-// parentheses are balanced.
-func substitutionBodies(src, masked string) []string {
-	var bodies []string
-	for i := 0; i+1 < len(masked); i++ {
-		if masked[i] != '$' || masked[i+1] != '(' {
+// envSplitString is the command line of an `env -S 'cmd args'` segment, and
+// the words after it.
+func envSplitString(seg []word) (string, bool) {
+	for i, w := range seg {
+		if baseCommand(w.text) != "env" {
 			continue
 		}
-		depth := 1
-		j := i + 2
-		for ; j < len(masked) && depth > 0; j++ {
-			switch masked[j] {
-			case '(':
-				depth++
-			case ')':
-				depth--
+		for j := i + 1; j < len(seg); j++ {
+			t := seg[j].text
+			if v, ok := strings.CutPrefix(t, "--split-string="); ok {
+				return strings.Join(append([]string{v}, texts(seg[j+1:])...), " "), true
+			}
+			if (t == "-S" || t == "--split-string") && j+1 < len(seg) {
+				return strings.Join(texts(seg[j+1:]), " "), true
+			}
+			if !strings.HasPrefix(t, "-") && !strings.Contains(t, "=") {
+				break
 			}
 		}
-		if depth == 0 {
-			bodies = append(bodies, src[i+2:j-1])
-			i = j - 1
+	}
+	return "", false
+}
+
+// isDashC reports whether opt is a short-option cluster that ends in c:
+// -c, -lc, -ec.
+func isDashC(opt string) bool {
+	if len(opt) < 2 || opt[0] != '-' || opt[1] == '-' {
+		return false
+	}
+	for _, r := range opt[1:] {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return opt[len(opt)-1] == 'c'
+}
+
+// substitutionBodies is the text of every `$(...)` that src runs, inside
+// double quotes or outside any. A `$(` in single quotes or a $'...' string,
+// after a backslash, or in a comment is data. Nested parentheses are balanced.
+// esc is the escape rune of the tool's quotes.
+func substitutionBodies(src string, esc byte) []string {
+	var bodies []string
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case esc:
+			i++
+		case '`':
+			if esc != '`' {
+				if end := backtickEnd(src, i); end > i {
+					bodies = append(bodies, src[i+1:end])
+					i = end
+				}
+			}
+		case '#':
+			if wordStart(src, i) {
+				for i < len(src) && src[i] != '\n' {
+					i++
+				}
+			}
+		case '\'':
+			i = quoteEnd(src, i, '\'', esc)
+		case '"':
+			for i++; i < len(src) && src[i] != '"'; i++ {
+				switch {
+				case src[i] == esc:
+					i++
+				case src[i] == '`' && esc != '`':
+					if end := backtickEnd(src, i); end > i {
+						bodies = append(bodies, src[i+1:end])
+						i = end
+					}
+				case src[i] == '$' && i+1 < len(src) && src[i+1] == '(':
+					if end := closeParen(src, i+2); end >= 0 {
+						bodies = append(bodies, src[i+2:end])
+						i = end
+					}
+				}
+			}
+		case '$':
+			if i+1 < len(src) && src[i+1] == '(' {
+				if end := closeParen(src, i+2); end >= 0 {
+					bodies = append(bodies, src[i+2:end])
+					i = end
+				}
+			} else if i+1 < len(src) && src[i+1] == '\'' {
+				i = quoteEnd(src, i+1, '\'', '\\')
+			}
 		}
 	}
 	return bodies
+}
+
+// backtickEnd is the index of the backtick that closes the one at src[i], or
+// -1; a backslash escapes the byte after it.
+func backtickEnd(src string, i int) int {
+	for j := i + 1; j < len(src); j++ {
+		switch src[j] {
+		case '\\':
+			j++
+		case '`':
+			return j
+		}
+	}
+	return -1
+}
+
+// wordStart reports whether src[i] begins a word.
+func wordStart(src string, i int) bool {
+	return i == 0 || strings.IndexByte(" \t\n;&|()<>", src[i-1]) >= 0
+}
+
+// quoteEnd is the index of the quote that closes the one opening at src[i]
+// (len(src) when there is none). esc escapes inside it; pass 0 for none.
+func quoteEnd(src string, i int, quote, esc byte) int {
+	for i++; i < len(src) && src[i] != quote; i++ {
+		if esc != 0 && src[i] == esc {
+			i++
+		}
+	}
+	return min(i, len(src))
+}
+
+// closeParen is the index of the `)` that closes the group whose body starts
+// at src[from], or -1. Quotes inside the body are skipped.
+func closeParen(src string, from int) int {
+	depth := 1
+	for j := from; j < len(src); j++ {
+		switch src[j] {
+		case '\\':
+			j++
+		case '\'':
+			j = quoteEnd(src, j, '\'', 0)
+		case '"':
+			j = quoteEnd(src, j, '"', '\\')
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
 }
 
 // resolve turns a command's path operand into an absolute path: "" for the
@@ -213,6 +383,9 @@ func resolve(cwd, p string) string {
 		return ""
 	}
 	rooted := strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)
+	if drive, ok := msysDrive(p); ok {
+		return filepath.Clean(drive)
+	}
 	p = filepath.FromSlash(p)
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)
@@ -458,22 +631,59 @@ type gitCall struct {
 	Args    []string
 }
 
-// prefixes are the words that run the command after them.
-var prefixes = map[string]bool{"env": true, "command": true, "exec": true, "time": true, "nohup": true, "sudo": true}
+// prefixOptions are the words that run the command after them, each with the
+// options that take their value as the next argument.
+var prefixOptions = map[string]map[string]bool{
+	"env":     {"-u": true, "-C": true, "-S": true, "--unset": true, "--chdir": true},
+	"sudo":    {"-u": true, "-g": true, "-h": true, "-p": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true, "-r": true, "-t": true, "--user": true, "--group": true},
+	"xargs":   {"-I": true, "-L": true, "-n": true, "-P": true, "-s": true, "-d": true, "-E": true, "-a": true, "--max-args": true, "--max-procs": true, "--delimiter": true, "--arg-file": true},
+	"nice":    {"-n": true},
+	"timeout": {"-s": true, "-k": true, "--signal": true, "--kill-after": true},
+	"stdbuf":  {"-i": true, "-o": true, "-e": true},
+	"setsid":  {},
+	"ionice":  {"-c": true, "-n": true, "-p": true, "-P": true, "-u": true},
+	"exec":    {"-a": true},
+	"command": {},
+	"time":    {"-f": true, "-o": true},
+	"nohup":   {},
+}
+
+// prefixPositional are the prefixes that take that many plain arguments
+// before the command they run: `timeout 5 git ...`.
+var prefixPositional = map[string]int{"timeout": 1}
+
+// commandStart is the index in seg of the program the segment runs: past
+// NAME=value assignments and past env, sudo, xargs and the like with their
+// options. It is len(seg) when nothing follows.
+func commandStart(seg []word) int {
+	i := 0
+	for i < len(seg) {
+		t := seg[i].text
+		opts, isPrefix := prefixOptions[baseCommand(t)]
+		switch {
+		case isPrefix:
+			i++
+			for i < len(seg) && strings.HasPrefix(seg[i].text, "-") && seg[i].text != "-" {
+				if opts[seg[i].text] {
+					i++
+				}
+				i++
+			}
+			i += prefixPositional[baseCommand(t)]
+		case strings.Contains(t, "=") && !strings.HasPrefix(t, "-"):
+			i++
+		default:
+			return i
+		}
+	}
+	return len(seg)
+}
 
 // parseGit reads a segment as a git call, or reports that it is not one. git's
 // own leading options are read out of the way, so `git -C d -c k=v commit` is
 // a commit in d with the setting k=v.
 func parseGit(seg []word, dir string) (gitCall, bool) {
-	i := 0
-	for i < len(seg) {
-		t := seg[i].text
-		if prefixes[baseCommand(t)] || strings.Contains(t, "=") && !strings.HasPrefix(t, "-") {
-			i++
-			continue
-		}
-		break
-	}
+	i := commandStart(seg)
 	if i >= len(seg) || baseCommand(seg[i].text) != "git" {
 		return gitCall{}, false
 	}
@@ -484,6 +694,22 @@ func parseGit(seg []word, dir string) (gitCall, bool) {
 	call := gitCall{Dir: dir, Globals: g.Config, Verb: g.Verb, Args: g.Rest}
 	for _, d := range g.Dirs {
 		call.Dir = resolve(call.Dir, d)
+	}
+	// The repository whose branch the call moves is the one the git dir names,
+	// whatever directory it runs in: GIT_DIR=<primary>/.git from a tree commits
+	// on the primary's branch.
+	gitDir := g.GitDir
+	for _, w := range seg[:i] {
+		if v, ok := strings.CutPrefix(w.text, "GIT_DIR="); ok && gitDir == "" {
+			gitDir = v
+		}
+	}
+	if gitDir != "" {
+		gd := resolve(call.Dir, gitDir)
+		if filepath.Base(gd) == ".git" {
+			gd = filepath.Dir(gd)
+		}
+		call.Dir = gd
 	}
 	return call, true
 }

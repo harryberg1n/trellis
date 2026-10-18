@@ -55,7 +55,7 @@ func TestHook_NoEventIsAUsageErrorThatDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestHook_FallbackLivesInTheUserCacheDir(t *testing.T) {
+func TestHook_FallbackLivesBesideTheStateRootInTheUserCacheDir(t *testing.T) {
 	bin := build(t)
 	repo := testiso.Repo(t)
 	cache := t.TempDir()
@@ -71,9 +71,11 @@ func TestHook_FallbackLivesInTheUserCacheDir(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q, stderr %q; want 0, empty, empty", code, stdout, stderr)
 	}
 
-	m, _ := filepath.Glob(filepath.Join(cache, "*", "trellis", "fallback", "events.pending", "*.json"))
-	m2, _ := filepath.Glob(filepath.Join(cache, "trellis", "fallback", "events.pending", "*.json"))
-	if len(m)+len(m2) != 1 {
-		t.Errorf("fallback events under the cache dir %s: %v %v; want exactly one", cache, m, m2)
+	m, _ := filepath.Glob(filepath.Join(cache, "trellis-fallback", "*", "events.pending", "*.json"))
+	if len(m) != 1 {
+		t.Errorf("fallback events under %s/trellis-fallback/<repo id>/events.pending: %v; want exactly one", cache, m)
+	}
+	if in, _ := filepath.Glob(filepath.Join(cache, "trellis", "*")); len(in) != 0 {
+		t.Errorf("%v: the fallback must sit beside the state root, not inside it", in)
 	}
 }

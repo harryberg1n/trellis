@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,15 +182,72 @@ func parseTurns(raw []byte) []turn {
 	return out
 }
 
-// TreeCosts is the agent dollars per tree at list price, from the transcripts.
-func TreeCosts(f Facts) map[string]float64 {
-	out := map[string]float64{}
-	for _, u := range f.Usage {
-		for _, t := range parseTurns(u.Transcript) {
-			out[u.Tree] += costUSD(t.model, t.tok)
+// treeOf is the tree a reply at t belongs to in usage u.
+// marks must be in time order.
+func (u Usage) treeOf(marks []TreeMark, t time.Time) string {
+	for _, m := range marks {
+		if !m.At.Before(t) {
+			return m.Tree
 		}
 	}
+	if n := len(marks); n > 0 {
+		return marks[n-1].Tree
+	}
+	return u.Tree
+}
+
+// marked is a reply with the tree it is charged to.
+type marked struct {
+	turn
+	tree string
+}
+
+// turns are the replies of the usage's transcript, each with its tree.
+func (u Usage) turns() []marked {
+	ts := parseTurns(u.Transcript)
+	// The log is in append order, not time order: an event folded from the
+	// fallback store carries an old time and lands at the end.
+	marks := slices.Clone(u.Marks)
+	sort.SliceStable(marks, func(i, j int) bool { return marks[i].At.Before(marks[j].At) })
+	out := make([]marked, len(ts))
+	for i, t := range ts {
+		out[i] = marked{t, u.treeOf(marks, t.at)}
+	}
 	return out
+}
+
+// Unpriced counts the tokens whose model has no price, so a cost of 0 for them
+// is not read as free. Every tree with usage is in the cost map, unpriced or not.
+type Unpriced struct {
+	Tokens int64    // input and output tokens, all trees
+	Models []string // the models with no price, sorted
+}
+
+// TreeCosts is the agent dollars per tree at list price, from the transcripts.
+func TreeCosts(f Facts) map[string]float64 {
+	costs, _ := Costs(f)
+	return costs
+}
+
+// Costs is TreeCosts and the tokens it could not price.
+func Costs(f Facts) (map[string]float64, Unpriced) {
+	out := map[string]float64{}
+	var un Unpriced
+	models := map[string]bool{}
+	for _, u := range f.Usage {
+		for _, t := range u.turns() {
+			if _, ok := priceFor(t.model); !ok {
+				n := t.tok.Fresh + t.tok.Output
+				un.Tokens += n
+				models[t.model] = true
+				out[t.tree] += 0 // a tree of unpriced usage still has usage
+				continue
+			}
+			out[t.tree] += costUSD(t.model, t.tok)
+		}
+	}
+	un.Models = sortedKeys(models)
+	return out, un
 }
 
 // RowCost is the net_cost inputs of one table row: what its denies injected
@@ -217,8 +275,8 @@ type RowCost struct {
 func RowCosts(f Facts) []RowCost {
 	times := map[string][]time.Time{}
 	for _, u := range f.Usage {
-		for _, t := range parseTurns(u.Transcript) {
-			times[u.Tree] = append(times[u.Tree], t.at)
+		for _, t := range u.turns() {
+			times[t.tree] = append(times[t.tree], t.at)
 		}
 	}
 	withUsage := map[string]bool{}

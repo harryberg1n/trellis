@@ -123,13 +123,13 @@ func TestWriteTargets(t *testing.T) {
 }
 
 func TestParseGit_ReadsGlobalOptionsOutOfTheWay(t *testing.T) {
-	seg := segments("Bash", `FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
+	seg := parse("Bash", `FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
 	got, ok := parseGit(seg, filepath.FromSlash("/w"))
 	want := gitCall{Dir: filepath.FromSlash("/w/sub"), Globals: []string{"core.hooksPath=/h"}, Verb: "commit", Args: []string{"-m", "x y"}}
 	if !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("parseGit = %+v, %v; want %+v", got, ok, want)
 	}
-	if _, ok := parseGit(segments("Bash", "echo git commit")[0], "/w"); ok {
+	if _, ok := parseGit(parse("Bash", "echo git commit")[0], "/w"); ok {
 		t.Error("echo git commit read as a git call")
 	}
 }
@@ -145,6 +145,7 @@ func TestTokenize_PerTool(t *testing.T) {
 		{"powershell doubled quote", "PowerShell", `echo 'it''s' "say ""x"""`, [][]string{{"echo", "it's", `say "x"`}}},
 		{"powershell here-string", "PowerShell", "echo @\"\nline one\nline two\n\"@ tail", [][]string{{"echo", "line one\nline two\n", "tail"}}},
 		{"comment hides a separator", "Bash", "git status # note; git reset --hard", [][]string{{"git", "status"}}},
+		{"double quotes keep a backslash before other runes", "Bash", `echo "C:\Users\x" "a\"b" "a\$b" "c\\d"`, [][]string{{"echo", `C:\Users\x`, `a"b`, `a$b`, `c\d`}}},
 		{"quoted separator", "Bash", `echo "a; b" && ls`, [][]string{{"echo", "a; b"}, {"ls"}}},
 		{"escaped separator", "Bash", `echo a\;b; ls`, [][]string{{"echo", "a;b"}, {"ls"}}},
 		{"redirect ampersand", "Bash", `make 2>&1 | tee log`, [][]string{{"make", "2>&1"}, {"tee", "log"}}},
@@ -153,11 +154,105 @@ func TestTokenize_PerTool(t *testing.T) {
 	}
 	for _, c := range cases {
 		var got [][]string
-		for _, seg := range segments(c.tool, c.cmd) {
+		for _, seg := range parse(c.tool, c.cmd) {
 			got = append(got, texts(seg))
 		}
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: segments = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestGitCalls_InsideShellConstructs(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		verbs     []string
+		bypass    bool
+	}{
+		{"subshell", `(git commit --no-verify)`, []string{"commit"}, true},
+		{"brace group", `{ git commit --no-verify; }`, []string{"commit"}, true},
+		{"if", `if true; then git commit --no-verify; fi`, []string{"commit"}, true},
+		{"negation", `! git commit --no-verify`, []string{"commit"}, true},
+		{"for loop", `for f in a; do git reset --hard; done`, []string{"reset"}, false},
+		{"bash -lc", `bash -lc 'git commit --no-verify'`, []string{"commit"}, true},
+		{"sh -ec", `sh -ec "git commit --no-verify"`, []string{"commit"}, true},
+		{"eval", `eval "git commit --no-verify"`, []string{"commit"}, true},
+		{"env -i", `env -i git commit --no-verify`, []string{"commit"}, true},
+		{"env -u NAME", `env -u FOO BAR=1 git commit --no-verify`, []string{"commit"}, true},
+		{"sudo -u", `sudo -u x git commit --no-verify`, []string{"commit"}, true},
+		{"sudo bash -c", `sudo bash -c 'git commit --no-verify'`, []string{"commit"}, true},
+		{"xargs", `xargs git commit --no-verify`, []string{"commit"}, true},
+		{"substitution in double quotes", `echo "$(git commit --no-verify)"`, []string{"commit"}, true},
+		{"substitution in single quotes is data", `echo '$(git commit --no-verify)'`, nil, false},
+		{"ansi-c quote with an escaped quote", `git commit -m $'it\'s' --no-verify`, []string{"commit"}, true},
+		{"ansi-c quote alone is no bypass", `git commit -m $'it\'s --no-verify'`, []string{"commit"}, false},
+		{"quoted parenthesis is data", `git commit -m '(x)' -m "{ y; }"`, []string{"commit"}, false},
+		{"plain substitution counted once", `echo $(git commit --no-verify)`, []string{"commit"}, true},
+		{"nested depth", `(if true; then bash -c "git push --no-verify"; fi)`, []string{"push"}, true},
+		{"while", `while true; do git commit -n; done`, []string{"commit"}, true},
+		{"backticks", "echo `git commit --no-verify`", []string{"commit"}, true},
+		{"backticks in double quotes", "echo \"x `git commit --no-verify`\"", []string{"commit"}, true},
+		{"backticks in single quotes are data", "echo '`git commit --no-verify`'", nil, false},
+		{"timeout", `timeout 5 git commit --no-verify`, []string{"commit"}, true},
+		{"timeout with options", `timeout -s KILL -k 2 5 git commit --no-verify`, []string{"commit"}, true},
+		{"stdbuf", `stdbuf -oL -e0 git commit --no-verify`, []string{"commit"}, true},
+		{"setsid", `setsid git commit --no-verify`, []string{"commit"}, true},
+		{"ionice", `ionice -c 3 -n 7 git commit --no-verify`, []string{"commit"}, true},
+		{"nice", `nice -n 5 git commit --no-verify`, []string{"commit"}, true},
+		{"env -S", `env -S 'git commit --no-verify'`, []string{"commit"}, true},
+		{"exported GIT_DIR from an earlier segment", `export GIT_DIR=/x/.git; git commit --no-verify`, []string{"commit"}, true},
+		// Known gaps, left open on purpose: a heredoc fed to a shell (`bash <<EOF`),
+		// a script piped to one (`echo ... | sh`), a command held in a variable
+		// and another language's -c (`python -c`) are not read.
+		{"heredoc to a shell is a known gap", "bash <<EOF\ngit commit --no-verify\nEOF", nil, false},
+		{"pipe to a shell is a known gap", `echo "git commit --no-verify" | sh`, nil, false},
+		{"variable is a known gap", `c="git commit --no-verify"; $c`, nil, false},
+		{"python -c is a known gap", `python -c "import os; os.system('git commit --no-verify')"`, nil, false},
+	}
+	for _, c := range cases {
+		a := &analysis{tool: "Bash", cwd: t.TempDir(), command: c.cmd}
+		var verbs []string
+		for _, call := range a.gitCalls() {
+			verbs = append(verbs, call.Verb)
+		}
+		if !reflect.DeepEqual(verbs, c.verbs) {
+			t.Errorf("%s: %q: git verbs %q, want %q", c.name, c.cmd, verbs, c.verbs)
+		}
+		if got := hookBypass(a) != ""; got != c.bypass {
+			t.Errorf("%s: %q: hook-bypass deny = %v, want %v", c.name, c.cmd, got, c.bypass)
+		}
+	}
+}
+
+func TestAllowPeople_DeniesAnAgentRunningTrellisAllow(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{`trellis allow primary-write`, "allow is for a person: ask them to run trellis allow primary-write"},
+		{`"$HOME/.local/state/trellis/bin/v0.0.6/trellis" allow x`, "allow is for a person: ask them to run trellis allow x"},
+		{`(trellis allow x)`, "allow is for a person: ask them to run trellis allow x"},
+		{`bash -lc 'trellis allow x'`, "allow is for a person: ask them to run trellis allow x"},
+		{`cd sub && trellis allow main-commit && git push`, "allow is for a person: ask them to run trellis allow main-commit"},
+		{`trellis allow`, "allow is for a person: ask them to run trellis allow <row>"},
+		{`sudo -u x env A=1 trellis allow x`, "allow is for a person: ask them to run trellis allow x"},
+		{`echo trellis allow`, ""},
+		{`grep trellis allow README`, ""},
+		{`git log --grep trellis allow`, ""},
+		{`trellis report`, ""},
+		{`trellis tree merge`, ""},
+		{`echo allow`, ""},
+		{`git commit -m "trellis allow x"`, ""},
+	}
+	for _, c := range cases {
+		a := &analysis{tool: "Bash", cwd: t.TempDir(), command: c.cmd}
+		if got := allowPeople(a); got != c.want {
+			t.Errorf("%q: allowPeople = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	got := DenyLine(AllowPeople, "allow is for a person: ask them to run trellis allow x")
+	want := "trellis: allow-people: allow is for a person: ask them to run trellis allow x. Override: none."
+	if got != want {
+		t.Errorf("DenyLine = %q, want %q", got, want)
 	}
 }

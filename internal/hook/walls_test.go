@@ -21,6 +21,8 @@ func (e *env) pre(t testing.TB, cwd, command string, session bool) (code int, st
 	var opts []testiso.PayloadOption
 	if session {
 		opts = append(opts, testiso.WithSession("s-1"))
+	} else {
+		opts = append(opts, testiso.AsPerson())
 	}
 	raw := testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolBash, cwd, map[string]string{"command": command}, opts...)
 	var out, errb bytes.Buffer

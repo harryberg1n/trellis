@@ -68,7 +68,7 @@ func AnchorTurn(r run.Runner, repo, branch, _ string, blobs map[string]string) (
 	for p, id := range blobs {
 		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
 	}
-	st, err := Git(r, repo, nil, "status", "-z", "--untracked-files=all")
+	st, err := Git(r, repo, nil, "--no-optional-locks", "status", "-z", "--untracked-files=all")
 	if err != nil {
 		return "", "", err
 	}

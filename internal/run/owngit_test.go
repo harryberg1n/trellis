@@ -105,6 +105,7 @@ func TestOwnGitState_Forms(t *testing.T) {
 		{"read verb for-each-ref", gitSpec("", "", "for-each-ref", "x"), false},
 		{"read verb merge-base", gitSpec("", "", "merge-base", "x"), false},
 		{"read verb status", gitSpec("", "", "status", "x"), false},
+		{"read verb check-ignore", gitSpec("", "", "check-ignore", "-q", "--", "x"), false},
 		{"not git", Spec{Name: "go", Args: []string{"update-ref", "refs/heads/x"}, Timeout: time.Minute}, false},
 		{"git by path", Spec{Name: filepath.Join(string(filepath.Separator), "usr", "bin", "git"), Args: []string{"update-ref", "refs/heads/x", "a"}, Timeout: time.Minute}, true},
 		{"git.exe by path", Spec{Name: filepath.Join(string(filepath.Separator), "opt", "Git", "cmd", "GIT.EXE"), Args: []string{"update-ref", "refs/heads/x", "a"}, Timeout: time.Minute}, true},

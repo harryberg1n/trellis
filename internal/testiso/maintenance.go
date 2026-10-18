@@ -26,8 +26,8 @@ var maintenanceOff = [][2]string{
 // failing the cleanup with "directory not empty" (#1004). The settings ride
 // GIT_CONFIG_COUNT so a fixture repo's own config cannot switch them back on. With the global
 // config sealed away, git falls back to the repository's own .git/hooks, and on
-// a box with the gate installed that holds the real post-commit shim: a commit a
-// test leaks would run it and leave the record the canary reads as the owner's.
+// a box with git hooks installed that holds a real post-commit hook: a commit a
+// test leaks would run it and leave a record the canary reads as the owner's.
 // An environment config entry outranks the repository's own, so the repo cannot
 // switch its hooks back on.
 func disableMaintenanceAndHooks(hooksDir string, set func(key, value string)) {

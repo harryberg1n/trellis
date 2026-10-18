@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,7 +71,7 @@ func WithLockTimeout(d time.Duration) Option {
 
 // Open prepares repoDir and returns its Store.
 func Open(repoDir string, c clock.Clock, opts ...Option) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), dirMode); err != nil {
 		return nil, err
 	}
 	s := &Store{dir: repoDir, clock: c, rename: os.Rename, remove: os.Remove, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
@@ -137,16 +139,38 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		return nil, nil
 	}
 	tx.folded = true
-	files, err := filepath.Glob(filepath.Join(tx.s.pendingDir(), "*.json"))
+	return tx.foldDir(tx.s.pendingDir(), stamp, 0)
+}
+
+// FoldFallback appends the events parked in dir/events.pending, a fallback
+// store another process wrote when this one was unusable, oldest first, and
+// removes their files. At most limit files are taken (0 means all). A dir that
+// is not there folds nothing.
+func (tx *Tx) FoldFallback(dir string, limit int) ([]kernel.Event, error) {
+	return tx.foldDir(filepath.Join(dir, "events.pending"), nil, limit)
+}
+
+type parked struct {
+	name string
+	ev   kernel.Event
+}
+
+// readParked reads the *.json files of dir. An unreadable one is set aside as
+// .bad. A dir that is not there holds nothing.
+func readParked(dir string) ([]parked, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	type parked struct {
-		name string
-		ev   kernel.Event
-	}
 	var ps []parked
-	for _, name := range files {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		name := filepath.Join(dir, e.Name())
 		raw, err := os.ReadFile(name)
 		var ev kernel.Event
 		if err == nil {
@@ -159,6 +183,14 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 			continue
 		}
 		ps = append(ps, parked{name, ev})
+	}
+	return ps, nil
+}
+
+func (tx *Tx) foldDir(dir string, stamp func(kernel.Event) kernel.Event, limit int) ([]kernel.Event, error) {
+	ps, err := readParked(dir)
+	if err != nil {
+		return nil, err
 	}
 	// A fold that crashed after its append left the file behind; its event is
 	// already in the log, so drop the file instead of appending it again.
@@ -192,6 +224,9 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		}
 		return ps[i].name < ps[j].name
 	})
+	if limit > 0 && len(ps) > limit {
+		ps = ps[:limit]
+	}
 	evs := make([]kernel.Event, len(ps))
 	for i, p := range ps {
 		evs[i] = p.ev
@@ -209,6 +244,44 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		_ = tx.s.remove(p.name)
 	}
 	return out, nil
+}
+
+// CapParked keeps at most limit files in events.pending and removes the oldest
+// (by modification time, then name) beyond that.
+func (s *Store) CapParked(limit int) error {
+	entries, err := os.ReadDir(s.pendingDir())
+	if err != nil {
+		return err
+	}
+	type file struct {
+		name string
+		mod  time.Time
+	}
+	var files []file
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			files = append(files, file{e.Name(), info.ModTime()})
+		}
+	}
+	if len(files) <= limit {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if !files[i].mod.Equal(files[j].mod) {
+			return files[i].mod.Before(files[j].mod)
+		}
+		return files[i].name < files[j].name
+	})
+	var errs []error
+	for _, f := range files[:len(files)-limit] {
+		if err := s.remove(filepath.Join(s.pendingDir(), f.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Append folds in parked events (once), then appends evs.
@@ -241,7 +314,7 @@ func (tx *Tx) appendRaw(evs []kernel.Event) ([]kernel.Event, error) {
 		buf.WriteByte('\n')
 		out[i] = ev
 	}
-	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(tx.s.logPath(), os.O_APPEND|os.O_CREATE|os.O_RDWR, fileMode)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +363,7 @@ func (s *Store) Park(ev kernel.Event) error {
 	// Synced through the file's own Sync, not the store's seam: a parked event
 	// is never a Lazy write.
 	return WriteAtomic(s.pendingDir(), name+".json", raw,
-		WithSync((*os.File).Sync), WithMode(0o644))
+		WithSync((*os.File).Sync), WithMode(fileMode))
 }
 
 // BytesRead is how many log bytes this Store has read, for tests that pin
@@ -320,7 +393,12 @@ func (s *Store) Skipped() int {
 }
 
 // skip appends a line that does not parse to events.quarantine, once per
-// offset per Store. Failing to write it must not fail the read.
+// offset. The claim on an offset is a file made with O_EXCL in
+// events.quarantine.at: creating it is the check and the claim in one step, so
+// two processes reading the same junk line cannot both set it aside, with no
+// lock to take (the caller may hold it already). A line with no offset in the
+// log (off < 0: a corrupt checkpoint) is kept once per Store. Failing to write
+// it must not fail the read.
 func (s *Store) skip(l logLine) {
 	s.skipMu.Lock()
 	defer s.skipMu.Unlock()
@@ -328,7 +406,10 @@ func (s *Store) skip(l logLine) {
 		return
 	}
 	s.skipped[l.off] = true
-	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if l.off >= 0 && !s.claimQuarantine(l.off) {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(s.dir, "events.quarantine"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, fileMode)
 	if err != nil {
 		return
 	}
@@ -336,6 +417,22 @@ func (s *Store) skip(l logLine) {
 	// line is not quarantined, and the read must not fail for it.
 	_, _ = f.Write(append(append([]byte(nil), l.raw...), newline))
 	_ = f.Close()
+}
+
+// claimQuarantine reports whether this call is the first, in any process, to
+// claim the log offset. A directory that cannot be made claims nothing, and
+// the line is then set aside once per Store, as for a checkpoint.
+func (s *Store) claimQuarantine(off int64) bool {
+	dir := filepath.Join(s.dir, "events.quarantine.at")
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return true
+	}
+	f, err := os.OpenFile(filepath.Join(dir, strconv.FormatInt(off, 10)), os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
+	if err != nil {
+		return !errors.Is(err, os.ErrExist)
+	}
+	_ = f.Close()
+	return true
 }
 
 type logLine struct {

@@ -17,10 +17,6 @@ import (
 // with BuildRepo, and each test takes a copy with CopyRepo — a repo in its own
 // right, with its own objects, index and HEAD.
 
-// queuedMarker is the variable the git queue shim reads as "run straight
-// through"; a fixture's own git has no business queueing behind the box.
-const queuedMarker = "APHROLLO_GIT_QUEUED=1"
-
 // BuildRepo makes dir a git repo on main with an identity and one commit
 // holding files (path relative to dir -> content), or no commit at all when
 // there are none. Call it from TestMain,
@@ -80,7 +76,7 @@ func BuildRepo(dir string, files map[string]string) error {
 // the build is the same whichever test first asks for the template.
 func buildEnv() []string {
 	env := dropGit(os.Environ())
-	return append(env, queuedMarker, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+	return append(env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
 }
 
 // CopyRepo copies a repo BuildRepo made into dst. It never overwrites: a

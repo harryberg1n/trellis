@@ -47,6 +47,13 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		for tree, arms := range cp.Arms {
 			sticky.Observe(kernel.Event{Tree: tree, Arms: arms})
 		}
+		// A checkpoint ahead of the log names events the log lost (a lazy write
+		// cut by a power loss): none of its state can be trusted, so it is
+		// rebuilt from the log.
+		if cp.LastSeq > tx.Tail() {
+			cp = store.Checkpoint{Arms: map[string]map[string]string{}, Trees: map[string]kernel.TreeState{}}
+			sticky = kernel.NewSticky()
+		}
 		// A save can fail after its append, so the log may be ahead of the
 		// checkpoint. Catch up before deciding; replayed events keep their
 		// logged arms.

@@ -31,6 +31,7 @@ const (
 	HookBypass         = "hook-bypass"
 	DiscardUncommitted = "discard-uncommitted"
 	OwnGitState        = "own-git-state"
+	AllowPeople        = "allow-people"
 	Secrets            = "secrets"
 	Undercover         = "undercover"
 	WallsWarnPeople    = "walls-warn-people"
@@ -139,6 +140,8 @@ func match(row kernel.Row, a *analysis) (kernel.Action, bool) {
 		if cause, unmeasured = discardUncommitted(a); cause == "" && unmeasured != "" {
 			return kernel.Action{RowID: row.ID, Verdict: kernel.VerdictWarn, Line: "trellis: " + row.ID + ": " + unmeasured + "."}, true
 		}
+	case AllowPeople:
+		cause = allowPeople(a)
 	case Secrets:
 		return secrets(a)
 	case Undercover:

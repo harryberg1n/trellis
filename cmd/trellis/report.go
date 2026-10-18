@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +66,7 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 		return 1
 	}
 	root := repo.Root
-	facts, name, err := gatherFacts(repo, env, stderr)
+	facts, id, err := gatherFacts(repo, env, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
 		return 1
@@ -76,7 +76,7 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 		_, _ = stdout.Write(body)
 		return 0
 	}
-	title := fmt.Sprintf("report %s %s", name, measure.Week(facts.Now))
+	title := fmt.Sprintf("report %s %s", id[:8], measure.Week(facts.Now))
 	gh := host.GH{Runner: env.Runner, Dir: root}
 	msg, err := fileReport(gh, title, string(body))
 	if err != nil {
@@ -110,26 +110,28 @@ func fileReport(gh host.GH, title, body string) (string, error) {
 }
 
 // gatherFacts reads the default branch history, the escape issues, the event
-// log and the transcripts the log names. name is the repository's name.
+// log and the transcripts the log names. id is the repository's id: the report
+// is filed on another repository, so the consumer's name never leaves the box
+// and only the first digits of its id name the issue.
 func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Facts, string, error) {
 	now := env.Clock.Now()
 	facts := measure.Facts{Now: now}
 
 	root := repo.Root
-	name := repoName(repo.Remote, root)
+	id := store.RepoID(repo.Remote, root)
 
 	st, err := storeIn(env.Root, repo, env.Clock)
 	if err != nil {
-		return facts, name, fmt.Errorf("opening the event log: %w", err)
+		return facts, id, fmt.Errorf("opening the event log: %w", err)
 	}
 	facts.Events, err = st.Read(0)
 	if err != nil {
-		return facts, name, fmt.Errorf("reading the event log: %w", err)
+		return facts, id, fmt.Errorf("reading the event log: %w", err)
 	}
 
 	facts.Merges, err = readHistory(env.Runner, repo, now, facts.Events)
 	if err != nil {
-		return facts, name, err
+		return facts, id, err
 	}
 
 	if repo.Remote == "" {
@@ -138,21 +140,57 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 		readGitHub(&facts, env, root, stderr)
 	}
 
-	seen := map[string]bool{}
+	readUsage(&facts, stderr)
+	return facts, id, nil
+}
+
+// session is what the log says of one session's transcripts: the paths it
+// recorded and the tree it was on at each turn's end.
+type session struct {
+	id    string
+	paths []string
+	marks []measure.TreeMark
+	last  string
+}
+
+// readUsage reads the transcripts the log names. A reply is charged to the
+// tree the session was on at the Stop that ended its turn, so a session that
+// moved between trees is split, and a session killed before its SessionEnd
+// still has its Stops. A session with no readable transcript is counted.
+func readUsage(facts *measure.Facts, stderr io.Writer) {
+	var order []*session
+	byID := map[string]*session{}
 	for _, ev := range facts.Events {
-		p := ev.Detail[kernel.DetailTranscript]
-		if ev.Kind != kernel.EvSessionUsage || p == "" || seen[p] {
+		if ev.Kind != kernel.EvSessionUsage && ev.Kind != kernel.EvTurnAnchored {
 			continue
 		}
-		seen[p] = true
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
-			continue
+		s := byID[ev.Session]
+		if s == nil {
+			s = &session{id: ev.Session}
+			byID[ev.Session] = s
+			order = append(order, s)
 		}
-		facts.Usage = append(facts.Usage, measure.Usage{Tree: ev.Tree, Session: ev.Session, Transcript: raw})
+		if p := ev.Detail[kernel.DetailTranscript]; p != "" && !slices.Contains(s.paths, p) {
+			s.paths = append(s.paths, p)
+		}
+		s.marks = append(s.marks, measure.TreeMark{At: ev.At, Tree: ev.Tree})
+		s.last = ev.Tree
 	}
-	return facts, name, nil
+	for _, s := range order {
+		read := 0
+		for _, p := range s.paths {
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
+				continue
+			}
+			read++
+			facts.Usage = append(facts.Usage, measure.Usage{Tree: s.last, Session: s.id, Transcript: raw, Marks: s.marks})
+		}
+		if read == 0 {
+			facts.MissingTranscripts++
+		}
+	}
 }
 
 // readGitHub fills the escape issues and the merged pull requests of the
@@ -175,23 +213,17 @@ func readGitHub(facts *measure.Facts, env reportEnv, root string, stderr io.Writ
 	}
 }
 
-// repoName is the last element of the remote URL without ".git", else the
-// directory name.
-func repoName(remote, root string) string {
-	if remote != "" {
-		u := strings.TrimSuffix(strings.TrimRight(remote, "/"), ".git")
-		if i := strings.LastIndexAny(u, "/:"); i >= 0 {
-			return u[i+1:]
-		}
-		return u
-	}
-	return filepath.Base(root)
-}
-
+// fieldSep separates the fields of a commit header. A NUL brackets each header
+// in the log output: git never prints one in a text diff or a message, so no
+// content can split a record.
 const (
-	fieldSep  = "\x1f"
-	recordSep = "\x1e"
+	fieldSep = "\x1f"
+	nul      = "\x00"
 )
+
+// historyTimeout is the time the one history call gets: five seconds a day of
+// the window, where each commit once had its own thirty.
+const historyTimeout = historyWindow / (24 * time.Hour) * 5 * time.Second
 
 var (
 	trailingPR = regexp.MustCompile(`\(#(\d+)\)\s*$`)
@@ -199,15 +231,20 @@ var (
 )
 
 // readHistory is `git log --first-parent` on the default branch within the
-// window, each commit with the line ranges it touched.
+// window, each commit with the line ranges it touched: one git call, the
+// header of each commit between a record mark and a header end, its diff
+// against the first parent after.
 func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
 	root, branch := repo.Root, repo.History
 	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
-	out, err := objects.Git(r, root, nil, "log", "--first-parent", "--since="+since,
-		"--format=%H"+fieldSep+"%cI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)
+	res, err := r.Light(runpkg.Spec{Name: "git", Dir: root, Timeout: historyTimeout, Args: []string{
+		"log", "--first-parent", "-m", "-p", "-U0", "--no-color", "--since=" + since,
+		"--format=%x00%H" + fieldSep + "%cI" + fieldSep + "%s" + fieldSep + "%b%x00", branch,
+	}})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading the history: %w", err)
 	}
+	out := res.Stdout
 	treeOfPR := map[int]string{}
 	landed := map[string]kernel.Event{} // tree.merged events by the sha they landed as
 	for _, ev := range events {
@@ -219,9 +256,10 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 		}
 	}
 	var merges []measure.Merge
-	for _, rec := range strings.Split(string(out), recordSep) {
-		rec = strings.TrimLeft(rec, "\r\n")
-		f := strings.SplitN(rec, fieldSep, 4)
+	parts := strings.Split(string(out), nul) // "", header, diff, header, diff, ...
+	for i := 1; i+1 < len(parts); i += 2 {
+		f := strings.SplitN(parts[i], fieldSep, 4)
+		diff := parts[i+1]
 		if len(f) != 4 {
 			continue
 		}
@@ -243,11 +281,7 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 		if tree, ok := treeOfPR[m.PR]; ok && m.PR > 0 {
 			m.Tree = tree
 		}
-		diff, err := objects.Git(r, root, nil, "show", "-m", "--first-parent", "-U0", "--no-color", "--format=", m.Sha)
-		if err != nil {
-			return nil, err
-		}
-		m.Added, m.Removed = measure.ParseHunks(string(diff))
+		m.Added, m.Removed = measure.ParseHunks(diff)
 		merges = append(merges, m)
 	}
 	return merges, nil

@@ -9,6 +9,9 @@ type GitArgv struct {
 	Dirs []string
 	// Config is the -c values in order.
 	Config []string
+	// GitDir is the last --git-dir value, in either spelling (--git-dir=X or
+	// --git-dir X).
+	GitDir string
 	// Verb is the subcommand; empty when the argv has none.
 	Verb string
 	// Rest is the arguments after the subcommand.
@@ -28,6 +31,10 @@ func ParseGitArgs(args []string) GitArgv {
 			g.Rest = args[i+1:]
 			return g
 		}
+		if v, ok := strings.CutPrefix(a, "--git-dir="); ok {
+			g.GitDir = v
+			continue
+		}
 		if !takesValue(a) || i+1 >= len(args) {
 			continue
 		}
@@ -37,6 +44,8 @@ func ParseGitArgs(args []string) GitArgv {
 			g.Dirs = append(g.Dirs, args[i])
 		case "-c":
 			g.Config = append(g.Config, args[i])
+		case "--git-dir":
+			g.GitDir = args[i]
 		}
 	}
 	return GitArgv{}
