@@ -1,14 +1,18 @@
 package install
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/objects"
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
@@ -20,23 +24,73 @@ const timeoutSeconds = 10
 // files or run commands.
 const toolMatcher = "Edit|Write|Bash|PowerShell"
 
+// markerText is the whole of a trellis.toml install writes: no keys yet.
+const markerText = "# trellis is on in this repository.\n# Commit this file; a repository without it is off.\n"
+
 // Options says where to install and what.
 type Options struct {
-	Repo    string // the repository root
-	Common  string // the repository's common git dir; "" skips the exclude list
-	Root    string // the state root
-	Exe     string // the running binary, the source of the pinned copy
-	Version string // buildinfo.Version of that binary
-	Dry     bool   // report the actions without performing them
+	Repo      string // the repository's primary checkout; "" touches no repository
+	ConfigDir string // the Claude config directory whose settings.json holds the hooks
+	Root      string // the state root
+	Exe       string // the running binary, the source of the pinned copy
+	Version   string // buildinfo.Version of that binary
+	Dry       bool   // report the actions without performing them
 
 	AllowDev bool // pin a build whose version is "dev"
+
+	// Clock names the backup of an existing settings file; nil is the wall clock.
+	Clock clock.Clock
 }
 
-// SettingsPath is the file trellis installs into: the project-local settings,
-// which the harness keeps out of version control, so a consumer repository's
-// tracked files and CI never change.
-func SettingsPath(repo string) string {
-	return filepath.Join(repo, ".claude", "settings.local.json")
+// atPrimary is o with Repo naming the primary checkout of its repository: a
+// linked worktree stands for its primary, whose root holds the committed
+// trellis.toml and is the one path the record of repositories keeps. A Repo
+// that is not a repository, or "", is left as it is.
+func (o Options) atPrimary() Options {
+	if r, err := objects.Open(o.Repo); o.Repo != "" && err == nil {
+		o.Repo = r.PrimaryRoot()
+	}
+	return o
+}
+
+// recordOptions is the options of a record update: the clock, when one is set.
+func (o Options) recordOptions() []RecordOption {
+	if o.Clock == nil {
+		return nil
+	}
+	return []RecordOption{WithClock(o.Clock)}
+}
+
+// ConfigDir is the Claude config directory: dir when given, else
+// $CLAUDE_CONFIG_DIR, else ~/.claude.
+//
+// Follows aphrollo-tools internal/cli/cli_gate_init.go defaultClaudeDir at
+// 12b3724e, which resolves the directory the way the harness does. What it
+// encodes: a harness started with its own CLAUDE_CONFIG_DIR reads its hooks
+// from there, so wiring ~/.claude would leave it unhooked.
+func ConfigDir(dir string) (string, error) {
+	if dir == "" {
+		dir = os.Getenv("CLAUDE_CONFIG_DIR")
+	}
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".claude")
+	}
+	return filepath.Abs(dir)
+}
+
+// SettingsFile is the user-level settings file in a config directory: the one
+// file the hooks are wired in, once per user.
+func SettingsFile(configDir string) string { return filepath.Join(configDir, "settings.json") }
+
+// retiredSettings is the project-local settings file older installs wired the
+// hooks in, per checkout. Install and update remove trellis's own entries from
+// it: an entry left there fires every event a second time.
+func retiredSettings(checkout string) string {
+	return filepath.Join(checkout, ".claude", "settings.local.json")
 }
 
 // wanted is the entry for each event, in the order they are installed.
@@ -70,152 +124,284 @@ func ownedBy(root string) func(Hook) bool {
 	}
 }
 
-// readSettings returns the settings file's bytes, none when it is absent.
-func readSettings(repo string) ([]byte, error) {
-	b, err := os.ReadFile(SettingsPath(repo))
+// readSettings returns the bytes of the settings file at path, none when it is
+// absent.
+func readSettings(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	return b, err
 }
 
-// Install pins the running binary under the state root and points the repo's
-// hooks at the pinned copy. It validates everything before it writes anything,
-// and returns one line per action; with Dry the lines start "would " and
-// nothing is written.
-func Install(o Options) ([]string, error) {
+// wirePlan is a validated wiring of the user-level settings, not yet written.
+type wirePlan struct {
+	file    string
+	bin     string
+	prev    []byte // the file as it is, nil when absent
+	next    []byte
+	copyBin bool
+	actions []string
+}
+
+// planWire validates the build and the settings file and works out the edit.
+func planWire(o Options) (wirePlan, error) {
 	if o.Version == "" || (o.Version == "dev" && !o.AllowDev) {
-		return nil, errors.New("refusing to pin an unversioned build; pass --allow-dev")
+		return wirePlan{}, errors.New("refusing to pin an unversioned build; pass --allow-dev")
 	}
 	if o.Version == ".." || strings.ContainsAny(o.Version, `/\`) {
-		return nil, fmt.Errorf("version %q cannot name a directory", o.Version)
+		return wirePlan{}, fmt.Errorf("version %q cannot name a directory", o.Version)
 	}
-	bin := BinPath(o.Root, o.Version, filepath.Ext(o.Exe))
-	doc, err := readSettings(o.Repo)
-	if err != nil {
-		return nil, err
+	p := wirePlan{file: SettingsFile(o.ConfigDir), bin: BinPath(o.Root, o.Version, filepath.Ext(o.Exe))}
+	var err error
+	if p.prev, err = readSettings(p.file); err != nil {
+		return wirePlan{}, err
 	}
-	next, hookActions, err := addEntries(doc, wanted(bin), ownedBy(o.Root))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+	var hookActions []string
+	if p.next, hookActions, err = addEntries(p.prev, wanted(p.bin), ownedBy(o.Root)); err != nil {
+		return wirePlan{}, fmt.Errorf("%s: %w", p.file, err)
 	}
 	// An existing pinned file is kept whatever it holds: same version, same
 	// bytes expected, and on Windows a running hook may hold it open.
 	verb := "copy"
-	if _, err := os.Stat(bin); err == nil {
+	if _, err := os.Stat(p.bin); err == nil {
 		verb = "keep"
 	}
-	actions := append([]string{verb + " binary " + bin}, hookActions...)
-	exclude, excludeAction, err := addExclude(o.Common)
+	p.copyBin = verb == "copy"
+	p.actions = append([]string{verb + " binary " + p.bin}, hookActions...)
+	return p, nil
+}
+
+// changed says whether applying the plan edits the settings file.
+func (p wirePlan) changed() bool { return p.prev == nil || !bytes.Equal(p.prev, p.next) }
+
+// apply pins the binary and writes the settings file, an existing one backed
+// up first. It returns the backup's path, "" when none was made.
+func (p wirePlan) apply(o Options) (backup string, err error) {
+	if p.copyBin {
+		if err := pin(p.bin, o.Exe); err != nil {
+			return "", err
+		}
+	}
+	if !p.changed() {
+		return "", nil
+	}
+	if p.prev != nil {
+		if backup, err = backUp(p.file, p.prev, o.Clock); err != nil {
+			return "", err
+		}
+	}
+	return backup, writeSettings(p.file, p.next)
+}
+
+// backUp copies the settings file beside itself as <file>.pre-trellis-<unix
+// seconds> before its first change; one already there is the first and is
+// kept. It returns the new backup's path, "" when none was made.
+//
+// Follows aphrollo-tools internal/tdd/install/init.go InitSettings at
+// 12b3724e. What it encodes: the user's own settings file is edited, so a copy
+// of it sits beside it first. The reference copies before every change; this
+// keeps the copy of the file as it was before the first one.
+func backUp(file string, content []byte, clk clock.Clock) (string, error) {
+	if hasBackup(file) {
+		return "", nil
+	}
+	if clk == nil {
+		clk = clock.Real()
+	}
+	path := file + ".pre-trellis-" + strconv.FormatInt(clk.Now().Unix(), 10)
+	err := store.WriteAtomic(filepath.Dir(path), filepath.Base(path), content, store.WithMode(fileMode), store.WithTempPattern(".backup-*"))
+	if err != nil {
+		return "", fmt.Errorf("writing backup %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// hasBackup reports whether a backup of the settings file sits beside it. It
+// lists the directory and matches the name's prefix: the path is never a glob
+// pattern, so a config directory with a bracket in its name is read as it is.
+func hasBackup(file string) bool {
+	entries, _ := os.ReadDir(filepath.Dir(file))
+	prefix := filepath.Base(file) + ".pre-trellis-"
+	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return strings.HasPrefix(e.Name(), prefix) })
+}
+
+// wouldAll marks every action as not done.
+func wouldAll(actions []string) []string {
+	out := make([]string, len(actions))
+	for i, a := range actions {
+		out[i] = "would " + a
+	}
+	return out
+}
+
+// Wire pins the running binary under the state root and points the six hook
+// entries of the user-level settings at the pinned copy. It validates before
+// it writes, and returns one line per action; with Dry the lines start "would "
+// and nothing is written. It touches no repository.
+func Wire(o Options) ([]string, error) {
+	p, err := planWire(o)
 	if err != nil {
 		return nil, err
-	}
-	if excludeAction != "" {
-		actions = append(actions, excludeAction)
 	}
 	if o.Dry {
-		for i, a := range actions {
-			actions[i] = "would " + a
-		}
-		return actions, nil
+		return wouldAll(p.actions), nil
 	}
-	if verb == "copy" {
-		if err := pin(bin, o.Exe); err != nil {
-			return nil, err
-		}
-	}
-	if err := writeSettings(o.Repo, next); err != nil {
-		return nil, err
-	}
-	if exclude != nil {
-		if err := writeExclude(o.Common, exclude); err != nil {
-			return nil, err
-		}
-	}
-	note, err := recordInstall(o.Root, o.Repo)
+	backup, err := p.apply(o)
 	if err != nil {
 		return nil, err
 	}
-	if note != "" {
-		actions = append(actions, note)
+	return withBackup(p.actions, backup, p.file), nil
+}
+
+// withBackup adds the backup action, if one was made, after the binary's.
+func withBackup(actions []string, backup, file string) []string {
+	if backup == "" {
+		return actions
+	}
+	line := "back up " + file + " to " + backup
+	return append(actions[:1:1], append([]string{line}, actions[1:]...)...)
+}
+
+// Install wires the user-level settings (see Wire), writes trellis.toml at the
+// repository's root when it has none, and removes trellis's entries from the
+// repository's project-local settings and from each linked worktree's. It
+// records the repository for `trellis update`. It validates everything before
+// it writes anything, and returns one line per action; with Dry the lines
+// start "would " and nothing is written.
+func Install(o Options) ([]string, error) {
+	o = o.atPrimary()
+	p, err := planWire(o)
+	if err != nil {
+		return nil, err
+	}
+	actions := p.actions
+	var edits []prune
+	var notes []string
+	writeMarker := false
+	if o.Repo != "" {
+		if edits, notes, err = planPrune(o); err != nil {
+			return nil, err
+		}
+		if writeMarker = !objects.HasMarker(o.Repo); writeMarker {
+			actions = append(actions, "write "+filepath.Join(o.Repo, objects.MarkerFile))
+		} else {
+			actions = append(actions, "keep "+objects.MarkerFile)
+		}
+	}
+	for _, e := range edits {
+		actions = append(actions, e.actions...)
+	}
+	actions = append(actions, notes...)
+	if o.Dry {
+		return wouldAll(actions), nil
+	}
+	backup, err := p.apply(o)
+	if err != nil {
+		return nil, err
+	}
+	actions = withBackup(actions, backup, p.file)
+	if writeMarker {
+		err := store.WriteAtomic(o.Repo, objects.MarkerFile, []byte(markerText), store.WithMode(0o644), store.WithTempPattern(".trellis-*"))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := applyPrune(edits); err != nil {
+		return nil, err
+	}
+	if o.Repo != "" {
+		if err := RecordRepo(o.Root, o.Repo, o.recordOptions()...); err != nil {
+			return nil, err
+		}
 	}
 	return actions, nil
 }
 
-// excludeEntry is the line install adds to the repository's local exclude
-// list (<common dir>/info/exclude): the settings file it writes is untracked
-// in every installed checkout, and nothing that counts untracked files, the
-// discard wall or a tree landing, should count a file trellis itself made.
-const excludeEntry = ".claude/settings.local.json"
-
-func excludePath(common string) string {
-	return filepath.Join(common, "info", "exclude")
+// prune is the removal of trellis's entries from one project-local settings
+// file.
+type prune struct {
+	file    string
+	next    []byte
+	actions []string
 }
 
-// addExclude returns the exclude list with the entry added, or nil with a
-// "keep" action when it is there already, or nil and "" when there is no
-// common dir to write to. Foreign lines are kept byte for byte.
-func addExclude(common string) (next []byte, action string, err error) {
-	if common == "" {
-		return nil, "", nil
-	}
-	cur, err := os.ReadFile(excludePath(common))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, "", err
-	}
-	if hasLine(cur, excludeEntry) {
-		return nil, "keep exclude " + excludeEntry, nil
-	}
-	next = append([]byte{}, cur...)
-	if len(next) > 0 && next[len(next)-1] != '\n' {
-		next = append(next, '\n')
-	}
-	next = append(next, excludeEntry+"\n"...)
-	return next, "exclude " + excludeEntry + " from git status", nil
-}
-
-// removeExclude returns the exclude list without the entry, or nil when it
-// holds none. Every other byte stays. A line the user wrote before install,
-// identical to the entry, cannot be told from ours and goes with it.
-func removeExclude(common string) (next []byte, action string, err error) {
-	if common == "" {
-		return nil, "", nil
-	}
-	cur, err := os.ReadFile(excludePath(common))
+// checkouts is the repository's primary checkout and each of its linked
+// worktrees.
+// A worktree that is not found is skipped, with a note line: the user-level
+// settings never wait on a git worktree prune.
+func checkouts(repo string) (dirs, notes []string, err error) {
+	trees, missing, err := LinkedWorktrees(repo)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, "", nil
-		}
-		return nil, "", err
+		return nil, nil, err
 	}
-	if !hasLine(cur, excludeEntry) {
-		return nil, "", nil
+	for _, m := range missing {
+		notes = append(notes, "skip "+m+": not found, git worktree prune forgets it")
 	}
-	lines := strings.SplitAfter(string(cur), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if strings.TrimRight(l, "\r\n") != excludeEntry {
-			kept = append(kept, l)
-		}
-	}
-	return []byte(strings.Join(kept, "")), "remove exclude " + excludeEntry, nil
+	return append([]string{repo}, slices.DeleteFunc(trees, func(t string) bool { return t == repo })...), notes, nil
 }
 
-func hasLine(text []byte, line string) bool {
-	for _, l := range strings.Split(string(text), "\n") {
-		if strings.TrimRight(l, "\r") == line {
-			return true
-		}
+// planPrune finds the project-local settings of the repository and its linked
+// worktrees that hold trellis entries and works out the edit of each. A file
+// that is absent, or holds none, is left out. A file left with nothing of its
+// own stays, as removeEntries leaves it.
+// Notes are the skipped worktrees.
+func planPrune(o Options) (out []prune, notes []string, err error) {
+	dirs, notes, err := checkouts(o.Repo)
+	if err != nil {
+		return nil, nil, err
 	}
-	return false
+	for _, dir := range dirs {
+		file := retiredSettings(dir)
+		doc, err := readSettings(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		if doc == nil {
+			continue
+		}
+		next, removed, err := removeEntries(doc, ownedBy(o.Root))
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if len(removed) == 0 {
+			continue
+		}
+		for i, r := range removed {
+			removed[i] = r + " from " + file
+		}
+		out = append(out, prune{file: file, next: next, actions: removed})
+	}
+	return out, notes, nil
 }
 
-func writeExclude(common string, content []byte) error {
-	dir := filepath.Dir(excludePath(common))
-	if err := os.MkdirAll(dir, dirMode); err != nil {
-		return err
+func applyPrune(edits []prune) error {
+	for _, e := range edits {
+		if err := writeSettings(e.file, e.next); err != nil {
+			return err
+		}
 	}
-	return store.WriteAtomic(dir, filepath.Base(excludePath(common)), content, store.WithMode(0o644), store.WithTempPattern(".exclude-*"))
+	return nil
+}
+
+// Prune removes trellis's entries from the project-local settings of the
+// repository and its linked worktrees, and returns one line per removal; with
+// Dry the lines start "would " and nothing is written.
+func Prune(o Options) ([]string, error) {
+	o = o.atPrimary()
+	edits, notes, err := planPrune(o)
+	if err != nil {
+		return nil, err
+	}
+	var actions []string
+	for _, e := range edits {
+		actions = append(actions, e.actions...)
+	}
+	actions = append(actions, notes...)
+	if o.Dry {
+		return wouldAll(actions), nil
+	}
+	return actions, applyPrune(edits)
 }
 
 // pin copies the binary at src to bin through a temp file, so a half copy
@@ -232,19 +418,18 @@ func pin(bin, src string) error {
 	return store.WriteAtomic(dir, filepath.Base(bin), content, store.WithMode(exeMode), store.WithTempPattern(".pin-*"))
 }
 
-func writeSettings(repo string, doc []byte) error { return writeSettingsWith(repo, doc) }
+func writeSettings(path string, doc []byte) error { return writeSettingsWith(path, doc) }
 
 // writeSettingsWith writes the settings file through a temp file in its own
 // directory and a rename, so a crash or an overlapping install leaves the old
-// file or the whole new one, never half. A symlinked file (or .claude dir) is
+// file or the whole new one, never half. A symlinked file (or directory) is
 // resolved first: the link target is replaced and the link stays.
-func writeSettingsWith(repo string, doc []byte, opts ...store.AtomicOption) error {
-	path := SettingsPath(repo)
-	claude := filepath.Dir(path)
-	if err := os.MkdirAll(claude, repoDirMode); err != nil {
+func writeSettingsWith(path string, doc []byte, opts ...store.AtomicOption) error {
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, userDirMode); err != nil {
 		return err
 	}
-	dir, err := filepath.EvalSymlinks(claude)
+	dir, err := filepath.EvalSymlinks(parent)
 	if err != nil {
 		return err
 	}
@@ -285,20 +470,17 @@ func resolveLink(path string) (string, error) {
 	return "", fmt.Errorf("%s: too many levels of symbolic links", path)
 }
 
-// Eject removes the entries Install added, from this repo's settings, and
-// returns one line per removal. Everything else in the file is left byte for
-// byte. The pinned binaries stay: other repos may point at them. The repo is
-// then dropped from the record `trellis update` reads.
+// Eject removes the entries Install added from the user-level settings, and
+// the repository's own from its project-local settings and its linked
+// worktrees', and returns one line per removal. Everything else in each file is
+// left byte for byte. The pinned binaries stay: other repositories may be
+// served by them. trellis.toml stays too, the repository's own committed file,
+// and the last line says so. The repository is then dropped from the record
+// `trellis update` reads.
 func Eject(o Options) ([]string, error) {
-	actions, err := eject(o)
-	if err != nil {
-		return actions, err
-	}
-	return actions, ForgetRepo(o.Root, o.Repo)
-}
-
-func eject(o Options) ([]string, error) {
-	doc, err := readSettings(o.Repo)
+	o = o.atPrimary()
+	file := SettingsFile(o.ConfigDir)
+	doc, err := readSettings(file)
 	if err != nil {
 		return nil, err
 	}
@@ -306,36 +488,46 @@ func eject(o Options) ([]string, error) {
 	var actions []string
 	if doc != nil {
 		if next, actions, err = removeEntries(doc, ownedBy(o.Root)); err != nil {
-			return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+			return nil, fmt.Errorf("%s: %w", file, err)
 		}
 	}
-	exclude, excludeAction, err := removeExclude(o.Common)
-	if err != nil {
-		return nil, err
-	}
-	if len(actions) == 0 && exclude == nil {
-		return nil, nil
+	var edits []prune
+	var notes []string
+	if o.Repo != "" {
+		if edits, notes, err = planPrune(o); err != nil {
+			return nil, err
+		}
 	}
 	if len(actions) > 0 {
-		if err := writeSettings(o.Repo, next); err != nil {
+		if err := writeSettings(file, next); err != nil {
 			return nil, err
 		}
 	}
-	if exclude != nil {
-		if err := writeExclude(o.Common, exclude); err != nil {
-			return nil, err
-		}
-		actions = append(actions, excludeAction)
+	if err := applyPrune(edits); err != nil {
+		return nil, err
 	}
-	return actions, nil
+	for _, e := range edits {
+		actions = append(actions, e.actions...)
+	}
+	actions = append(actions, notes...)
+	if o.Repo == "" {
+		return actions, nil
+	}
+	if objects.HasMarker(o.Repo) {
+		actions = append(actions, "keep "+objects.MarkerFile+": it is this repository's own committed file")
+	}
+	return actions, ForgetRepo(o.Root, o.Repo)
 }
 
-// Doctor returns one line per problem: no install, a hook pinned to another
-// version than the running binary, a pinned binary gone, a state root that
-// cannot be written. No lines means all is well.
+// Doctor returns one line per problem: no wiring, a hook pinned to another
+// version than the running binary, a pinned binary gone, a repository without
+// trellis.toml, a project-local file that still holds trellis hooks, a state
+// root that cannot be written. No lines means all is well.
 func Doctor(o Options) []string {
+	o = o.atPrimary()
 	var problems []string
-	doc, err := readSettings(o.Repo)
+	file := SettingsFile(o.ConfigDir)
+	doc, err := readSettings(file)
 	if err == nil {
 		var found []located
 		if found, err = walkEntries(doc); err == nil {
@@ -343,10 +535,45 @@ func Doctor(o Options) []string {
 		}
 	}
 	if err != nil {
-		problems = append(problems, fmt.Sprintf("cannot read %s: %v", SettingsPath(o.Repo), err))
+		problems = append(problems, fmt.Sprintf("cannot read %s: %v", file, err))
+	}
+	if o.Repo != "" {
+		problems = append(problems, checkRepo(o)...)
 	}
 	if !writable(o.Root) {
 		problems = append(problems, "state root not writable: "+o.Root)
+	}
+	return problems
+}
+
+// checkRepo is the doctor's view of one repository: on or off, and any
+// project-local file that would fire the hooks a second time.
+func checkRepo(o Options) []string {
+	var problems []string
+	if !objects.HasMarker(o.Repo) {
+		problems = append(problems, objects.MarkerFile+" missing: this repository is off")
+	}
+	dirs, _, err := checkouts(o.Repo)
+	if err != nil {
+		return append(problems, "cannot list the linked worktrees: "+err.Error())
+	}
+	for _, dir := range dirs {
+		file := retiredSettings(dir)
+		doc, err := readSettings(file)
+		if err == nil {
+			var found []located
+			if found, err = walkEntries(doc); err == nil {
+				for _, l := range found {
+					if slices.ContainsFunc(l.Entry.Hooks, ownedBy(o.Root)) {
+						problems = append(problems, file+" still holds trellis hooks (every event fires twice): run trellis install")
+						break
+					}
+				}
+			}
+		}
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("cannot read %s: %v", file, err))
+		}
 	}
 	return problems
 }
@@ -376,7 +603,7 @@ func checkHooks(found []located, o Options) []string {
 		}
 	}
 	if ours == 0 {
-		problems = append(problems, "trellis is not installed: "+SettingsPath(o.Repo))
+		problems = append(problems, "trellis is not installed: "+SettingsFile(o.ConfigDir))
 	} else if missing := slices.DeleteFunc(kernel.InstalledHookEvents(), func(e string) bool { return wired[e] }); len(missing) > 0 {
 		problems = append(problems, "hook missing for "+strings.Join(missing, ", ")+": run trellis install")
 	}

@@ -216,3 +216,44 @@ func TestHistoryRef_PrefersTheRemoteThenTheLocalBranchThenHEAD(t *testing.T) {
 		t.Errorf("no main or master: HistoryRef = %q, want HEAD", got)
 	}
 }
+
+func TestPrimaryRoot_ALinkedWorktreeNamesItsPrimaryCheckout(t *testing.T) {
+	repo := testiso.Repo(t)
+	tree := testiso.AddTree(t, repo, "tree", "tree/x")
+
+	inPrimary, err := Open(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inTree, err := Open(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inPrimary.PrimaryRoot(); got != repo {
+		t.Errorf("PrimaryRoot in the primary = %q, want %q", got, repo)
+	}
+	if got := inTree.PrimaryRoot(); got != repo {
+		t.Errorf("PrimaryRoot in a linked worktree = %q, want the primary %q", got, repo)
+	}
+}
+
+func TestHasMarker_IsTheCommittedFileAtTheRoot(t *testing.T) {
+	repo := testiso.Repo(t)
+	if HasMarker(repo) {
+		t.Errorf("HasMarker without trellis.toml = true, want false")
+	}
+	testiso.Write(t, filepath.Join(repo, "trellis.toml"), "# on\n")
+	if !HasMarker(repo) {
+		t.Errorf("HasMarker with trellis.toml = false, want true")
+	}
+}
+
+func TestHasMarker_ADirectoryNamedTrellisTomlIsNotTheMarker(t *testing.T) {
+	repo := testiso.Repo(t)
+	if err := os.Mkdir(filepath.Join(repo, "trellis.toml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if HasMarker(repo) {
+		t.Errorf("HasMarker with a directory called trellis.toml = true, want false")
+	}
+}

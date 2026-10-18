@@ -36,6 +36,8 @@ type world struct {
 	t      *testing.T
 	dir    string
 	root   string
+	config string // the Claude config directory
+	src    string // the stand-in binary installs pin
 	repos  []string
 	exe    string
 	assets string // what `gh release download` copies from
@@ -47,13 +49,14 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	dir := t.TempDir()
-	w := &world{t: t, dir: dir, root: filepath.Join(dir, "state"), assets: filepath.Join(dir, "assets"), latest: "v0.0.4", out: &bytes.Buffer{}}
+	dir := store.Canonical(t.TempDir())
+	w := &world{t: t, dir: dir, root: filepath.Join(dir, "state"), config: filepath.Join(dir, "claude"), assets: filepath.Join(dir, "assets"), latest: "v0.0.4", out: &bytes.Buffer{}}
 	src := filepath.Join(dir, "src", "trellis")
 	testiso.Write(t, src, "v0.0.3-binary")
+	w.src = src
 	for range 2 {
 		repo := testiso.Repo(t)
-		if _, err := install.Install(install.Options{Repo: repo, Root: w.root, Exe: src, Version: "v0.0.3"}); err != nil {
+		if _, err := install.Install(install.Options{Repo: repo, ConfigDir: w.config, Root: w.root, Exe: src, Version: "v0.0.3"}); err != nil {
 			t.Fatal(err)
 		}
 		w.repos = append(w.repos, store.Canonical(repo))
@@ -112,7 +115,7 @@ func (w *world) answer(spec run.Spec) (run.Result, error) {
 }
 
 func (w *world) env() Env {
-	return Env{Runner: w.runner, Out: w.out, Root: w.root, Exe: w.exe, Version: "v0.0.3", GOOS: "linux", GOARCH: "amd64"}
+	return Env{Runner: w.runner, Out: w.out, Root: w.root, ConfigDir: w.config, Exe: w.exe, Version: "v0.0.3", GOOS: "linux", GOARCH: "amd64"}
 }
 
 func (w *world) run(o Options) error { return Run(w.env(), o) }
@@ -133,13 +136,29 @@ func (w *world) pinned() []string {
 	return out
 }
 
-func (w *world) referenced(repo string) []string {
+// referenced is the versions the user-level hooks point at.
+func (w *world) referenced() []string {
 	w.t.Helper()
-	got, err := install.ReferencedVersions(w.root, repo)
+	got, err := install.ReferencedVersions(w.root, w.config)
 	if err != nil {
 		w.t.Fatal(err)
 	}
 	return got
+}
+
+// leftover writes into dir the project-local settings file an older install
+// left: the foreign settings with the six trellis entries wired in at v0.0.3. It
+// returns the file's path.
+func (w *world) leftover(dir string) string {
+	w.t.Helper()
+	scratch := filepath.Join(w.dir, "scratch-"+filepath.Base(dir))
+	testiso.Write(w.t, install.SettingsFile(scratch), testiso.ForeignSettings)
+	if _, err := install.Wire(install.Options{ConfigDir: scratch, Root: w.root, Exe: w.src, Version: "v0.0.3"}); err != nil {
+		w.t.Fatal(err)
+	}
+	file := filepath.Join(dir, ".claude", "settings.local.json")
+	testiso.Write(w.t, file, read(w.t, install.SettingsFile(scratch)))
+	return file
 }
 
 func read(t *testing.T, path string) string {
@@ -151,7 +170,7 @@ func read(t *testing.T, path string) string {
 	return string(b)
 }
 
-func TestUpdate_DownloadsVerifiesPinsAndReinstallsEveryRepo(t *testing.T) {
+func TestUpdate_DownloadsVerifiesPinsAndRewiresTheUserLevelHooks(t *testing.T) {
 	w := newWorld(t)
 
 	if err := w.run(Options{}); err != nil {
@@ -165,13 +184,11 @@ func TestUpdate_DownloadsVerifiesPinsAndReinstallsEveryRepo(t *testing.T) {
 	if info, err := os.Stat(bin); err != nil || (info.Mode().Perm()&0o100 == 0 && runtime.GOOS != "windows") {
 		t.Errorf("pinned binary is not executable: %v, %v", info, err)
 	}
-	for _, repo := range w.repos {
-		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
-			t.Errorf("%s hooks point at %v, want [v0.0.4]", repo, got)
-		}
-		if want := "install " + repo + ": 6 hooks updated"; !contains(w.lines(), want) {
-			t.Errorf("no line %q in:\n%s", want, w.out)
-		}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
+		t.Errorf("the user-level hooks point at %v, want [v0.0.4]", got)
+	}
+	if want := "rewire " + install.SettingsFile(w.config) + ": 6 hooks updated"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
 	}
 	if got := w.lines(); got[len(got)-1] != "update: v0.0.3 -> v0.0.4" {
 		t.Errorf("last line = %q, want %q", got[len(got)-1], "update: v0.0.3 -> v0.0.4")
@@ -259,10 +276,8 @@ func (w *world) assertUntouched() {
 	if got := w.pinned(); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
 		w.t.Errorf("pins = %v, want [v0.0.3]", got)
 	}
-	for _, repo := range w.repos {
-		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
-			w.t.Errorf("%s hooks point at %v, want [v0.0.3]", repo, got)
-		}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
+		w.t.Errorf("the user-level hooks point at %v, want [v0.0.3]", got)
 	}
 	if got := read(w.t, w.exe); got != oldBinary {
 		w.t.Errorf("the binary on PATH = %q, want it untouched", got)
@@ -307,10 +322,8 @@ func TestUpdate_ToSwitchesWithoutDownload(t *testing.T) {
 	if n := len(w.runner.Specs()); n != 0 {
 		t.Errorf("%d children ran, want none: %+v", n, w.runner.Specs())
 	}
-	for _, repo := range w.repos {
-		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.2"}) {
-			t.Errorf("%s hooks point at %v, want [v0.0.2]", repo, got)
-		}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.2"}) {
+		t.Errorf("the user-level hooks point at %v, want [v0.0.2]", got)
 	}
 	if got := read(t, w.exe); got != "v0.0.2-binary" {
 		t.Errorf("the binary on PATH = %q, want v0.0.2-binary", got)
@@ -365,10 +378,8 @@ func TestUpdate_DryChangesNothing(t *testing.T) {
 	if n := len(w.runner.Specs()); n != 1 {
 		t.Errorf("%d children, want only the latest-release lookup", n)
 	}
-	for _, repo := range w.repos {
-		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
-			t.Errorf("%s hooks point at %v after a dry run, want [v0.0.3]", repo, got)
-		}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
+		t.Errorf("the user-level hooks point at %v after a dry run, want [v0.0.3]", got)
 	}
 	for _, l := range w.lines() {
 		if !strings.HasPrefix(l, "would ") {
@@ -377,8 +388,7 @@ func TestUpdate_DryChangesNothing(t *testing.T) {
 	}
 	for _, want := range []string{
 		"would pin " + install.BinPath(w.root, "v0.0.4", ""),
-		"would install " + w.repos[0],
-		"would install " + w.repos[1],
+		"would rewire " + install.SettingsFile(w.config) + " to v0.0.4",
 		"would replace " + w.exe + " with " + install.BinPath(w.root, "v0.0.4", ""),
 		"would update: v0.0.3 -> v0.0.4",
 	} {
@@ -452,11 +462,11 @@ func (w *world) updatePins(versions ...string) {
 	}
 }
 
-// alsoReference adds a second Stop hook to the repo's settings that runs the
-// pinned binary of version, a place install's re-install does not rewrite.
-func (w *world) alsoReference(repo, version string) {
+// alsoReference adds a second Stop hook to the user-level settings that runs
+// the pinned binary of version, a place the rewire does not rewrite.
+func (w *world) alsoReference(version string) {
 	w.t.Helper()
-	path := install.SettingsPath(repo)
+	path := install.SettingsFile(w.config)
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(read(w.t, path)), &doc); err != nil {
 		w.t.Fatal(err)
@@ -476,7 +486,7 @@ func TestUpdate_SweepKeepsAPinARepoStillReferences(t *testing.T) {
 	w := newWorld(t)
 	w.updatePins("v0.0.1", "v0.0.2")
 	w.oldPins("v0.0.5")
-	w.alsoReference(w.repos[1], "v0.0.1")
+	w.alsoReference("v0.0.1")
 
 	if err := w.run(Options{}); err != nil {
 		t.Fatal(err)
@@ -529,26 +539,80 @@ func TestUpdate_SweepSkippedWhileARepoIsMissing(t *testing.T) {
 	}
 }
 
-func TestUpdate_SweepStopsWhenASettingsFileIsUnreadable(t *testing.T) {
+func TestUpdate_SweepStopsWhenAProjectLocalFileCannotBePruned(t *testing.T) {
 	w := newWorld(t)
 	w.updatePins("v0.0.1", "v0.0.2")
 	w.oldPins("v0.0.5")
-	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
+	testiso.Write(t, filepath.Join(w.repos[0], ".claude", "settings.local.json"), "{ not json")
 
 	err := w.run(Options{})
 
 	if err == nil {
-		t.Fatal("a repo that could not be re-installed gave no error")
+		t.Fatal("a repo that could not be pruned gave no error")
 	}
 	if got := w.pinned(); len(got) != 5 {
 		t.Errorf("pins = %v, want nothing removed", got)
 	}
-	found := false
-	for _, l := range w.lines() {
-		found = found || strings.HasPrefix(l, "sweep: "+w.repos[0]+": ")
+	if want := "sweep skipped: 1 repos could not be pruned, their hooks may point at any pin"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
 	}
-	if !found {
-		t.Errorf("no sweep line naming %s in:\n%s", w.repos[0], w.out)
+}
+
+func TestUpdate_AnUnreadableUserLevelFileStopsTheUpdateBeforeThePathBinaryChanges(t *testing.T) {
+	w := newWorld(t)
+	file := install.SettingsFile(w.config)
+	testiso.Write(t, file, "{ not json")
+
+	err := w.run(Options{})
+
+	if err == nil || !strings.Contains(err.Error(), file) || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("err = %v, want one line naming %s", err, file)
+	}
+	if got := read(t, w.exe); got != oldBinary {
+		t.Errorf("the binary on PATH = %q, want it untouched", got)
+	}
+	if got := read(t, file); got != "{ not json" {
+		t.Errorf("the user-level file was rewritten to %q", got)
+	}
+}
+
+func TestUpdate_PrunesARecordedReposFileAndItsTreesAndLeavesTheForeignEntries(t *testing.T) {
+	w := newWorld(t)
+	tree := testiso.AddTree(t, w.repos[0], "feat-tree", "feat")
+	files := []string{
+		w.leftover(w.repos[0]),
+		w.leftover(tree),
+		w.leftover(w.repos[1]),
+	}
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range files {
+		if got := read(t, f); got != testiso.ForeignSettings {
+			t.Errorf("%s:\n%s\nwant the foreign settings byte for byte", f, got)
+		}
+		if want := "remove hook Stop from " + f; !contains(w.lines(), want) {
+			t.Errorf("no line %q in:\n%s", want, w.out)
+		}
+	}
+}
+
+func TestUpdate_DryPrunesNothing(t *testing.T) {
+	w := newWorld(t)
+	file := w.leftover(w.repos[0])
+	before := read(t, file)
+
+	if err := w.run(Options{Dry: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := read(t, file); got != before {
+		t.Errorf("a dry update changed %s", file)
+	}
+	if want := "would remove hook Stop from " + file; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
 	}
 }
 
@@ -557,7 +621,7 @@ func TestUpdate_DryNamesExactlyThePinsARealRunRemoves(t *testing.T) {
 		w := newWorld(t)
 		w.updatePins("v0.0.1", "v0.0.2", "v0.0.6")
 		w.oldPins("v0.0.5", "v0.0.7")
-		w.alsoReference(w.repos[1], "v0.0.1")
+		w.alsoReference("v0.0.1")
 		if err := w.run(Options{Dry: dry}); err != nil {
 			t.Fatal(err)
 		}
@@ -621,17 +685,21 @@ func TestUpdate_DoesNotDowngradeToAnOlderRelease(t *testing.T) {
 	}
 }
 
-func TestUpdate_ReportsARepoItCannotReinstallAndGoesOn(t *testing.T) {
+func TestUpdate_ReportsARepoItCannotPruneAndGoesOn(t *testing.T) {
 	w := newWorld(t)
-	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
+	testiso.Write(t, filepath.Join(w.repos[0], ".claude", "settings.local.json"), "{ not json")
+	healthy := w.leftover(w.repos[1])
 
 	err := w.run(Options{})
 
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 repos") {
 		t.Fatalf("err = %v, want a count of the repos that failed", err)
 	}
-	if got := w.referenced(w.repos[1]); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
-		t.Errorf("the healthy repo points at %v, want [v0.0.4]", got)
+	if got := read(t, healthy); got != testiso.ForeignSettings {
+		t.Errorf("the healthy repo's file holds %q, want it pruned", got)
+	}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
+		t.Errorf("the user-level hooks point at %v, want [v0.0.4]", got)
 	}
 	if got := read(t, w.exe); got != newBinary {
 		t.Errorf("the binary on PATH = %q, want it replaced", got)
@@ -675,10 +743,8 @@ func TestUpdate_ANonPermissionFailureOnPathIsAnError(t *testing.T) {
 	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "the binary on PATH was not replaced: ") {
 		t.Errorf("last line = %q, want the reason the binary on PATH was not replaced", last)
 	}
-	for _, repo := range w.repos {
-		if got := w.referenced(repo); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
-			t.Errorf("%s hooks point at %v, want [v0.0.4]", repo, got)
-		}
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.4"}) {
+		t.Errorf("the user-level hooks point at %v, want [v0.0.4]", got)
 	}
 }
 
@@ -749,53 +815,45 @@ func hashTree(t *testing.T, dir string) map[string][32]byte {
 	return out
 }
 
-// installAt points a repo's hooks at a pinned version.
-func (w *world) installAt(repo, version string) {
+// installAt points the user-level hooks at a pinned version.
+func (w *world) installAt(version string) {
 	w.t.Helper()
 	src := filepath.Join(w.dir, "src-"+version, "trellis")
 	testiso.Write(w.t, src, version+"-binary")
-	if _, err := install.Install(install.Options{Repo: repo, Root: w.root, Exe: src, Version: version}); err != nil {
+	if _, err := install.Wire(install.Options{ConfigDir: w.config, Root: w.root, Exe: src, Version: version}); err != nil {
 		w.t.Fatal(err)
 	}
 }
 
-func TestUpdate_SkipStillReinstallsARepoPointingAtAnotherVersion(t *testing.T) {
+func TestUpdate_SkipStillRewiresHooksThatPointAtAnotherVersion(t *testing.T) {
 	w := newWorld(t)
 	w.latest = "v0.0.3"
-	w.installAt(w.repos[0], "v0.0.2")
+	w.installAt("v0.0.2")
 
 	if err := w.run(Options{}); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := w.referenced(w.repos[0]); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
-		t.Errorf("%s hooks point at %v, want [v0.0.3]", w.repos[0], got)
+	if got := w.referenced(); !reflect.DeepEqual(got, []string{"v0.0.3"}) {
+		t.Errorf("the user-level hooks point at %v, want [v0.0.3]", got)
 	}
 	lines := w.lines()
 	if lines[0] != "[skip] already at v0.0.3" {
 		t.Errorf("first line = %q, want the skip line", lines[0])
 	}
-	if want := "reinstall " + w.repos[0] + ": hooks point at v0.0.2, running v0.0.3"; !contains(lines, want) {
+	if want := "rewire " + install.SettingsFile(w.config) + ": 6 hooks updated"; !contains(lines, want) {
 		t.Errorf("no line %q in:\n%s", want, w.out)
-	}
-	if want := "install " + w.repos[0] + ": 6 hooks updated"; !contains(lines, want) {
-		t.Errorf("no line %q in:\n%s", want, w.out)
-	}
-	for _, l := range lines {
-		if strings.Contains(l, w.repos[1]) {
-			t.Errorf("the repo already at v0.0.3 was touched: %q", l)
-		}
 	}
 }
 
 func TestUpdate_SkipReportsARepoThatFailsAgain(t *testing.T) {
 	w := newWorld(t)
 	w.latest = "v0.0.3"
-	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
+	testiso.Write(t, filepath.Join(w.repos[0], ".claude", "settings.local.json"), "{ not json")
 
 	err := w.run(Options{})
 
-	if err == nil || !strings.Contains(err.Error(), "1 of 1 repos") {
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 repos") {
 		t.Fatalf("err = %v, want the count of repos that failed", err)
 	}
 }
@@ -831,45 +889,6 @@ func TestUpdate_TreatsARecordedPlainDirectoryAsNotFound(t *testing.T) {
 	got, err := install.Repos(w.root)
 	if err != nil || len(got) != 4 {
 		t.Errorf("Repos = %v, %v; want all four kept in the record", got, err)
-	}
-}
-
-func TestUpdate_SweepKeepsAPinOnlyALinkedWorktreeReferences(t *testing.T) {
-	w := newWorld(t)
-	w.updatePins("v0.0.1", "v0.0.2")
-	w.oldPins("v0.0.5")
-	tree := testiso.AddTree(t, w.repos[0], "feat-tree", "feat")
-	w.installAt(tree, "v0.0.1")
-
-	if err := w.run(Options{}); err != nil {
-		t.Fatal(err)
-	}
-
-	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("pins = %v, want %v (v0.0.1 is the worktree's, v0.0.2 is nobody's)", got, want)
-	}
-}
-
-func TestUpdate_SweepKeepsAPinAWorktreeOfAnUninstalledPrimaryReferences(t *testing.T) {
-	w := newWorld(t)
-	w.updatePins("v0.0.1", "v0.0.2")
-	w.oldPins("v0.0.5")
-	primary := testiso.Repo(t)
-	tree := testiso.AddTree(t, primary, "other-tree", "other")
-	w.installAt(tree, "v0.0.1")
-
-	if err := w.run(Options{}); err != nil {
-		t.Fatal(err)
-	}
-
-	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("pins = %v, want %v", got, want)
-	}
-	if _, err := os.Stat(install.SettingsPath(primary)); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("update installed into the referenced-only primary: %v", err)
-	}
-	if got, _ := install.Repos(w.root); len(got) != 2 {
-		t.Errorf("Repos = %v, want the referenced-only primary kept out of it", got)
 	}
 }
 
@@ -913,5 +932,37 @@ func TestUpdate_GivesItsContextToEveryChild(t *testing.T) {
 		if s.Ctx != ctx {
 			t.Errorf("child %s %v ran without the update's context", s.Name, s.Args)
 		}
+	}
+}
+
+func TestUpdate_LeavesAConfigDirWithoutTrellisHooksAlone(t *testing.T) {
+	w := newWorld(t)
+	w.config = filepath.Join(w.dir, "never-installed")
+	testiso.Write(t, install.SettingsFile(w.config), testiso.ForeignSettings)
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := read(t, install.SettingsFile(w.config)); got != testiso.ForeignSettings {
+		t.Errorf("update wired a file that held no trellis hook:\n%s", got)
+	}
+	if want := "skip rewire " + install.SettingsFile(w.config) + ": no trellis hooks there; trellis install [--config-dir D] wires them"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestUpdate_AfterEjectTheHooksStayOut(t *testing.T) {
+	w := newWorld(t)
+	if _, err := install.Eject(install.Options{ConfigDir: w.config, Root: w.root}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w.referenced(); len(got) != 0 {
+		t.Errorf("update brought the hooks back: %v", got)
 	}
 }

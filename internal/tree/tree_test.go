@@ -748,10 +748,9 @@ func TestMerge_LocalRefusesDirtyPrimary(t *testing.T) {
 	}
 }
 
-// The primary checkout of every installed repository holds an untracked
-// .claude/settings.local.json that trellis itself wrote; untracked files
-// never block a landing, since git refuses on its own when a merge would
-// overwrite one.
+// A primary checkout may hold untracked files of its own (the project-local
+// .claude/settings.local.json is one); untracked files never block a landing,
+// since git refuses on its own when a merge would overwrite one.
 func TestMerge_LocalIgnoresUntrackedFilesInThePrimary(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)

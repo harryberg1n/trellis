@@ -39,21 +39,21 @@ func TestWriteSettings_KeepsASymlinkedSettingsFileAndWritesThroughIt(t *testing.
 	}
 }
 
-func TestWriteSettings_ResolvesASymlinkedClaudeDir(t *testing.T) {
+func TestWriteSettings_ResolvesASymlinkedConfigDir(t *testing.T) {
 	f := newFixture(t)
 	realDir := filepath.Join(t.TempDir(), "claude-shared")
 	if err := os.MkdirAll(realDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(realDir, filepath.Join(f.repo, ".claude")); err != nil {
+	if err := os.Symlink(realDir, f.config); err != nil {
 		t.Skipf("no symlinks here: %v", err)
 	}
 
-	if err := writeSettings(f.repo, []byte("{}\n")); err != nil {
+	if err := writeSettings(f.settings(), []byte("{}\n")); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := readFile(t, filepath.Join(realDir, "settings.local.json")); got != "{}\n" {
+	if got := readFile(t, filepath.Join(realDir, "settings.json")); got != "{}\n" {
 		t.Errorf("file in the link target = %q, want {}", got)
 	}
 }
@@ -62,7 +62,7 @@ func TestWriteSettings_PublishesThroughATempFileInTheSameDirectory(t *testing.T)
 	f := newFixture(t)
 	testiso.Write(t, f.settings(), "old\n")
 	var from, to string
-	err := writeSettingsWith(f.repo, []byte("new\n"), store.WithRename(func(oldpath, newpath string) error {
+	err := writeSettingsWith(f.settings(), []byte("new\n"), store.WithRename(func(oldpath, newpath string) error {
 		from, to = oldpath, newpath
 		return errors.New("rename refused")
 	}))
@@ -78,7 +78,7 @@ func TestWriteSettings_PublishesThroughATempFileInTheSameDirectory(t *testing.T)
 	}
 	entries, _ := os.ReadDir(filepath.Dir(f.settings()))
 	if len(entries) != 1 {
-		t.Errorf("%d files left in .claude, want only settings.local.json", len(entries))
+		t.Errorf("%d files left beside the settings, want only settings.json", len(entries))
 	}
 }
 
@@ -92,7 +92,7 @@ func TestWriteSettings_ADanglingLinkIntoAMissingDirectoryIsOneLineAndMakesNothin
 		t.Skipf("no symlinks here: %v", err)
 	}
 
-	err := writeSettings(f.repo, []byte("{}\n"))
+	err := writeSettings(f.settings(), []byte("{}\n"))
 
 	if err == nil || strings.Contains(err.Error(), "\n") || !strings.Contains(err.Error(), filepath.Dir(gone)) {
 		t.Fatalf("err = %v, want one line naming %s", err, filepath.Dir(gone))

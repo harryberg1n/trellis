@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/harryberg1n/trellis/internal/buildinfo"
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/install"
 	"github.com/harryberg1n/trellis/internal/objects"
 	"github.com/harryberg1n/trellis/internal/store"
@@ -15,8 +17,9 @@ import (
 // installEnv is what install, eject and doctor take from the process: the
 // working directory and the running binary.
 type installEnv struct {
-	Cwd string
-	Exe string
+	Cwd   string
+	Exe   string
+	Clock clock.Clock // names the backup of the settings file; nil is the wall clock
 }
 
 func realInstallEnv() (installEnv, error) {
@@ -28,7 +31,7 @@ func realInstallEnv() (installEnv, error) {
 	if err != nil {
 		return installEnv{}, err
 	}
-	return installEnv{Cwd: wd, Exe: exe}, nil
+	return installEnv{Cwd: wd, Exe: exe, Clock: clock.Real()}, nil
 }
 
 // installVerb runs `trellis install|eject|doctor` in the real process;
@@ -46,7 +49,8 @@ func installVerb(args []string, stdout, stderr io.Writer) int {
 func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int {
 	verb := args[0]
 	fs := newFlagSet(verb, installUsage(verb), stderr)
-	repo := fs.String("repo", "", "the repository (default: the one holding the working directory)")
+	configDir := fs.String("config-dir", "", "the Claude config directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
+	repo := fs.String("repo", "", "the repository (default: the one holding the working directory, if any)")
 	dry := fs.Bool("dry", false, "install only: print the actions without performing them")
 	allowDev := fs.Bool("allow-dev", false, "install only: pin a build whose version is \"dev\"")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -56,7 +60,7 @@ func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int
 		_, _ = fmt.Fprintf(stderr, "trellis %s: --dry and --allow-dev are install flags\n", verb)
 		return 2
 	}
-	opts, err := installOptions(*repo, env)
+	opts, err := installOptions(*repo, *configDir, env)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis %s: %v\n", verb, err)
 		return 1
@@ -71,8 +75,14 @@ func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int
 	return doctorCmd(opts, stdout)
 }
 
-// installOptions resolves the repository and the state root for it.
-func installOptions(repoFlag string, env installEnv) (install.Options, error) {
+// installOptions resolves the config directory, the repository and the state
+// root for it. Without --repo, a working directory outside any repository is
+// not an error: the user-level settings are checked or changed on their own.
+func installOptions(repoFlag, configFlag string, env installEnv) (install.Options, error) {
+	configDir, err := install.ConfigDir(configFlag)
+	if err != nil {
+		return install.Options{}, err
+	}
 	dir := repoFlag
 	if dir == "" {
 		dir = env.Cwd
@@ -81,15 +91,20 @@ func installOptions(repoFlag string, env installEnv) (install.Options, error) {
 	if err != nil {
 		return install.Options{}, err
 	}
+	opts := install.Options{ConfigDir: configDir, Exe: env.Exe, Version: buildinfo.Version, Clock: env.Clock}
 	repo, err := objects.Open(abs)
-	if err != nil {
+	switch {
+	case errors.Is(err, objects.ErrNotARepo) && repoFlag == "":
+		// no repository: the user-level settings only
+	case err != nil:
+		return install.Options{}, err
+	default:
+		opts.Repo = repo.PrimaryRoot()
+	}
+	if opts.Root, err = store.Root(opts.Repo); err != nil {
 		return install.Options{}, err
 	}
-	root, err := store.Root(repo.Root)
-	if err != nil {
-		return install.Options{}, err
-	}
-	return install.Options{Repo: repo.Root, Common: repo.Common, Root: root, Exe: env.Exe, Version: buildinfo.Version}, nil
+	return opts, nil
 }
 
 // installCmd prints one line per action; with Dry the lines start "would ".

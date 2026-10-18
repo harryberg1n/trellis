@@ -118,7 +118,7 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 	facts := measure.Facts{Now: now}
 
 	root := repo.Root
-	id := store.RepoID(repo.Remote, root)
+	id := store.RepoID(repo.Remote, repo.PrimaryRoot())
 
 	st, err := storeIn(env.Root, repo, env.Clock)
 	if err != nil {

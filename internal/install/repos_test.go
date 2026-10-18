@@ -20,7 +20,7 @@ import (
 func TestInstall_RecordsTheRepo(t *testing.T) {
 	f := newFixture(t)
 
-	if _, err := Install(f.opts("v0.0.2", true)); err != nil {
+	if _, err := Install(f.optsIn(true)); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := Repos(f.root); err != nil || len(got) != 0 {
@@ -28,7 +28,7 @@ func TestInstall_RecordsTheRepo(t *testing.T) {
 	}
 
 	for range 2 {
-		if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		if _, err := Install(f.optsIn(false)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -39,59 +39,6 @@ func TestInstall_RecordsTheRepo(t *testing.T) {
 	}
 	if file := readFile(t, filepath.Join(f.root, "repos.txt")); file != want+"\n" {
 		t.Errorf("repos.txt = %q, want %q", file, want+"\n")
-	}
-}
-
-func TestInstall_InATreeOfAnUninstalledPrimaryRecordsNothingAndSaysSo(t *testing.T) {
-	f := newFixture(t)
-	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
-	o := f.opts("v0.0.2", false)
-	o.Repo = tree
-
-	actions, err := Install(o)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got, _ := Repos(f.root); len(got) != 0 {
-		t.Errorf("Repos = %v, want nothing recorded", got)
-	}
-	if got, err := ReferencedRepos(f.root); err != nil || !reflect.DeepEqual(got, []string{store.Canonical(f.repo)}) {
-		t.Errorf("ReferencedRepos = %v, %v; want the primary, referenced only", got, err)
-	}
-	want := "not re-installed by update (primary checkout not installed; its pins are kept): run trellis install in " + store.Canonical(f.repo) + " to include this repository"
-	if last := actions[len(actions)-1]; last != want {
-		t.Errorf("last action = %q, want %q", last, want)
-	}
-	if _, err := os.Stat(SettingsPath(f.repo)); !os.IsNotExist(err) {
-		t.Errorf("the primary's settings were touched: %v", err)
-	}
-}
-
-func TestInstall_InATreeOfAnInstalledPrimaryRecordsThePrimaryOnce(t *testing.T) {
-	f := newFixture(t)
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-		t.Fatal(err)
-	}
-	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
-	o := f.opts("v0.0.2", false)
-	o.Repo = tree
-
-	for range 2 {
-		actions, err := Install(o)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, a := range actions {
-			if strings.HasPrefix(a, "not recorded") {
-				t.Errorf("unexpected action %q", a)
-			}
-		}
-	}
-
-	got, err := Repos(f.root)
-	if want := []string{store.Canonical(f.repo)}; err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("Repos = %v, %v; want %v once", got, err, want)
 	}
 }
 
@@ -130,7 +77,7 @@ func TestEject_ForgetsTheRepo(t *testing.T) {
 	if err := RecordRepo(f.root, other); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+	if _, err := Install(f.optsIn(false)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,7 +85,7 @@ func TestEject_ForgetsTheRepo(t *testing.T) {
 		t.Fatalf("before eject Repos = %v, want 2", got)
 	}
 
-	if _, err := Eject(f.opts("v0.0.2", false)); err != nil {
+	if _, err := Eject(f.optsIn(false)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Repos(f.root)
@@ -159,14 +106,14 @@ func TestReferencedVersions_ReadsWhatTheHooksPointAt(t *testing.T) {
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReferencedVersions(f.root, f.repo)
+	got, err := ReferencedVersions(f.root, f.config)
 	if err != nil || !reflect.DeepEqual(got, []string{"v0.0.2"}) {
 		t.Errorf("ReferencedVersions = %v, %v; want [v0.0.2]", got, err)
 	}
 	if err := os.Remove(f.settings()); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ReferencedVersions(f.root, f.repo); err != nil || len(got) != 0 {
+	if got, err := ReferencedVersions(f.root, f.config); err != nil || len(got) != 0 {
 		t.Errorf("with no settings: %v, %v; want none", got, err)
 	}
 }
@@ -229,29 +176,6 @@ func TestRecordRepo_ParallelRecordsLoseNoLine(t *testing.T) {
 	}
 }
 
-func TestSweepReferences_ReadsLinkedWorktreesOfAPrimaryThatHasNoHooks(t *testing.T) {
-	f := newFixture(t)
-	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
-	o := f.opts("v0.0.7", false)
-	o.Repo = tree
-	if _, err := Install(o); err != nil {
-		t.Fatal(err)
-	}
-
-	own, err := ReferencedVersions(f.root, f.repo)
-	if err != nil || len(own) != 0 {
-		t.Fatalf("the primary references %v, %v; want nothing of its own", own, err)
-	}
-	got, err := SweepReferences(f.root, f.repo)
-	if want := []string{"v0.0.7"}; err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("SweepReferences = %v, %v; want %v", got, err, want)
-	}
-	trees, err := LinkedWorktrees(f.repo)
-	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(trees, want) {
-		t.Errorf("LinkedWorktrees = %v, %v; want %v", trees, err, want)
-	}
-}
-
 func TestLinkedWorktrees_ResolvesARelativeGitdirAgainstItsAdminDirectory(t *testing.T) {
 	f := newFixture(t)
 	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
@@ -262,24 +186,69 @@ func TestLinkedWorktrees_ResolvesARelativeGitdirAgainstItsAdminDirectory(t *test
 	}
 	testiso.Write(t, filepath.Join(admin, "gitdir"), filepath.ToSlash(rel)+"\n")
 
-	got, err := LinkedWorktrees(f.repo)
+	got, _, err := LinkedWorktrees(f.repo)
 
 	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("LinkedWorktrees = %v, %v; want %v", got, err, want)
 	}
 }
 
-func TestSweepReferences_AWorktreeThatIsGoneStopsTheSweep(t *testing.T) {
-	f := newFixture(t)
+// goneTree is a linked worktree whose directory was deleted without a git
+// worktree prune, and the note line every verb prints for it.
+func goneTree(t *testing.T, f fixture) (note string) {
+	t.Helper()
 	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
 	if err := os.RemoveAll(tree); err != nil {
 		t.Fatal(err)
 	}
+	return "skip " + tree + ": not found, git worktree prune forgets it"
+}
 
-	_, err := SweepReferences(f.root, f.repo)
+func TestInstall_AWorktreeThatIsGoneIsSkippedWithANoteAndTheUserLevelFileIsWritten(t *testing.T) {
+	f := newFixture(t)
+	note := goneTree(t, f)
 
-	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") || !strings.Contains(err.Error(), "trellis update continues once it is pruned") {
-		t.Errorf("err = %v, want one line naming the missing worktree", err)
+	actions, err := Install(f.optsIn(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !contains(actions, note) {
+		t.Errorf("no note %q in %q", note, actions)
+	}
+	if n := strings.Count(readFile(t, f.settings()), "/bin/v0.0.2/trellis' hook "); n != 6 {
+		t.Errorf("%d trellis hooks in the user-level file, want 6", n)
+	}
+}
+
+func TestEject_AWorktreeThatIsGoneIsSkippedWithANoteAndTheUserLevelFileIsCleaned(t *testing.T) {
+	f := newFixture(t)
+	if _, err := Install(f.optsIn(false)); err != nil {
+		t.Fatal(err)
+	}
+	note := goneTree(t, f)
+
+	actions, err := Eject(f.optsIn(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !contains(actions, note) {
+		t.Errorf("no note %q in %q", note, actions)
+	}
+	if got := readFile(t, f.settings()); strings.Contains(got, "trellis") {
+		t.Errorf("trellis entries left in the user-level file: %s", got)
+	}
+}
+
+func TestPrune_AWorktreeThatIsGoneIsSkippedWithANote(t *testing.T) {
+	f := newFixture(t)
+	note := goneTree(t, f)
+
+	actions, err := Prune(f.optsIn(false))
+
+	if err != nil || !contains(actions, note) {
+		t.Errorf("actions %q, err %v; want the note %q", actions, err, note)
 	}
 }
 
@@ -307,5 +276,27 @@ func TestRecordRepo_TimesOutOnTheFakeClockWhileAnotherInstallHoldsTheLock(t *tes
 
 	if err := <-done; !errors.Is(err, store.ErrLockTimeout) {
 		t.Errorf("err = %v, want store.ErrLockTimeout", err)
+	}
+}
+
+func TestInstall_InALinkedWorktreeRecordsAndMarksThePrimary(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.2", false)
+	o.Repo = tree
+
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Repos(f.root)
+	if want := []string{store.Canonical(f.repo)}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Repos = %v, %v; want %v: the primary, not the tree", got, err, want)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, "trellis.toml")); err != nil {
+		t.Errorf("trellis.toml not written at the primary: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tree, "trellis.toml")); !os.IsNotExist(err) {
+		t.Errorf("trellis.toml written in the tree (%v)", err)
 	}
 }

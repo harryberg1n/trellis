@@ -145,10 +145,7 @@ func locate(dir string) (where, error) {
 	if err != nil {
 		return where{}, err
 	}
-	w := where{Repo: repo, Primary: repo.Root}
-	if !repo.Primary {
-		w.Primary = filepath.Dir(repo.Common)
-	}
+	w := where{Repo: repo, Primary: repo.PrimaryRoot()}
 	return w, nil
 }
 

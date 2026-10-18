@@ -250,9 +250,9 @@ func TestWithReportContext_GivesTheReportsChildrenTheContext(t *testing.T) {
 
 func TestUsage_NamesTheFlagsOfInstallDoctorEjectAndExit130(t *testing.T) {
 	for _, want := range []string{
-		"trellis install [--repo R] [--dry] [--allow-dev]",
-		"trellis doctor [--repo R]",
-		"trellis eject [--repo R]",
+		"trellis install [--config-dir D] [--repo R] [--dry] [--allow-dev]",
+		"trellis doctor [--config-dir D] [--repo R]",
+		"trellis eject [--config-dir D] [--repo R]",
 		"130 interrupted",
 	} {
 		if !strings.Contains(usage, want) {

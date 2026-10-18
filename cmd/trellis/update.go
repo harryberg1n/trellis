@@ -9,6 +9,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/buildinfo"
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/install"
 	"github.com/harryberg1n/trellis/internal/objects"
 	runner "github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
@@ -16,11 +17,12 @@ import (
 )
 
 // updateUsageLine is the usage line of update.
-const updateUsageLine = "update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
+const updateUsageLine = "update [--config-dir D] [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
 
 // updateVerb runs `trellis update` in the real process.
 func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("update", updateUsageLine, stderr)
+	configFlag := fs.String("config-dir", "", "the Claude config directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	to := fs.String("to", "", "switch to this pinned (or released) version instead of the newest release")
 	dry := fs.Bool("dry", false, "print each step with \"would \" and change nothing")
 	allowDev := fs.Bool("allow-dev", false, "let a build whose version is \"dev\" update")
@@ -34,19 +36,24 @@ func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return 2
 	}
 	root, exe, err := updatePaths()
+	var configDir string
+	if err == nil {
+		configDir, err = install.ConfigDir(*configFlag)
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)
 		return 1
 	}
 	env := update.Env{
-		Runner:  runner.Exec{Clock: clock.Real()},
-		Ctx:     ctx,
-		Out:     stdout,
-		Root:    root,
-		Exe:     exe,
-		Version: buildinfo.Version,
-		GOOS:    runtime.GOOS,
-		GOARCH:  runtime.GOARCH,
+		Runner:    runner.Exec{Clock: clock.Real()},
+		Ctx:       ctx,
+		Out:       stdout,
+		Root:      root,
+		ConfigDir: configDir,
+		Exe:       exe,
+		Version:   buildinfo.Version,
+		GOOS:      runtime.GOOS,
+		GOARCH:    runtime.GOARCH,
 	}
 	if err := update.Run(env, update.Options{To: *to, Dry: *dry, AllowDev: *allowDev, ForgetMissing: *forget}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)

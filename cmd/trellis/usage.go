@@ -31,7 +31,7 @@ func parseExit(err error) int {
 // installUsage is the usage line of install, eject or doctor.
 func installUsage(verb string) string {
 	if verb == "install" {
-		return "install [--repo R] [--dry] [--allow-dev]"
+		return "install [--config-dir D] [--repo R] [--dry] [--allow-dev]"
 	}
-	return verb + " [--repo R]"
+	return verb + " [--config-dir D] [--repo R]"
 }

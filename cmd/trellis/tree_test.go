@@ -73,9 +73,9 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"install", "--help"}, "usage: trellis install [--repo R] [--dry] [--allow-dev]\n"},
-		{[]string{"doctor", "--help"}, "usage: trellis doctor [--repo R]\n"},
-		{[]string{"eject", "--help"}, "usage: trellis eject [--repo R]\n"},
+		{[]string{"install", "--help"}, "usage: trellis install [--config-dir D] [--repo R] [--dry] [--allow-dev]\n"},
+		{[]string{"doctor", "--help"}, "usage: trellis doctor [--config-dir D] [--repo R]\n"},
+		{[]string{"eject", "--help"}, "usage: trellis eject [--config-dir D] [--repo R]\n"},
 		{[]string{"report", "--help"}, "usage: trellis report [--issue]\n"},
 		{[]string{"allow", "--help"}, "usage: trellis allow <row-id>\n"},
 		{[]string{"tree", "new", "--help"}, "usage: trellis tree new <name> [--path P]\n"},

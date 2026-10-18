@@ -21,11 +21,11 @@ verbs:
   hook      record one agent hook payload read from stdin: trellis hook <event>
   report    print speed, cost and labels; --issue files them on harryberg1n/trellis
   allow     waive the next deny of a wall once: trellis allow <row-id>
-  install   pin this binary and add its hooks to the repo: trellis install [--repo R] [--dry] [--allow-dev]
-  doctor    check the installed hooks against this binary and the state root: trellis doctor [--repo R]
-  eject     remove the hooks install added: trellis eject [--repo R]
+  install   pin this binary, wire its hooks once per user, turn the repo on: trellis install [--config-dir D] [--repo R] [--dry] [--allow-dev]
+  doctor    check the user-level hooks against this binary, the state root and the repo: trellis doctor [--config-dir D] [--repo R]
+  eject     remove the hooks install added: trellis eject [--config-dir D] [--repo R]
   tree      worktrees over plain git and gh: trellis tree new|sync|merge|rm
-  update    fetch the newest release, verify and pin it, re-install every repo: trellis update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]
+  update    fetch the newest release, verify and pin it, rewire the user-level hooks: trellis update [--config-dir D] [--to VERSION] [--dry] [--allow-dev] [--forget-missing]
   help      print this text (also --help, -h)
 
 exit codes: 0 ok; 1 error; 2 a failure you can fix and run again, or a usage mistake; 130 interrupted

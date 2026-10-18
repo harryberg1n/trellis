@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -22,22 +25,29 @@ type settingsDoc struct {
 }
 
 type fixture struct {
-	repo, root, exe string
+	repo, root, exe, config string
 }
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	dir := t.TempDir()
+	dir := store.Canonical(t.TempDir())
 	exe := filepath.Join(dir, "src", "trellis")
 	testiso.Write(t, exe, "binary-bytes")
-	return fixture{repo: testiso.Repo(t), root: filepath.Join(dir, "state"), exe: exe}
+	return fixture{repo: testiso.Repo(t), root: filepath.Join(dir, "state"), exe: exe, config: filepath.Join(dir, "claude")}
 }
 
 func (f fixture) opts(version string, dry bool) Options {
-	return Options{Repo: f.repo, Common: filepath.Join(f.repo, ".git"), Root: f.root, Exe: f.exe, Version: version, Dry: dry}
+	return Options{ConfigDir: f.config, Root: f.root, Exe: f.exe, Version: version, Dry: dry}
 }
 
-func (f fixture) settings() string { return SettingsPath(f.repo) }
+// optsIn is opts for a repository that is installed into too.
+func (f fixture) optsIn(dry bool) Options {
+	o := f.opts("v0.0.2", dry)
+	o.Repo = f.repo
+	return o
+}
+
+func (f fixture) settings() string { return SettingsFile(f.config) }
 
 func readFile(t *testing.T, path string) string {
 	t.Helper()
@@ -76,16 +86,18 @@ func TestInstall_AddsTrellisEntriesOnly(t *testing.T) {
 	f := newFixture(t)
 	testiso.Write(t, f.settings(), foreignSettings)
 
-	actions, err := Install(f.opts("v0.0.2", false))
+	o := f.opts("v0.0.2", false)
+	o.Clock = clock.Fake(time.Unix(1000, 0))
+	actions, err := Install(o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(f.root, "bin", "v0.0.2", "trellis")
 	want := []string{
 		"copy binary " + bin,
+		"back up " + f.settings() + " to " + f.settings() + ".pre-trellis-1000",
 		"add hook PreToolUse", "add hook PostToolUse", "add hook Stop",
 		"add hook SessionStart", "add hook SessionEnd", "add hook UserPromptSubmit",
-		"exclude .claude/settings.local.json from git status",
 	}
 	// Stop and PreToolUse already exist as foreign arrays: still "add hook".
 	if strings.Join(actions, "\n") != strings.Join(want, "\n") {
@@ -156,17 +168,17 @@ func TestInstall_CreatesSettingsWhenAbsent(t *testing.T) {
 func TestInstall_DryChangesNothing(t *testing.T) {
 	f := newFixture(t)
 	testiso.Write(t, f.settings(), foreignSettings)
-	testiso.Write(t, filepath.Join(f.repo, ".claude", "other.json"), "{}")
-	before := hashTree(t, f.repo, f.root)
+	testiso.Write(t, filepath.Join(f.config, "other.json"), "{}")
+	before := hashTree(t, f.repo, f.root, f.config)
 
 	actions, err := Install(f.opts("v0.0.2", true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 8 || actions[0] != "would copy binary "+filepath.Join(f.root, "bin", "v0.0.2", "trellis") || actions[1] != "would add hook PreToolUse" {
+	if len(actions) != 7 || actions[0] != "would copy binary "+filepath.Join(f.root, "bin", "v0.0.2", "trellis") || actions[1] != "would add hook PreToolUse" {
 		t.Errorf("actions %q", actions)
 	}
-	after := hashTree(t, f.repo, f.root)
+	after := hashTree(t, f.repo, f.root, f.config)
 	if len(after) != len(before) {
 		t.Errorf("file set changed: %d entries before, %d after", len(before), len(after))
 	}
@@ -251,7 +263,7 @@ func TestEject_LeavesOnlyForeignEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(actions) != 7 || actions[0] != "remove hook Stop" {
+	if len(actions) != 6 || actions[0] != "remove hook Stop" {
 		t.Errorf("actions %q", actions)
 	}
 	if got := readFile(t, f.settings()); got != foreignSettings {
@@ -378,7 +390,7 @@ func TestInstall_KeepsAnExistingPinnedBinaryWhateverItHolds(t *testing.T) {
 
 func TestInstall_StateRootWithASpaceStillRoundTrips(t *testing.T) {
 	f := newFixture(t)
-	f.root = filepath.Join(t.TempDir(), "my state")
+	f.root = filepath.Join(store.Canonical(t.TempDir()), "my state")
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
@@ -414,194 +426,6 @@ func contains(lines []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// The settings file install writes is untracked in every installed primary
-// checkout; the repository's local exclude list keeps it out of git status,
-// so nothing that counts untracked files (tree merge, the discard wall)
-// counts the file trellis itself made.
-func TestInstall_ExcludesTheSettingsFileFromGitStatus(t *testing.T) {
-	f := newFixture(t)
-	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-	testiso.Write(t, exclude, "# foreign line\n*.log\n")
-
-	actions, err := Install(f.opts("v0.0.2", false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := actions[len(actions)-1]; got != "exclude .claude/settings.local.json from git status" {
-		t.Errorf("last action = %q", got)
-	}
-	want := "# foreign line\n*.log\n.claude/settings.local.json\n"
-	if got := readFile(t, exclude); got != want {
-		t.Errorf("exclude:\n%s\nwant:\n%s", got, want)
-	}
-	if got := testiso.Git(t, f.repo, "status", "--porcelain"); got != "" {
-		t.Errorf("git status after install = %q, want clean", got)
-	}
-
-	actions, err = Install(f.opts("v0.0.2", false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := actions[len(actions)-1]; got != "keep exclude .claude/settings.local.json" {
-		t.Errorf("second install last action = %q", got)
-	}
-	if got := readFile(t, exclude); got != want {
-		t.Errorf("second install changed the exclude file:\n%s", got)
-	}
-}
-
-func TestInstall_DryDoesNotTouchTheExcludeFile(t *testing.T) {
-	f := newFixture(t)
-	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-	testiso.Write(t, exclude, "*.log\n")
-
-	actions, err := Install(f.opts("v0.0.2", true))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := actions[len(actions)-1]; got != "would exclude .claude/settings.local.json from git status" {
-		t.Errorf("last action = %q", got)
-	}
-	if got := readFile(t, exclude); got != "*.log\n" {
-		t.Errorf("dry run changed the exclude file: %q", got)
-	}
-}
-
-func TestEject_RemovesOnlyTheExcludeLineItAdded(t *testing.T) {
-	f := newFixture(t)
-	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-	testiso.Write(t, exclude, "*.log\n")
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-		t.Fatal(err)
-	}
-
-	actions, err := Eject(f.opts("v0.0.2", false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := actions[len(actions)-1]; got != "remove exclude .claude/settings.local.json" {
-		t.Errorf("last action = %q", got)
-	}
-	if got := readFile(t, exclude); got != "*.log\n" {
-		t.Errorf("exclude after eject = %q, want the foreign line only", got)
-	}
-}
-
-func TestEject_RemovesTheExcludeLineWhenTheSettingsFileIsGone(t *testing.T) {
-	f := newFixture(t)
-	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(f.settings()); err != nil {
-		t.Fatal(err)
-	}
-
-	actions, err := Eject(f.opts("v0.0.2", false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(actions) != 1 || actions[0] != "remove exclude .claude/settings.local.json" {
-		t.Errorf("actions = %q", actions)
-	}
-	if got := readFile(t, exclude); strings.Contains(got, ".claude/settings.local.json") {
-		t.Errorf("exclude still holds the line: %q", got)
-	}
-}
-
-func TestExclude_MatchesWholeLinesOnlyAndKeepsEveryForeignByte(t *testing.T) {
-	// restored is what eject leaves: the original, except that a file
-	// without a trailing newline keeps the newline install had to add.
-	cases := []struct{ name, before, after, restored string }{
-		{"no trailing newline", "*.log", "*.log\n.claude/settings.local.json\n", "*.log\n"},
-		{"crlf file", "*.log\r\nbuild/\r\n", "*.log\r\nbuild/\r\n.claude/settings.local.json\n", "*.log\r\nbuild/\r\n"},
-		{"lookalike lines survive", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n.claude/settings.local.json\n", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n"},
-		{"empty file", "", ".claude/settings.local.json\n", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f := newFixture(t)
-			exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-			testiso.Write(t, exclude, c.before)
-			if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-				t.Fatal(err)
-			}
-			if got := readFile(t, exclude); got != c.after {
-				t.Errorf("after install:\n%q\nwant:\n%q", got, c.after)
-			}
-			if _, err := Eject(f.opts("v0.0.2", false)); err != nil {
-				t.Fatal(err)
-			}
-			if got := readFile(t, exclude); got != c.restored {
-				t.Errorf("after eject:\n%q\nwant:\n%q", got, c.restored)
-			}
-		})
-	}
-}
-
-func TestExclude_MissingInfoDirIsCreatedAndEmptyCommonIsSkipped(t *testing.T) {
-	f := newFixture(t)
-	info := filepath.Join(f.repo, ".git", "info")
-	if err := os.RemoveAll(info); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-		t.Fatal(err)
-	}
-	if got := readFile(t, filepath.Join(info, "exclude")); got != ".claude/settings.local.json\n" {
-		t.Errorf("exclude = %q", got)
-	}
-
-	g := newFixture(t)
-	o := g.opts("v0.0.2", false)
-	o.Common = ""
-	actions, err := Install(o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range actions {
-		if strings.Contains(a, "exclude") {
-			t.Errorf("empty Common still produced %q", a)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(g.repo, ".git", "info", "exclude")); err == nil {
-		if got := readFile(t, filepath.Join(g.repo, ".git", "info", "exclude")); strings.Contains(got, "settings.local") {
-			t.Errorf("empty Common wrote the exclude line")
-		}
-	}
-	ejected, err := Eject(o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range ejected {
-		if strings.Contains(a, "exclude") {
-			t.Errorf("empty Common eject produced %q", a)
-		}
-	}
-}
-
-func TestEject_WithoutTheExcludeLineReportsNoExcludeAction(t *testing.T) {
-	f := newFixture(t)
-	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
-		t.Fatal(err)
-	}
-	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
-	testiso.Write(t, exclude, "*.log\n")
-
-	actions, err := Eject(f.opts("v0.0.2", false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range actions {
-		if strings.Contains(a, "exclude") {
-			t.Errorf("eject reported %q with no line to remove", a)
-		}
-	}
-	if got := readFile(t, exclude); got != "*.log\n" {
-		t.Errorf("exclude changed: %q", got)
-	}
 }
 
 func TestDoctor_NamesTheEventsAPartialInstallLacks(t *testing.T) {

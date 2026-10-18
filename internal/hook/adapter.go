@@ -97,6 +97,11 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	if p.SessionID == "" && name != kernel.HookPreToolUse {
 		return out, fmt.Errorf("hook: %s payload has no session_id", name)
 	}
+	if p.Cwd == "" && known != nil {
+		// The caller resolved the directory (the process's, as the payload
+		// names none) and located the repository from it.
+		p.Cwd = known.Root
+	}
 	if p.Cwd == "" {
 		return out, fmt.Errorf("hook: %s payload has no cwd", name)
 	}
