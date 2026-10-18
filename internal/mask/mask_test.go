@@ -12,7 +12,7 @@ func TestMain(m *testing.M) { testiso.Main(m) }
 // blank is n spaces: the masked form of an n-byte string body.
 func blank(n int) string { return strings.Repeat(" ", n) }
 
-func TestStringsAndComments_Bash(t *testing.T) {
+func TestBlank_Bash(t *testing.T) {
 	cases := []struct{ name, in, want string }{
 		{"double quoted token", `echo "git reset --hard"`, `echo "` + blank(16) + `"`},
 		{"single quoted token", `echo 'a --no-verify'`, `echo '` + blank(13) + `'`},
@@ -23,13 +23,13 @@ func TestStringsAndComments_Bash(t *testing.T) {
 		{"newline survives in a string", "echo 'a\nb'", "echo ' \n '"},
 	}
 	for _, c := range cases {
-		if got := StringsAndComments(c.in); got != c.want {
-			t.Errorf("%s: StringsAndComments(%q) = %q, want %q", c.name, c.in, got, c.want)
+		if got := Blank("Bash", c.in, true, true); got != c.want {
+			t.Errorf("%s: Blank(Bash, %q) = %q, want %q", c.name, c.in, got, c.want)
 		}
 	}
 }
 
-func TestForTool_PowerShell(t *testing.T) {
+func TestBlank_PowerShell(t *testing.T) {
 	cases := []struct{ name, tool, in, want string }{
 		{"single quotes", "PowerShell", `Write-Host 'git reset --hard'`, `Write-Host '` + blank(16) + `'`},
 		{"doubled quote stays inside", "PowerShell", `Write-Host 'it''s --force'`, `Write-Host '` + blank(13) + `'`},
@@ -38,8 +38,8 @@ func TestForTool_PowerShell(t *testing.T) {
 		{"bash for Bash", "Bash", `echo 'x'`, `echo ' '`},
 	}
 	for _, c := range cases {
-		if got := ForTool(c.tool, c.in); got != c.want {
-			t.Errorf("%s: ForTool(%s, %q) = %q, want %q", c.name, c.tool, c.in, got, c.want)
+		if got := Blank(c.tool, c.in, true, true); got != c.want {
+			t.Errorf("%s: Blank(%s, %q) = %q, want %q", c.name, c.tool, c.in, got, c.want)
 		}
 	}
 }
