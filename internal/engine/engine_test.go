@@ -243,3 +243,33 @@ func TestFold_UndeletablePendingFileDoesNotWedge(t *testing.T) {
 		t.Fatalf("log has %d events, %d of them the parked one; want 3 and 1", len(got), parked)
 	}
 }
+
+// A lazy log write lost to a power cut leaves state.json ahead of the log: its
+// last_seq names events the log no longer holds.
+func TestEngine_CheckpointAheadOfTheLogIsRebuiltFromTheLog(t *testing.T) {
+	s, dir, _ := open(t)
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	ahead := `{"last_seq":5,"arms":{"tree/ghost":{"exp1":"treatment"}},"trees":{"tree/ghost":1}}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(ahead), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := s.Read(1)
+	if len(got) != 2 || got[1].Seq != 2 {
+		t.Errorf("log = %+v, want the new event at Seq 2", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"last_seq":2,"arms":{"tree/a":{}},"trees":{"tree/a":1}}`
+	if string(raw) != want {
+		t.Errorf("state.json = %s, want %s", raw, want)
+	}
+}
