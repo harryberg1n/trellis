@@ -11,11 +11,6 @@ import (
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
-const keptSettings = `{ "model" : "opus",
-  "hooks" : { "Stop":[ {"hooks":[{"type":"command","command":"foreign"}]} ] }
-}
-`
-
 // installFixture is a repo with foreign settings, a state root and a stand-in
 // binary, with TRELLIS_STATE pointing at the root.
 func installFixture(t *testing.T) (env installEnv, repo, state string) {
@@ -26,7 +21,7 @@ func installFixture(t *testing.T) (env installEnv, repo, state string) {
 	t.Setenv("TRELLIS_STATE", state)
 	exe := filepath.Join(dir, "trellis")
 	testiso.Write(t, exe, "stand-in")
-	testiso.Write(t, filepath.Join(repo, ".claude", "settings.local.json"), keptSettings)
+	testiso.Write(t, filepath.Join(repo, ".claude", "settings.local.json"), testiso.ForeignSettings)
 	return installEnv{Cwd: repo, Exe: exe}, repo, state
 }
 
@@ -60,7 +55,7 @@ func TestInstallVerbs_InstallDoctorEjectCycle(t *testing.T) {
 	if code != 0 || !strings.HasPrefix(out, "remove hook Stop\n") {
 		t.Fatalf("eject: %d %q", code, out)
 	}
-	if b, _ := os.ReadFile(settings); string(b) != keptSettings {
+	if b, _ := os.ReadFile(settings); string(b) != testiso.ForeignSettings {
 		t.Errorf("settings after eject:\n%s", b)
 	}
 	if code, out, _ := runInstall(env, "eject"); code != 0 || out != "eject: nothing to remove\n" {

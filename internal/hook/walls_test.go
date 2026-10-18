@@ -31,8 +31,7 @@ func (e *env) pre(t testing.TB, cwd, command string, session bool) (code int, st
 // lane is a linked worktree of e.repo with one modified tracked file.
 func (e *env) dirtyLane(t testing.TB) string {
 	t.Helper()
-	lane := filepath.Join(filepath.Dir(e.repo), "lane")
-	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+	lane := testiso.AddLane(t, e.repo, "lane", "lane/x")
 	testiso.Write(t, filepath.Join(lane, "README.md"), "changed\n")
 	return lane
 }

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,22 +18,20 @@ import (
 )
 
 // ghFake answers gh itself and sends everything else (git) to the real
-// runner. issues is what any `gh issue list` returns.
+// runner. issues and prs are what any `gh issue list` and `gh pr list` return.
 type ghFake struct {
-	inner  runpkg.Runner
-	mu     sync.Mutex
-	gh     []runpkg.Spec
+	*testsupport.FakeRunner
 	issues string
 	prs    string
 }
 
-func (g *ghFake) Light(s runpkg.Spec) (runpkg.Result, error) {
-	if s.Name != "gh" {
-		return g.inner.Light(s)
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.gh = append(g.gh, s)
+func newGHFake(issues, prs string) *ghFake {
+	g := &ghFake{issues: issues, prs: prs}
+	g.FakeRunner = &testsupport.FakeRunner{Name: "gh", Inner: testsupport.Recorder(), Answer: g.answer}
+	return g
+}
+
+func (g *ghFake) answer(s runpkg.Spec) (runpkg.Result, error) {
 	switch s.Args[1] {
 	case "list":
 		if s.Args[0] == "pr" {
@@ -103,7 +100,7 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh := &ghFake{inner: testsupport.Recorder(), issues: "[]", prs: `[{"number":3,"headRefName":"C"}]`}
+	gh := newGHFake("[]", `[{"number":3,"headRefName":"C"}]`)
 	return reportEnv{Repo: repo, Root: stateRoot, Runner: gh, Clock: c}, gh, transcript
 }
 
@@ -153,20 +150,20 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 	}
 	// The first gh call reads the consumer's escape issues; every other one
 	// names the trellis repo.
-	if len(gh.gh) != 4 {
-		t.Fatalf("gh calls = %d, want 3 (escape list, pr list, title list, create): %+v", len(gh.gh), gh.gh)
+	if len(gh.Specs()) != 4 {
+		t.Fatalf("gh calls = %d, want 3 (escape list, pr list, title list, create): %+v", len(gh.Specs()), gh.Specs())
 	}
-	for _, s := range gh.gh[:2] {
+	for _, s := range gh.Specs()[:2] {
 		if slicesContain(s.Args, "--repo") {
 			t.Errorf("a read of the consumer repo names a repo: %v", s.Args)
 		}
 	}
-	for _, s := range gh.gh[2:] {
+	for _, s := range gh.Specs()[2:] {
 		if !hasPair(s.Args, "--repo", "harryberg1n/trellis") {
 			t.Errorf("gh %v lacks --repo harryberg1n/trellis", s.Args)
 		}
 	}
-	create := gh.gh[3]
+	create := gh.Specs()[3]
 	wantTitle := "report " + filepath.Base(env.Repo) + " 2026-W41"
 	if !hasPair(create.Args, "--title", wantTitle) {
 		t.Errorf("create argv = %v, want --title %q", create.Args, wantTitle)
@@ -196,7 +193,7 @@ func TestReportIssue_EditsThisWeeksIssue(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	last := gh.gh[len(gh.gh)-1]
+	last := gh.Specs()[len(gh.Specs())-1]
 	want := []string{"issue", "edit", "9", "--repo", "harryberg1n/trellis", "--body-file", "-"}
 	if !reflect.DeepEqual(last.Args, want) {
 		t.Errorf("last gh call = %v, want %v", last.Args, want)

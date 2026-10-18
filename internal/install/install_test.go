@@ -14,16 +14,12 @@ import (
 
 // foreignSettings has two foreign hook entries, odd spacing, a numeric 1.0,
 // and keys in an order no encoder would produce.
-const foreignSettings = `{ "zeta":{"b":1,"a":2},
-  "model" : "opus",
-  "ratio": 1.0,
-  "hooks" : {
-    "Stop":[ {"hooks":[{"type":"command","command":"foreign-stop"}]} ],
-	"PreToolUse" : [{"matcher":"Bash","hooks":[{"type":"command","command":"foreign-pre","timeout":5}]}]
-  },
-  "alpha": [3, 2.50, 1]
+const foreignSettings = testiso.ForeignSettings
+
+// settingsDoc is the part of a settings file the install tests read back.
+type settingsDoc struct {
+	Hooks map[string][]Entry `json:"hooks"`
 }
-`
 
 type fixture struct {
 	repo, root, exe string
@@ -116,9 +112,7 @@ func TestInstall_AddsTrellisEntriesOnly(t *testing.T) {
 		prev = i
 	}
 
-	var doc struct {
-		Hooks map[string][]Entry `json:"hooks"`
-	}
+	var doc settingsDoc
 	if err := json.Unmarshal([]byte(got), &doc); err != nil {
 		t.Fatalf("result is not JSON: %v\n%s", err, got)
 	}
@@ -152,9 +146,7 @@ func TestInstall_CreatesSettingsWhenAbsent(t *testing.T) {
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
-	var doc struct {
-		Hooks map[string][]Entry `json:"hooks"`
-	}
+	var doc settingsDoc
 	if err := json.Unmarshal([]byte(readFile(t, f.settings())), &doc); err != nil || len(doc.Hooks) != 6 {
 		t.Errorf("settings: %v, %d events", err, len(doc.Hooks))
 	}

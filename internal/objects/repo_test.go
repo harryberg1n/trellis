@@ -96,8 +96,7 @@ func TestIsPrimary(t *testing.T) {
 	if got, err := IsPrimary(repo); err != nil || !got {
 		t.Errorf("IsPrimary(repo) = %v, %v; want true", got, err)
 	}
-	lane := filepath.Join(filepath.Dir(repo), "lane")
-	testiso.Git(t, repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+	lane := testiso.AddLane(t, repo, "lane", "lane/x")
 	if got, err := IsPrimary(lane); err != nil || got {
 		t.Errorf("IsPrimary(linked worktree) = %v, %v; want false", got, err)
 	}
@@ -131,8 +130,7 @@ func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *te
 func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 	repo := testiso.Repo(t)
 	testiso.Git(t, repo, "config", "remote.origin.url", "https://example.invalid/o/r.git")
-	lane := filepath.Join(filepath.Dir(repo), "lane")
-	testiso.Git(t, repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+	lane := testiso.AddLane(t, repo, "lane", "lane/x")
 
 	got, err := Open(filepath.Join(repo, "no", "such", "dir"))
 	if err != nil {

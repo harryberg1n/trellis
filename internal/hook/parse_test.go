@@ -115,8 +115,7 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 	}
 
 	// A linked worktree has its own HEAD in .git/worktrees/<name>.
-	wt := filepath.Join(filepath.Dir(e.repo), "wt")
-	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	wt := testiso.AddLane(t, e.repo, "wt", "side/lane")
 	testiso.Write(t, filepath.Join(wt, "w.txt"), "w\n")
 	wp := fill(readShape(t, "edit_01_full"), vars(wt, filepath.Join(wt, "w.txt"), ""))
 	ev, ctx, err := Parse("PostToolUse", wp)

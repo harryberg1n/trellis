@@ -82,3 +82,26 @@ func PathWithOnly(t testing.TB, tools ...string) {
 	}
 	t.Setenv("PATH", strings.Join(dirs, string(os.PathListSeparator)))
 }
+
+// AddLane adds a linked worktree of the repo at primary, on a new branch, in
+// a sibling directory called dir, and returns its path.
+func AddLane(t testing.TB, primary, dir, branch string) string {
+	t.Helper()
+	lane := filepath.Join(filepath.Dir(primary), dir)
+	Git(t, primary, "worktree", "add", "-q", "-b", branch, lane)
+	return lane
+}
+
+// ForeignSettings is a settings file with two foreign hook entries, odd
+// spacing, a numeric 1.0 and keys in an order no encoder would produce: what
+// install must leave byte for byte.
+const ForeignSettings = `{ "zeta":{"b":1,"a":2},
+  "model" : "opus",
+  "ratio": 1.0,
+  "hooks" : {
+    "Stop":[ {"hooks":[{"type":"command","command":"foreign-stop"}]} ],
+	"PreToolUse" : [{"matcher":"Bash","hooks":[{"type":"command","command":"foreign-pre","timeout":5}]}]
+  },
+  "alpha": [3, 2.50, 1]
+}
+`
