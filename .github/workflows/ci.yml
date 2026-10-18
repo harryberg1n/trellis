@@ -28,6 +28,10 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
       - run: go test -race ./...
+      # The latency tests carry the !race build tag, so the step above skips
+      # them: the race detector slows every call and would measure itself.
+      - name: hook latency (no -race)
+        run: go test ./internal/hook -run Latency -count=1
 
   test-windows:
     runs-on: windows-latest
@@ -44,4 +48,8 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
       - run: go test -race ./...
+      # The latency tests carry the !race build tag, so the step above skips
+      # them: the race detector slows every call and would measure itself.
+      - name: hook latency (no -race)
+        run: go test ./internal/hook -run Latency -count=1
 
