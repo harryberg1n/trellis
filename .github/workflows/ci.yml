@@ -14,11 +14,11 @@ concurrency:
 
 jobs:
   test-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -28,12 +28,12 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
       # The linux run never builds the *_windows.go files; lint them too.
       - name: golangci-lint (windows files)
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         env:
           GOOS: windows
         with:
@@ -49,11 +49,11 @@ jobs:
         run: go test ./internal/hook -run Latency -count=1 -v
 
   test-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
