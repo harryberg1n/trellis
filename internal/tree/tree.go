@@ -633,6 +633,12 @@ func removeTree(env Env, w where, path, name string, force bool) error {
 		}
 	}
 	env.say("removed %s", path)
+	// The process left the tree before removing it (Leave), but the shell
+	// that started the verb cannot be moved by a child: its working directory
+	// is gone and its next command fails on getcwd. Say where to go.
+	if _, inside := store.Within(store.Canonical(path), store.Canonical(env.Dir)); inside {
+		env.say("your shell is still in %s: cd %s", path, w.Primary)
+	}
 	return nil
 }
 
