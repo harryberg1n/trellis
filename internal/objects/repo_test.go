@@ -14,17 +14,25 @@ import (
 func TestBranch(t *testing.T) {
 	repo := testiso.Repo(t)
 	git := filepath.Join(repo, ".git")
-	if got, err := Branch(git); err != nil || got != "main" {
-		t.Errorf("Branch = %q, %v; want main", got, err)
+	if got, detached, err := Branch(git); err != nil || got != "main" || detached {
+		t.Errorf("Branch = %q, detached %v, %v; want main, attached", got, detached, err)
 	}
 	testiso.Git(t, repo, "checkout", "-q", "-b", "feature/deep/x")
-	if got, _ := Branch(git); got != "feature/deep/x" {
+	if got, _, _ := Branch(git); got != "feature/deep/x" {
 		t.Errorf("Branch = %q, want feature/deep/x", got)
 	}
 	testiso.Git(t, repo, "checkout", "-q", "--detach")
 	want := "detached-" + testiso.Git(t, repo, "rev-parse", "--short=12", "HEAD")
-	if got, _ := Branch(git); got != want || len(got) != len("detached-")+12 {
-		t.Errorf("Branch = %q, want %q", got, want)
+	if got, detached, _ := Branch(git); got != want || !detached || len(got) != len("detached-")+12 {
+		t.Errorf("Branch = %q, detached %v, want %q and detached", got, detached, want)
+	}
+	// a real branch that happens to be called detached-<something> is not detached
+	testiso.Git(t, repo, "checkout", "-q", "-b", "detached-fix")
+	if got, detached, _ := Branch(git); got != "detached-fix" || detached {
+		t.Errorf("Branch = %q, detached %v; want the branch detached-fix, attached", got, detached)
+	}
+	if r, err := Open(repo); err != nil || r.Detached || r.Branch != "detached-fix" {
+		t.Errorf("Open = %+v, %v; want branch detached-fix, not detached", r, err)
 	}
 }
 

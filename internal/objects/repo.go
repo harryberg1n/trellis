@@ -51,20 +51,21 @@ func ceilingDirs() map[string]bool {
 }
 
 // Branch is the branch HEAD names in gitDir (the repo's own git dir, as
-// GitDirs returns it), "feature/x" for refs/heads/feature/x, or "detached"
-// "detached-" and the first 12 characters of the commit id when HEAD holds
-// one, so detached sessions at different commits get different replay refs.
-func Branch(gitDir string) (string, error) {
+// GitDirs returns it), "feature/x" for refs/heads/feature/x. When HEAD holds a
+// commit id the name is "detached-" and its first 12 characters, so detached
+// sessions at different commits get different replay refs, and detached is
+// true: a real branch called detached-x is not detached.
+func Branch(gitDir string) (name string, detached bool, err error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	head := strings.TrimSpace(string(raw))
 	ref, ok := strings.CutPrefix(head, "ref:")
 	if !ok {
-		return "detached-" + head[:min(12, len(head))], nil
+		return "detached-" + head[:min(12, len(head))], true, nil
 	}
-	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), nil
+	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), false, nil
 }
 
 // DefaultBranch is the repo's default branch, read from files without
@@ -108,11 +109,12 @@ func IsPrimary(repo string) (bool, error) {
 // paths are canonical: symlinks and 8.3 short names resolved, one spelling per
 // checkout, so repo ids and containment tests agree on every platform.
 type Repo struct {
-	Root    string // the working tree
-	Common  string // the git dir that holds objects, refs and config
-	GitDir  string // its own git dir (the worktree's, in a linked worktree)
-	Branch  string // the branch HEAD names, or "detached-<sha>"
-	Primary bool   // the main working tree, not a linked worktree
+	Root     string // the working tree
+	Common   string // the git dir that holds objects, refs and config
+	GitDir   string // its own git dir (the worktree's, in a linked worktree)
+	Branch   string // the branch HEAD names, or "detached-<sha>"
+	Detached bool   // HEAD holds a commit id, not a branch
+	Primary  bool   // the main working tree, not a linked worktree
 	// Remote is the URL of remote origin in the repo config, "" if it has none
 	// or the config cannot be read: the remote is best effort, so an unreadable
 	// config never makes a repository unknown to the walls.
@@ -134,20 +136,21 @@ func Open(dir string) (Repo, error) {
 		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
 	}
 	common, gitDir = store.Canonical(common), store.Canonical(gitDir)
-	branch, err := Branch(gitDir)
+	branch, detached, err := Branch(gitDir)
 	if err != nil {
 		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
 	}
 	remote, _, _ := ConfigValue(gitDir, `remote "origin"`, "url") // best effort, see Repo.Remote
 	return Repo{
-		Root:    root,
-		Common:  common,
-		GitDir:  gitDir,
-		Branch:  branch,
-		Primary: common == gitDir,
-		Remote:  remote,
-		Default: DefaultBranch(common),
-		History: HistoryRef(common),
+		Root:     root,
+		Common:   common,
+		GitDir:   gitDir,
+		Branch:   branch,
+		Detached: detached,
+		Primary:  common == gitDir,
+		Remote:   remote,
+		Default:  DefaultBranch(common),
+		History:  HistoryRef(common),
 	}, nil
 }
 

@@ -1514,3 +1514,28 @@ func TestMerge_InterruptBeforeAnyChildStartsStopsAtOnceWithoutGh(t *testing.T) {
 		t.Errorf("an interrupt is not a failure to fix and run again: %v", err)
 	}
 }
+
+func TestMerge_ABranchCalledDetachedDashSomethingIsNotADetachedHead(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "detached-fix", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := Path(f.primary, "detached-fix")
+	commitFile(t, path, "one.txt", "1\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatalf("a real branch named detached-fix was refused: %v", err)
+	}
+}
+
+func TestMerge_ARealDetachedHeadIsRefused(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	testiso.Git(t, path, "checkout", "-q", "--detach")
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || err.Error() != "tree merge: HEAD is detached" {
+		t.Errorf("err = %v, want the detached refusal", err)
+	}
+}

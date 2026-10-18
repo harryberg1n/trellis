@@ -265,7 +265,7 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 		return fmt.Errorf("tree merge: %s is the default branch", repo.Branch)
 	case repo.Primary:
 		return errors.New("tree merge: the primary checkout is not a tree")
-	case strings.HasPrefix(repo.Branch, "detached-"):
+	case repo.Detached:
 		return errors.New("tree merge: HEAD is detached")
 	}
 	name := repo.Branch
