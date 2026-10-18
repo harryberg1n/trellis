@@ -1,9 +1,23 @@
 package walls
 
+// The report parsing, the three ways to clear a false positive and the choice
+// of the staged form by version are copied from aphrollo-tools
+// internal/tdd/precommit/secretscan.go at 12b3724e (secretScanClearing,
+// secretScanParse, secretScanArgs, gitleaksVersion). Incident #1255: a
+// secret-looking line passed every local stage and failed CI's scan, and only a
+// rewrite of the lane's history cleared it; the refusal now names the file, the
+// line, the rule and the fingerprint, and how to clear a false positive. What
+// changed: the finding exit code is 2 (gitleaks' own failures exit 1), the
+// version is asked through the runner and kept in the state root, and the
+// refusal is the trellis deny line.
+
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -11,6 +25,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/run"
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // gitleaksTimeout bounds each scan a commit starts: the row's budget.
@@ -24,20 +39,103 @@ const notInstalled = "not applicable: gitleaks not installed"
 // distinct code is a finding.
 const findingExit = "2"
 
-// gitleaksArgs is the pinned flag set. `protect` is the form of gitleaks
-// before it moved the pre-commit scan to `git --staged`; it is the one the
-// plan names, and it still ships. --staged scans the index; without it
-// `protect` scans the uncommitted changes of the working tree.
+// scanTail is what every scan carries: no banner, secrets redacted, the
+// findings as a JSON report on standard output.
+var scanTail = []string{"--no-banner", "--redact", "--exit-code", findingExit, "--report-format", "json", "--report-path", "-"}
+
+// scanArgs is the scan of the index (staged) or of the uncommitted changes of
+// the working tree. gitleaks 8.19 moved both to `git --staged` and `git
+// --pre-commit`; older ones have `protect`, which still ships. A version that
+// was not named is taken as current.
+func scanArgs(version string, staged bool) []string {
+	var head []string
+	switch legacy := legacyGitleaks(version); {
+	case legacy && staged:
+		head = []string{"protect", "--staged"}
+	case legacy:
+		head = []string{"protect"}
+	case staged:
+		head = []string{"git", "--staged"}
+	default:
+		head = []string{"git", "--pre-commit"}
+	}
+	return append(head, scanTail...)
+}
+
+// legacyGitleaks reports whether version names a gitleaks before 8.19.
+func legacyGitleaks(version string) bool {
+	var major, minor, patch int
+	n, _ := fmt.Sscanf(version, "%d.%d.%d", &major, &minor, &patch)
+	return n == 3 && (major < 8 || major == 8 && minor < 19)
+}
+
 var (
-	stagedArgs = []string{"protect", "--staged", "--no-banner", "--redact", "--exit-code", findingExit}
-	treeArgs   = []string{"protect", "--no-banner", "--redact", "--exit-code", findingExit}
+	leaksFound = regexp.MustCompile(`leaks found: (\d+)`)
+	semver     = regexp.MustCompile(`\d+\.\d+\.\d+`)
 )
 
-var leaksFound = regexp.MustCompile(`leaks found: (\d+)`)
+// clearing is the three ways a false positive is cleared, in the words the
+// refusal prints.
+const clearing = `to clear a false positive, any one of:
+    1. put gitleaks:allow in a comment on that line, in the file's own comment syntax (// gitleaks:allow, # gitleaks:allow, <!-- gitleaks:allow -->)
+    2. add the finding's fingerprint, printed above, to .gitleaksignore (one per line)
+    3. add an [allowlist] to .gitleaks.toml
+  otherwise remove the secret`
+
+// finding is one line the scanner flagged.
+type finding struct {
+	File string
+	Line int
+	Rule string
+	// Fingerprint is what .gitleaksignore takes to clear this one finding.
+	Fingerprint string
+}
+
+// parseReport reads gitleaks' JSON report.
+func parseReport(out []byte) ([]finding, error) {
+	var raw []struct {
+		RuleID      string
+		StartLine   int
+		File        string
+		Fingerprint string
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("unreadable gitleaks report: %w", err)
+	}
+	findings := make([]finding, 0, len(raw))
+	for _, r := range raw {
+		findings = append(findings, finding{File: filepath.ToSlash(r.File), Line: r.StartLine, Rule: r.RuleID, Fingerprint: r.Fingerprint})
+	}
+	return findings, nil
+}
+
+// findingsCause is the deny cause for a report: each finding by file, line,
+// rule and fingerprint, then the three ways to clear a false positive. A scan
+// whose report cannot be read is still a finding (the exit code says so) and is
+// said without the list.
+func findingsCause(res run.Result) string {
+	found, err := parseReport(res.Stdout)
+	if err != nil || len(found) == 0 {
+		if m := leaksFound.FindSubmatch(append(res.Stderr, res.Stdout...)); m != nil {
+			return fmt.Sprintf("gitleaks reports %s finding(s) in the changes being committed", m[1])
+		}
+		return "gitleaks reports a finding in the changes being committed"
+	}
+	lines := make([]string, 0, len(found))
+	for _, f := range found {
+		line := fmt.Sprintf("%s:%d  %s", f.File, f.Line, f.Rule)
+		if f.Fingerprint != "" {
+			line += "  fingerprint " + f.Fingerprint
+		}
+		lines = append(lines, line)
+	}
+	return fmt.Sprintf("gitleaks reports %d finding(s) in the changes being committed:\n  %s\n%s", len(found), strings.Join(lines, "\n  "), clearing)
+}
 
 // secrets is the secrets wall (owner decision; gitleaks finding 2026-09): a
-// `git commit` while `gitleaks protect --staged` reports a finding. Only a
-// commit starts a process. A commit that stages as it commits (-a, a path,
+// `git commit` while gitleaks reports a finding in the staged changes. Only a
+// commit starts a process (two on the first commit after gitleaks changed: the
+// version, then the scan). A commit that stages as it commits (-a, a path,
 // --amend, or a `git add ... && git commit` chain) is scanned twice: the index,
 // and the working tree. Without gitleaks the wall is not applicable: the
 // action is an allow carrying that line, never a silent pass; so is a gitleaks
@@ -59,9 +157,14 @@ func secrets(a *analysis) (kernel.Action, bool) {
 		if !ok {
 			continue
 		}
-		scans := [][]string{stagedArgs}
+		bin, err := exec.LookPath("gitleaks")
+		if err != nil {
+			return kernel.Action{RowID: Secrets, Verdict: kernel.VerdictAllow, Line: notInstalled}, true
+		}
+		version := gitleaksVersion(a.r, bin, f.Root)
+		scans := [][]string{scanArgs(version, true)}
 		if added || stagesWhileCommitting(c.Args) {
-			scans = append(scans, treeArgs)
+			scans = append(scans, scanArgs(version, false))
 		}
 		for _, args := range scans {
 			if act, done := scan(a, f.Root, args); done {
@@ -70,6 +173,29 @@ func secrets(a *analysis) (kernel.Action, bool) {
 		}
 	}
 	return kernel.Action{}, false
+}
+
+// gitleaksVersion is the version the gitleaks at bin reports, asked once per
+// binary: the answer is kept in the state root under the binary's path and
+// mtime, so a reinstall asks again and a cached hook starts no second process.
+// "" when it named none (the current form is then used).
+func gitleaksVersion(r run.Runner, bin, dir string) string {
+	info, err := os.Stat(bin)
+	if err != nil {
+		return ""
+	}
+	root, rootErr := store.Root("")
+	if rootErr == nil {
+		if v, ok := store.LoadToolVersion(root, bin, info.ModTime()); ok {
+			return v
+		}
+	}
+	res, _ := r.Light(run.Spec{Name: "gitleaks", Args: []string{"version"}, Dir: dir, Timeout: gitleaksTimeout})
+	version := semver.FindString(string(res.Stdout) + string(res.Stderr))
+	if rootErr == nil {
+		_ = store.SaveToolVersion(root, bin, info.ModTime(), version) // a cache that cannot be written is asked again
+	}
+	return version
 }
 
 // scan runs one gitleaks scan. done is false for a clean scan.
@@ -81,11 +207,7 @@ func scan(a *analysis, root string, args []string) (kernel.Action, bool) {
 	case errors.Is(err, exec.ErrNotFound):
 		return kernel.Action{RowID: Secrets, Verdict: kernel.VerdictAllow, Line: notInstalled}, true
 	case res.ExitCode == 2 && !errors.Is(err, run.ErrTimeout):
-		cause := "gitleaks reports a finding in the changes being committed"
-		if m := leaksFound.FindSubmatch(append(res.Stderr, res.Stdout...)); m != nil {
-			cause = fmt.Sprintf("gitleaks reports %s finding(s) in the changes being committed", m[1])
-		}
-		return kernel.Action{RowID: Secrets, Verdict: kernel.VerdictDeny, Line: DenyLine(Secrets, cause)}, true
+		return kernel.Action{RowID: Secrets, Verdict: kernel.VerdictDeny, Line: DenyLine(Secrets, findingsCause(res))}, true
 	}
 	why := firstLine(err.Error())
 	if errors.Is(err, run.ErrTimeout) {

@@ -3,10 +3,12 @@ package walls_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/harryberg1n/trellis/internal/hook"
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -269,7 +271,7 @@ func TestSecrets_NotApplicableWithoutGitleaks(t *testing.T) {
 
 func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 	w := newWorld(t)
-	testiso.FakeTool(t, "gitleaks", 0, "")
+	calls := testiso.FakeGitleaks(t, "8.21.1", 0, "[]")
 	rec := testsupport.Recorder()
 	for _, cmd := range []string{"git status", "git push origin HEAD", "echo git commit", "ls"} {
 		decide(t, bash(t, w.tree, cmd, true), rec)
@@ -278,9 +280,13 @@ func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 		t.Fatalf("spawns %v for non-commit commands, want none", rec.Kinds())
 	}
 	decide(t, bash(t, w.tree, `git commit -m "x"`, true), rec)
-	spec := rec.Specs()
-	if len(spec) != 1 || spec[0].Name != "gitleaks" || strings.Join(spec[0].Args, " ") != "protect --staged --no-banner --redact --exit-code 2" {
-		t.Errorf("spawns %+v, want one gitleaks protect --staged --no-banner --redact", spec)
+	const scan = "git --staged --no-banner --redact --exit-code 2 --report-format json --report-path -"
+	if got := calls(); strings.Join(got, "|") != "version|"+scan {
+		t.Errorf("gitleaks calls %q, want the version once, then the one staged scan", got)
+	}
+	decide(t, bash(t, w.tree, `git commit -m "y"`, true), rec)
+	if got := calls(); strings.Join(got, "|") != "version|"+scan+"|"+scan {
+		t.Errorf("gitleaks calls %q after a second commit, want the version asked only once", got)
 	}
 }
 
@@ -458,8 +464,9 @@ func TestSecrets_OnlyExitCodeTwoIsAFinding(t *testing.T) {
 
 func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
 	w := newWorld(t)
-	staged := "protect --staged --no-banner --redact --exit-code 2"
-	tree := "protect --no-banner --redact --exit-code 2"
+	const tail = " --no-banner --redact --exit-code 2 --report-format json --report-path -"
+	staged := "git --staged" + tail
+	tree := "git --pre-commit" + tail
 	for _, c := range []struct {
 		cmd  string
 		want []string
@@ -473,16 +480,10 @@ func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
 		{`git add -A && git commit -m x`, []string{staged, tree}},
 		{`git add . ; git commit -m x`, []string{staged, tree}},
 	} {
-		testiso.FakeTool(t, "gitleaks", 0, "")
-		rec := testsupport.Recorder()
-		decide(t, bash(t, w.tree, c.cmd, true), rec)
-		var got []string
-		for _, s := range rec.Specs() {
-			if s.Name == "gitleaks" {
-				got = append(got, strings.Join(s.Args, " "))
-			}
-		}
-		if !reflect.DeepEqual(got, c.want) {
+		calls := testiso.FakeGitleaks(t, "8.21.1", 0, "[]")
+		decide(t, bash(t, w.tree, c.cmd, true), testsupport.Recorder())
+		// The first commit with a gitleaks asks its version, then scans.
+		if got := calls(); !reflect.DeepEqual(got, append([]string{"version"}, c.want...)) {
 			t.Errorf("%q: gitleaks calls %q, want %q", c.cmd, got, c.want)
 		}
 	}
@@ -806,4 +807,87 @@ func TestDiscard_StashDropOfAnEmptyStashPasses(t *testing.T) {
 			t.Errorf("%q with a stash entry: denies %+v, want the line %q", cmd, d, want)
 		}
 	}
+}
+
+const gitleaksReport = `[
+ {"RuleID":"aws-access-token","StartLine":12,"File":"cfg/app.env","Fingerprint":"cfg/app.env:aws-access-token:12","Secret":"REDACTED"},
+ {"RuleID":"generic-api-key","StartLine":3,"File":"main.go","Fingerprint":"abc123:main.go:generic-api-key:3","Secret":"REDACTED"}
+]`
+
+func TestSecrets_DenyNamesEachFindingAndTheThreeWaysToClearIt(t *testing.T) {
+	w := newWorld(t)
+	testiso.FakeGitleaks(t, "8.21.1", 2, gitleaksReport)
+	d := verdicts(decide(t, bash(t, w.tree, `git commit -m "add keys"`, true), testsupport.Recorder()), kernel.VerdictDeny)
+	want := "trellis: secrets: gitleaks reports 2 finding(s) in the changes being committed:\n" +
+		"  cfg/app.env:12  aws-access-token  fingerprint cfg/app.env:aws-access-token:12\n" +
+		"  main.go:3  generic-api-key  fingerprint abc123:main.go:generic-api-key:3\n" +
+		"to clear a false positive, any one of:\n" +
+		"    1. put gitleaks:allow in a comment on that line, in the file's own comment syntax (// gitleaks:allow, # gitleaks:allow, <!-- gitleaks:allow -->)\n" +
+		"    2. add the finding's fingerprint, printed above, to .gitleaksignore (one per line)\n" +
+		"    3. add an [allowlist] to .gitleaks.toml\n" +
+		"  otherwise remove the secret. Override: none."
+	if len(d) != 1 || d[0].RowID != "secrets" || d[0].Line != want {
+		t.Errorf("denies %+v, want the one line\n%s", d, want)
+	}
+}
+
+func TestSecrets_AnUnreadableReportAtExitTwoIsStillAFinding(t *testing.T) {
+	w := newWorld(t)
+	testiso.FakeGitleaks(t, "8.21.1", 2, "not json")
+	d := verdicts(decide(t, bash(t, w.tree, `git commit -m "x"`, true), testsupport.Recorder()), kernel.VerdictDeny)
+	want := "trellis: secrets: gitleaks reports a finding in the changes being committed. Override: none."
+	if len(d) != 1 || d[0].Line != want {
+		t.Errorf("denies %+v, want the line %q", d, want)
+	}
+}
+
+func TestSecrets_ProtectBelow8_19AndGitFromIt(t *testing.T) {
+	const tail = " --no-banner --redact --exit-code 2 --report-format json --report-path -"
+	for _, c := range []struct{ version, scan string }{
+		{"8.18.2", "protect --staged" + tail},
+		{"7.6.1", "protect --staged" + tail},
+		{"8.19.0", "git --staged" + tail},
+		{"9.0.0", "git --staged" + tail},
+		{"", "git --staged" + tail}, // a build that names no version is taken as current
+	} {
+		w := newWorld(t)
+		calls := testiso.FakeGitleaks(t, c.version, 0, "[]")
+		decide(t, bash(t, w.tree, `git commit -m "x"`, true), testsupport.Recorder())
+		if got := strings.Join(calls(), "|"); got != "version|"+c.scan {
+			t.Errorf("version %q: calls %q, want version then %q", c.version, got, c.scan)
+		}
+	}
+}
+
+func TestSecrets_TheVersionIsAskedAgainWhenTheBinaryChanges(t *testing.T) {
+	w := newWorld(t)
+	calls := testiso.FakeGitleaks(t, "8.21.1", 0, "[]")
+	bin, err := exec.LookPath("gitleaks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := testsupport.Recorder()
+	decide(t, bash(t, w.tree, `git commit -m "x"`, true), rec)
+	decide(t, bash(t, w.tree, `git commit -m "y"`, true), rec)
+	if got := countOf(calls(), "version"); got != 1 {
+		t.Fatalf("version asked %d times for two commits, want 1", got)
+	}
+	reinstalled := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(bin, reinstalled, reinstalled); err != nil {
+		t.Fatal(err)
+	}
+	decide(t, bash(t, w.tree, `git commit -m "z"`, true), rec)
+	if got := countOf(calls(), "version"); got != 2 {
+		t.Errorf("version asked %d times after the binary's mtime changed, want 2", got)
+	}
+}
+
+func countOf(lines []string, want string) int {
+	n := 0
+	for _, l := range lines {
+		if l == want {
+			n++
+		}
+	}
+	return n
 }
