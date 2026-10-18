@@ -13,6 +13,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -42,24 +43,38 @@ type Log interface {
 type Store struct {
 	Shares map[string]int
 
-	dir       string
-	clock     clock.Clock
-	bytesRead atomic.Int64
-	skipMu    sync.Mutex
-	skipped   map[int64]bool
-	mu        sync.Mutex // in-process; the file lock covers other processes
-	rename    func(oldpath, newpath string) error
-	fsync     func(*os.File) error
+	dir         string
+	clock       clock.Clock
+	bytesRead   atomic.Int64
+	skipMu      sync.Mutex
+	skipped     map[int64]bool
+	mu          sync.Mutex // in-process; the file lock covers other processes
+	rename      func(oldpath, newpath string) error
+	fsync       func(*os.File) error
+	lockTimeout time.Duration
 }
 
 var _ Log = (*Store)(nil)
 
+// Option configures Open.
+type Option func(*Store)
+
+// WithLockTimeout sets how long an operation waits for the repo lock before
+// it parks its event. The default is LockTimeout.
+func WithLockTimeout(d time.Duration) Option {
+	return func(s *Store) { s.lockTimeout = d }
+}
+
 // Open prepares repoDir and returns its Store.
-func Open(repoDir string, c clock.Clock) (*Store, error) {
+func Open(repoDir string, c clock.Clock, opts ...Option) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{dir: repoDir, clock: c, rename: os.Rename, fsync: (*os.File).Sync, skipped: map[int64]bool{}}, nil
+	s := &Store{dir: repoDir, clock: c, rename: os.Rename, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
+	for _, o := range opts {
+		o(s)
+	}
+	return s, nil
 }
 
 func (s *Store) logPath() string    { return filepath.Join(s.dir, "events.jsonl") }
