@@ -48,18 +48,16 @@ var scanTail = []string{"--no-banner", "--redact", "--exit-code", findingExit, "
 // --pre-commit`; older ones have `protect`, which still ships. A version that
 // was not named is taken as current.
 func scanArgs(version string, staged bool) []string {
-	var head []string
-	switch legacy := legacyGitleaks(version); {
+	legacy := legacyGitleaks(version)
+	switch {
 	case legacy && staged:
-		head = []string{"protect", "--staged"}
+		return slices.Concat([]string{"protect", "--staged"}, scanTail)
 	case legacy:
-		head = []string{"protect"}
+		return slices.Concat([]string{"protect"}, scanTail)
 	case staged:
-		head = []string{"git", "--staged"}
-	default:
-		head = []string{"git", "--pre-commit"}
+		return slices.Concat([]string{"git", "--staged"}, scanTail)
 	}
-	return append(head, scanTail...)
+	return slices.Concat([]string{"git", "--pre-commit"}, scanTail)
 }
 
 // legacyGitleaks reports whether version names a gitleaks before 8.19.

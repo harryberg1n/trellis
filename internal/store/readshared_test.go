@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"io/fs"
@@ -26,7 +27,7 @@ func TestReadFileShared_ReadsTheWholeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readFileShared(path)
-	if err != nil || string(got) != string(want) {
+	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("read %d bytes, err %v, want all %d", len(got), err, len(want))
 	}
 }
@@ -43,7 +44,7 @@ func TestWriteAtomic_ReplacesAFileASharedReaderHoldsOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer func() { _ = held.Close() }()
 
 	// A stepping clock: a replace the reader blocked would be retried to the
 	// bound and fail, with no real time spent either way.

@@ -36,7 +36,7 @@ func TestRetryRename_RefusedTwiceThenSucceedsOnTheFakeClock(t *testing.T) {
 		return nil
 	}
 	done := make(chan error, 1)
-	go func() { done <- retryRename(fc, rename, anyErr, time.Second) }()
+	go func() { done <- retryRename(fc, rename, anyErr) }()
 
 	fc.BlockUntil(1)
 	fc.Advance(time.Millisecond)
@@ -49,7 +49,7 @@ func TestRetryRename_RefusedTwiceThenSucceedsOnTheFakeClock(t *testing.T) {
 
 func TestRetryRename_ReturnsAnErrorNothingWillClearAtOnce(t *testing.T) {
 	calls := 0
-	err := retryRename(&stepClock{}, func() error { calls++; return errBusy }, func(error) bool { return false }, time.Second)
+	err := retryRename(&stepClock{}, func() error { calls++; return errBusy }, func(error) bool { return false })
 	if !errors.Is(err, errBusy) || calls != 1 {
 		t.Fatalf("err = %v after %d calls, want busy after 1", err, calls)
 	}
@@ -59,7 +59,7 @@ func TestRetryRename_GivesUpAtTheBoundWithTheLastError(t *testing.T) {
 	start := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
 	c := &stepClock{now: start}
 	calls := 0
-	err := retryRename(c, func() error { calls++; return errBusy }, anyErr, time.Second)
+	err := retryRename(c, func() error { calls++; return errBusy }, anyErr)
 	if !errors.Is(err, errBusy) {
 		t.Fatalf("err = %v, want the last error", err)
 	}

@@ -76,7 +76,7 @@ func WriteAtomic(dir, name string, data []byte, opts ...AtomicOption) error {
 	}
 	if err == nil {
 		dst := filepath.Join(dir, name)
-		err = retryRename(c.clock, func() error { return c.rename(tmp, dst) }, c.retry, renameBound)
+		err = retryRename(c.clock, func() error { return c.rename(tmp, dst) }, c.retry)
 	}
 	if err != nil {
 		if rerr := os.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {

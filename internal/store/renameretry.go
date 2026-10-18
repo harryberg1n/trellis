@@ -23,10 +23,10 @@ const (
 )
 
 // retryRename runs rename until it succeeds, fails with an error retryable
-// rejects, or bound has passed on c, and answers the last error. The pauses
+// rejects, or renameBound has passed on c, and answers the last error. The pauses
 // are waits on c, never a sleep.
-func retryRename(c clock.Clock, rename func() error, retryable func(error) bool, bound time.Duration) error {
-	deadline := c.Now().Add(bound)
+func retryRename(c clock.Clock, rename func() error, retryable func(error) bool) error {
+	deadline := c.Now().Add(renameBound)
 	pause := renameRetryEvery
 	for {
 		err := rename()
