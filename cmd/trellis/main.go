@@ -21,6 +21,7 @@ verbs:
   doctor    check the installed hooks against this binary and the state root
   eject     remove the hooks install added
   tree      worktrees over plain git and gh: trellis tree new|sync|merge|rm
+  update    fetch the newest release, verify and pin it, re-install every repo: trellis update [--to VERSION] [--dry] [--allow-dev]
   help      print this text
 `
 
@@ -58,6 +59,8 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return installVerb(args, stdout, stderr)
 	case "tree":
 		return treeVerb(args[1:], stdout, stderr)
+	case "update":
+		return updateVerb(args[1:], stdout, stderr)
 	case "help":
 		_, _ = io.WriteString(stdout, usage)
 		return 0
