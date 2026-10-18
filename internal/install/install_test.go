@@ -488,3 +488,118 @@ func TestEject_RemovesOnlyTheExcludeLineItAdded(t *testing.T) {
 		t.Errorf("exclude after eject = %q, want the foreign line only", got)
 	}
 }
+
+func TestEject_RemovesTheExcludeLineWhenTheSettingsFileIsGone(t *testing.T) {
+	f := newFixture(t)
+	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.settings()); err != nil {
+		t.Fatal(err)
+	}
+
+	actions, err := Eject(f.opts("v0.0.2", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0] != "remove exclude .claude/settings.local.json" {
+		t.Errorf("actions = %q", actions)
+	}
+	if got := readFile(t, exclude); strings.Contains(got, ".claude/settings.local.json") {
+		t.Errorf("exclude still holds the line: %q", got)
+	}
+}
+
+func TestExclude_MatchesWholeLinesOnlyAndKeepsEveryForeignByte(t *testing.T) {
+	// restored is what eject leaves: the original, except that a file
+	// without a trailing newline keeps the newline install had to add.
+	cases := []struct{ name, before, after, restored string }{
+		{"no trailing newline", "*.log", "*.log\n.claude/settings.local.json\n", "*.log\n"},
+		{"crlf file", "*.log\r\nbuild/\r\n", "*.log\r\nbuild/\r\n.claude/settings.local.json\n", "*.log\r\nbuild/\r\n"},
+		{"lookalike lines survive", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n.claude/settings.local.json\n", "foo/.claude/settings.local.json\n# .claude/settings.local.json\n"},
+		{"empty file", "", ".claude/settings.local.json\n", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+			testiso.Write(t, exclude, c.before)
+			if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, exclude); got != c.after {
+				t.Errorf("after install:\n%q\nwant:\n%q", got, c.after)
+			}
+			if _, err := Eject(f.opts("v0.0.2", false)); err != nil {
+				t.Fatal(err)
+			}
+			if got := readFile(t, exclude); got != c.restored {
+				t.Errorf("after eject:\n%q\nwant:\n%q", got, c.restored)
+			}
+		})
+	}
+}
+
+func TestExclude_MissingInfoDirIsCreatedAndEmptyCommonIsSkipped(t *testing.T) {
+	f := newFixture(t)
+	info := filepath.Join(f.repo, ".git", "info")
+	if err := os.RemoveAll(info); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(info, "exclude")); got != ".claude/settings.local.json\n" {
+		t.Errorf("exclude = %q", got)
+	}
+
+	g := newFixture(t)
+	o := g.opts("v0.0.2", false)
+	o.Common = ""
+	actions, err := Install(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actions {
+		if strings.Contains(a, "exclude") {
+			t.Errorf("empty Common still produced %q", a)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(g.repo, ".git", "info", "exclude")); err == nil {
+		if got := readFile(t, filepath.Join(g.repo, ".git", "info", "exclude")); strings.Contains(got, "settings.local") {
+			t.Errorf("empty Common wrote the exclude line")
+		}
+	}
+	ejected, err := Eject(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range ejected {
+		if strings.Contains(a, "exclude") {
+			t.Errorf("empty Common eject produced %q", a)
+		}
+	}
+}
+
+func TestEject_WithoutTheExcludeLineReportsNoExcludeAction(t *testing.T) {
+	f := newFixture(t)
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	exclude := filepath.Join(f.repo, ".git", "info", "exclude")
+	testiso.Write(t, exclude, "*.log\n")
+
+	actions, err := Eject(f.opts("v0.0.2", false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range actions {
+		if strings.Contains(a, "exclude") {
+			t.Errorf("eject reported %q with no line to remove", a)
+		}
+	}
+	if got := readFile(t, exclude); got != "*.log\n" {
+		t.Errorf("exclude changed: %q", got)
+	}
+}
