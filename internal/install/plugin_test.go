@@ -16,9 +16,7 @@ func TestPluginManifest_HooksMirrorTheInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc struct {
-		Hooks map[string][]Entry `json:"hooks"`
-	}
+	var doc settingsDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}

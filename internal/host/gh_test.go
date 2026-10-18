@@ -5,27 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/testiso"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 func TestMain(m *testing.M) { testiso.Main(m) }
 
-// fakeRunner records the specs and answers with Out.
-type fakeRunner struct {
-	specs []run.Spec
-	out   string
-}
-
-func (f *fakeRunner) Light(s run.Spec) (run.Result, error) {
-	f.specs = append(f.specs, s)
-	return run.Result{Stdout: []byte(f.out)}, nil
-}
-
-var _ run.Runner = (*fakeRunner)(nil)
-
 func TestGH_ListIssuesArgvAndDecoding(t *testing.T) {
-	r := &fakeRunner{out: `[{"number":7,"title":"escape: x","body":"see #3","createdAt":"2026-10-02T10:00:00Z"}]`}
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":7,"title":"escape: x","body":"see #3","createdAt":"2026-10-02T10:00:00Z"}]`)}
 
 	got, err := GH{Runner: r, Dir: "d"}.ListIssues("", "escape:")
 	if err != nil {
@@ -36,13 +23,13 @@ func TestGH_ListIssuesArgvAndDecoding(t *testing.T) {
 		t.Errorf("issues = %+v, want %+v", got, want)
 	}
 	wantArgs := []string{"issue", "list", "--search", "escape:", "--state", "all", "--limit", "500", "--json", "number,title,body,createdAt"}
-	if !reflect.DeepEqual(r.specs[0].Args, wantArgs) || r.specs[0].Name != "gh" || r.specs[0].Dir != "d" {
-		t.Errorf("spec = %+v, want gh %v in d", r.specs[0], wantArgs)
+	if !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) || r.Specs()[0].Name != "gh" || r.Specs()[0].Dir != "d" {
+		t.Errorf("spec = %+v, want gh %v in d", r.Specs()[0], wantArgs)
 	}
 }
 
 func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
-	r := &fakeRunner{out: `[{"number":5,"headRefName":"feat-x"}]`}
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":5,"headRefName":"feat-x"}]`)}
 
 	got, err := GH{Runner: r, Dir: "d"}.ListMergedPRs("")
 	if err != nil {
@@ -53,13 +40,13 @@ func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
 		t.Errorf("prs = %+v, want %+v", got, want)
 	}
 	wantArgs := []string{"pr", "list", "--state", "merged", "--limit", "500", "--json", "number,headRefName"}
-	if !reflect.DeepEqual(r.specs[0].Args, wantArgs) {
-		t.Errorf("argv = %v, want %v", r.specs[0].Args, wantArgs)
+	if !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
+		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, wantArgs)
 	}
 }
 
 func TestGH_CreateAndEditTargetTheRepoAndKeepTheBodyOffTheArgv(t *testing.T) {
-	r := &fakeRunner{out: "https://github.com/o/r/issues/5\n"}
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("https://github.com/o/r/issues/5\n")}
 	g := GH{Runner: r}
 
 	url, err := g.CreateIssue("o/r", "t", "BODY")
@@ -75,10 +62,10 @@ func TestGH_CreateAndEditTargetTheRepoAndKeepTheBodyOffTheArgv(t *testing.T) {
 	}
 	wantCreate := []string{"issue", "create", "--repo", "o/r", "--title", "t", "--body-file", "-"}
 	wantEdit := []string{"issue", "edit", "5", "--repo", "o/r", "--body-file", "-"}
-	if !reflect.DeepEqual(r.specs[0].Args, wantCreate) || string(r.specs[0].Stdin) != "BODY" {
-		t.Errorf("create spec = %+v", r.specs[0])
+	if !reflect.DeepEqual(r.Specs()[0].Args, wantCreate) || string(r.Specs()[0].Stdin) != "BODY" {
+		t.Errorf("create spec = %+v", r.Specs()[0])
 	}
-	if !reflect.DeepEqual(r.specs[1].Args, wantEdit) || string(r.specs[1].Stdin) != "BODY2" {
-		t.Errorf("edit spec = %+v", r.specs[1])
+	if !reflect.DeepEqual(r.Specs()[1].Args, wantEdit) || string(r.Specs()[1].Stdin) != "BODY2" {
+		t.Errorf("edit spec = %+v", r.Specs()[1])
 	}
 }

@@ -2,7 +2,6 @@ package hook
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/objects"
 
-	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 )
@@ -142,17 +141,9 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		return fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n"))
 	}
 	pendingKinds := func(e *env) []string {
-		m, _ := filepath.Glob(filepath.Join(e.fallback, "events.pending", "*.json"))
-		out := make([]string, 0, len(m))
-		for _, f := range m {
-			raw, err := os.ReadFile(f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var ev kernel.Event
-			if err := json.Unmarshal(raw, &ev); err != nil {
-				t.Fatal(err)
-			}
+		evs := testsupport.PendingEvents(t, e.fallback)
+		out := make([]string, 0, len(evs))
+		for _, ev := range evs {
 			if ev.Detail["error"] == "" || ev.Detail["event"] != "PostToolUse" {
 				t.Errorf("fallback event detail %v lacks the error text or the hook event", ev.Detail)
 			}
@@ -343,8 +334,7 @@ func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 
 func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
 	e := newEnv(t)
-	wt := filepath.Join(filepath.Dir(e.repo), "wt")
-	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	wt := testiso.AddLane(t, e.repo, "wt", "side/lane")
 	f := filepath.Join(wt, "w.txt")
 	testiso.Write(t, f, "w\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(wt, f, "w\n")))
@@ -380,18 +370,11 @@ func TestRecorder_SyncFailureBecomesInternalError(t *testing.T) {
 	e.st.SetFsync(func(*os.File) error { return errors.New("disk full") })
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
 
-	m, _ := filepath.Glob(filepath.Join(e.fallback, "events.pending", "*.json"))
-	if len(m) != 1 {
-		t.Fatalf("fallback holds %v, want the internal.error", m)
+	pending := testsupport.PendingEvents(t, e.fallback)
+	if len(pending) != 1 {
+		t.Fatalf("fallback holds %+v, want the internal.error", pending)
 	}
-	raw, err := os.ReadFile(m[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ev kernel.Event
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		t.Fatal(err)
-	}
+	ev := pending[0]
 	if ev.Kind != "internal.error" || !strings.Contains(ev.Detail["error"], "syncing after turn.anchored") || !strings.Contains(ev.Detail["error"], "disk full") {
 		t.Errorf("fallback event %+v, want an internal.error naming the failed sync", ev)
 	}

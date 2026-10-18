@@ -24,8 +24,7 @@ type world struct{ primary, lane string }
 func newWorld(t testing.TB) world {
 	t.Helper()
 	primary := testiso.Repo(t)
-	lane := filepath.Join(filepath.Dir(primary), "lane")
-	testiso.Git(t, primary, "worktree", "add", "-q", "-b", "lane/x", lane)
+	lane := testiso.AddLane(t, primary, "lane", "lane/x")
 	tree := testiso.Git(t, primary, "rev-parse", "HEAD^{tree}")
 	c := testiso.Git(t, primary, "commit-tree", tree, "-p", "HEAD", "-m", "unmerged work")
 	testiso.Git(t, primary, "branch", "unmerged", c)
@@ -285,10 +284,8 @@ func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 func TestDiscard_WorktreeRemoveForceWithUnstagedIsDenied(t *testing.T) {
 	w := newWorld(t)
 	// A lane with exactly one unstaged file, and a clean one.
-	dirty := filepath.Join(filepath.Dir(w.primary), "dirty")
-	clean := filepath.Join(filepath.Dir(w.primary), "clean")
-	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "dirty/x", dirty)
-	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
+	dirty := testiso.AddLane(t, w.primary, "dirty", "dirty/x")
+	clean := testiso.AddLane(t, w.primary, "clean", "clean/x")
 	testiso.Write(t, filepath.Join(dirty, "README.md"), "edited\n")
 	r := quiet(t)
 
@@ -349,8 +346,7 @@ func TestDiscard_MeasuresWhatEachFormWouldDestroy(t *testing.T) {
 		}
 	}
 	// A clean tree costs nothing, and a pushed branch is recoverable.
-	clean := filepath.Join(filepath.Dir(w.primary), "clean")
-	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "clean/x", clean)
+	clean := testiso.AddLane(t, w.primary, "clean", "clean/x")
 	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git checkout -- README.md"} {
 		if got := decide(t, bash(t, clean, cmd, true), r); len(got) != 0 {
 			t.Errorf("%q in a clean lane: actions %+v, want none", cmd, got)
