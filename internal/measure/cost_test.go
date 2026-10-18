@@ -2,6 +2,7 @@ package measure
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,20 @@ func TestCost_FixtureTranscript(t *testing.T) {
 
 	if got != 0.0125 {
 		t.Errorf("cost of lane A = %v USD, want 0.0125", got)
+	}
+}
+
+func TestCost_LineOverTheLimitIsSkippedAndLaterTurnsCount(t *testing.T) {
+	rec := func(id string) string {
+		return `{"type":"assistant","timestamp":"2026-10-01T09:00:05Z","requestId":"` + id + `","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}` + "\n"
+	}
+	huge := `{"type":"user","message":{"content":"` + strings.Repeat("x", 9<<20) + `"}}` + "\n"
+	tr := []byte(rec("a") + huge + rec("b"))
+
+	got := LaneCosts(Facts{Usage: []Usage{{Lane: "A", Transcript: tr}}})["A"]
+
+	if got != 0.025 {
+		t.Errorf("cost = %v USD, want 0.025 (both records around the 9 MiB line)", got)
 	}
 }
 
