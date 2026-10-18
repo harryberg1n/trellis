@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/install"
@@ -385,10 +388,10 @@ func TestUpdate_DryChangesNothing(t *testing.T) {
 	}
 }
 
-func TestUpdate_DropsAGoneRepo(t *testing.T) {
+func TestUpdate_KeepsAMissingRepoInTheRecord(t *testing.T) {
 	w := newWorld(t)
-	gone := filepath.Join(w.dir, "gone")
-	if err := install.RecordRepo(w.root, gone); err != nil {
+	missing := filepath.Join(w.dir, "unmounted")
+	if err := install.RecordRepo(w.root, missing); err != nil {
 		t.Fatal(err)
 	}
 
@@ -396,12 +399,186 @@ func TestUpdate_DropsAGoneRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if want := "skip " + store.Canonical(gone) + ": gone"; !contains(w.lines(), want) {
+	if want := "skip " + store.Canonical(missing) + ": not found"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+	got, err := install.Repos(w.root)
+	if want := append(append([]string(nil), w.repos...), store.Canonical(missing)); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("Repos = %v, %v; want %v", got, err, want)
+	}
+}
+
+func TestUpdate_ForgetMissingDropsAMissingRepo(t *testing.T) {
+	w := newWorld(t)
+	missing := filepath.Join(w.dir, "gone")
+	if err := install.RecordRepo(w.root, missing); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.run(Options{ForgetMissing: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "forget " + store.Canonical(missing) + ": not found"; !contains(w.lines(), want) {
 		t.Errorf("no line %q in:\n%s", want, w.out)
 	}
 	got, err := install.Repos(w.root)
 	if err != nil || !reflect.DeepEqual(got, w.repos) {
 		t.Errorf("Repos = %v, %v; want %v", got, err, w.repos)
+	}
+}
+
+// oldPins pins these versions with some bytes.
+func (w *world) oldPins(versions ...string) {
+	w.t.Helper()
+	src := filepath.Join(w.dir, "older", "trellis")
+	testiso.Write(w.t, src, "older")
+	for _, v := range versions {
+		if _, _, err := install.Pin(w.root, v, src); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
+// alsoReference adds a second Stop hook to the repo's settings that runs the
+// pinned binary of version, a place install's re-install does not rewrite.
+func (w *world) alsoReference(repo, version string) {
+	w.t.Helper()
+	path := install.SettingsPath(repo)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(read(w.t, path)), &doc); err != nil {
+		w.t.Fatal(err)
+	}
+	hooks := doc["hooks"].(map[string]any)
+	hooks["Stop"] = append(hooks["Stop"].([]any), map[string]any{"hooks": []any{map[string]any{
+		"type": "command", "command": install.Command(install.BinPath(w.root, version, ""), "Stop"),
+	}}})
+	b, err := json.Marshal(doc)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	testiso.Write(w.t, path, string(b))
+}
+
+func TestUpdate_SweepKeepsAPinARepoStillReferences(t *testing.T) {
+	w := newWorld(t)
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	w.alsoReference(w.repos[1], "v0.0.1")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pins = %v, want %v (v0.0.1 is referenced, v0.0.2 is not)", got, want)
+	}
+	if !contains(w.lines(), "remove pin v0.0.2") {
+		t.Errorf("no removal of v0.0.2 in:\n%s", w.out)
+	}
+}
+
+func TestUpdate_SweepSkippedUntilAnInstallMarkedTheRecord(t *testing.T) {
+	w := newWorld(t)
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	// A record from before the marker existed: repos listed, no first line.
+	testiso.Write(t, filepath.Join(w.root, "repos.txt"), w.repos[0]+"\n"+w.repos[1]+"\n")
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The re-install of each repo marks the record, but only after the sweep
+	// decision reads it, so this run still must not sweep.
+	if got, want := w.pinned(), []string{"v0.0.1", "v0.0.2", "v0.0.3", "v0.0.4", "v0.0.5"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pins = %v, want %v", got, want)
+	}
+	const line = "sweep skipped: repos installed before v0.0.4 are not recorded; run trellis install in each once"
+	if !contains(w.lines(), line) {
+		t.Errorf("no line %q in:\n%s", line, w.out)
+	}
+}
+
+func TestUpdate_SweepSkippedWhileARepoIsMissing(t *testing.T) {
+	w := newWorld(t)
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	missing := store.Canonical(filepath.Join(w.dir, "unmounted"))
+	if err := install.RecordRepo(w.root, missing); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w.pinned(); len(got) != 5 {
+		t.Errorf("pins = %v, want nothing removed", got)
+	}
+	if want := "sweep skipped: " + missing + " is not found; --forget-missing drops it from the record"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestUpdate_SweepStopsWhenASettingsFileIsUnreadable(t *testing.T) {
+	w := newWorld(t)
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	testiso.Write(t, install.SettingsPath(w.repos[0]), "{ not json")
+
+	err := w.run(Options{})
+
+	if err == nil {
+		t.Fatal("a repo that could not be re-installed gave no error")
+	}
+	if got := w.pinned(); len(got) != 5 {
+		t.Errorf("pins = %v, want nothing removed", got)
+	}
+	found := false
+	for _, l := range w.lines() {
+		found = found || strings.HasPrefix(l, "sweep: "+w.repos[0]+": ")
+	}
+	if !found {
+		t.Errorf("no sweep line naming %s in:\n%s", w.repos[0], w.out)
+	}
+}
+
+func TestUpdate_DryNamesOnlyPinsARealRunRemoves(t *testing.T) {
+	w := newWorld(t)
+	w.oldPins("v0.0.1", "v0.0.2", "v0.0.5")
+	w.alsoReference(w.repos[1], "v0.0.1")
+
+	if err := w.run(Options{Dry: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !contains(w.lines(), "would remove pin v0.0.2") || contains(w.lines(), "would remove pin v0.0.1") {
+		t.Errorf("dry sweep lines wrong in:\n%s", w.out)
+	}
+}
+
+func TestUpdate_ErrorsReachTheCallerOnOneLine(t *testing.T) {
+	w := newWorld(t)
+	w.runner = &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{}, errors.New("exit status 1:\nHTTP 404: Not Found\n  (second line)")
+	}}
+
+	err := w.run(Options{})
+
+	if err == nil || strings.Contains(err.Error(), "\n") {
+		t.Errorf("err = %q, want one line", err)
+	}
+}
+
+func TestVerify_ReadsBinaryModeNamesAndUppercaseHex(t *testing.T) {
+	dir := t.TempDir()
+	testiso.Write(t, filepath.Join(dir, "bin"), "abc")
+	// sha256 of "abc", as `sha256sum -b` prints it: a "*" before the name.
+	const sum = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD"
+	testiso.Write(t, filepath.Join(dir, "sums"), "0000  other\n"+sum+" *bin\n")
+
+	if err := verify(filepath.Join(dir, "bin"), filepath.Join(dir, "sums"), "bin"); err != nil {
+		t.Errorf("verify = %v, want nil", err)
+	}
+	if err := verify(filepath.Join(dir, "bin"), filepath.Join(dir, "sums"), "missing"); err == nil {
+		t.Error("a name with no line verified")
 	}
 }
 
@@ -456,9 +633,23 @@ func TestUpdate_RefusesADevBuildWithoutAllowDev(t *testing.T) {
 	}
 }
 
-func TestUpdate_UnwritableBinaryOnPathNamesTheNewOne(t *testing.T) {
+func TestUpdate_ANonPermissionFailureOnPathIsAnError(t *testing.T) {
 	w := newWorld(t)
 	w.exe = filepath.Join(w.dir, "missing", "dir", "trellis")
+
+	err := w.run(Options{})
+
+	if err == nil {
+		t.Fatal("a failed replace of the binary on PATH exited 0")
+	}
+	if strings.Contains(w.out.String(), "the binary on PATH is") {
+		t.Errorf("a failure that is not a permission one printed the hint:\n%s", w.out)
+	}
+}
+
+func TestUpdate_BinaryOnPathInsideThePinsIsNamedNotReplaced(t *testing.T) {
+	w := newWorld(t)
+	w.exe = install.BinPath(w.root, "v0.0.3", "")
 
 	if err := w.run(Options{}); err != nil {
 		t.Fatal(err)
@@ -467,6 +658,19 @@ func TestUpdate_UnwritableBinaryOnPathNamesTheNewOne(t *testing.T) {
 	want := "the binary on PATH is " + w.exe + "; the new one is " + install.BinPath(w.root, "v0.0.4", "")
 	if !contains(w.lines(), want) {
 		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestClassify_OnlyPermissionIsNotWritable(t *testing.T) {
+	if err := notWritable(fmt.Errorf("open: %w", fs.ErrPermission)); !errors.Is(err, errNotWritable) {
+		t.Errorf("a permission error is %v, want not-writable", err)
+	}
+	if err := notWritable(syscall.EROFS); !errors.Is(err, errNotWritable) {
+		t.Errorf("a read-only file system is %v, want not-writable", err)
+	}
+	disk := errors.New("no space left on device")
+	if err := notWritable(disk); errors.Is(err, errNotWritable) || !errors.Is(err, disk) {
+		t.Errorf("a full disk is %v, want the error itself", err)
 	}
 }
 
