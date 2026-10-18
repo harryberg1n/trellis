@@ -41,7 +41,7 @@ type matcher func(Row, Event, Context) bool
 // noMatch is the step 2 matcher: matching arrives in step 6.
 func noMatch(Row, Event, Context) bool { return false }
 
-// Decide is the pure rule evaluation. In this tree only the state and arm
+// Decide is the pure rule evaluation. Until step 6 only the state and arm
 // filters exist, and nothing matches yet.
 func Decide(rows []Row, ev Event, ctx Context) []Action {
 	return decide(rows, ev, ctx, noMatch)
