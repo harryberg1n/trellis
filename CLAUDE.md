@@ -1,6 +1,6 @@
 # trellis: developer context
 
-Go module `github.com/harryberg1n/trellis`, Go 1.26.9. Dependencies: the standard library, `golang.org/x/sys` for Windows process calls, `pgregory.net/rapid` for property tests. The spec and plan live in `docs/sdd/` and are local only (git-ignored).
+Go module `github.com/harryberg1n/trellis`, Go 1.26.9. Dependencies: the standard library, `golang.org/x/sys` for Windows process calls, `pgregory.net/rapid` for property tests, `go.uber.org/goleak` for goroutine-leak checks (in `testiso.Main`). The spec and plan live in `docs/sdd/` and are local only (git-ignored).
 
 ## Rules
 
@@ -22,7 +22,7 @@ Dependencies point down only. `internal/kernel` and `internal/measure` import th
 
 ## Release
 
-A `v*` tag builds `linux/amd64`, `linux/arm64` and `windows/amd64` with `-trimpath` and the `buildinfo` ldflags, and attaches them with `sha256sums.txt`.
+The push to main that changes `VERSION` makes the release: it builds `linux/amd64`, `linux/arm64` and `windows/amd64` with `-trimpath` and the `buildinfo` ldflags, smoke-runs the Linux binary (its `version` must name the tag), and attaches them with `sha256sums.txt` to the GitHub Release `v<VERSION>`. A `v*` tag pushed by hand also builds, and must equal `v` plus the content of `VERSION`.
 
 ## Style
 

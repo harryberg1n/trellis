@@ -176,3 +176,39 @@ func TestTree_ACancelledContextStopsTheVerbOnOneLine(t *testing.T) {
 		t.Errorf("main would exit %d, want 130", exitCode(ctx, code))
 	}
 }
+
+func TestReadme_NamesEveryVerbOfTheUsage(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(raw)
+	var verbs []string
+	in := false
+	for _, l := range strings.Split(usage, "\n") {
+		switch {
+		case l == "verbs:":
+			in = true
+		case in && strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   "):
+			verbs = append(verbs, strings.Fields(l)[0])
+		}
+	}
+	if len(verbs) < 10 {
+		t.Fatalf("read %d verbs from the usage: %v", len(verbs), verbs)
+	}
+	for _, v := range verbs {
+		if !strings.Contains(readme, "`trellis "+v) {
+			t.Errorf("README does not name the verb `trellis %s`", v)
+		}
+	}
+	for _, v := range []string{"new", "sync", "merge", "rm"} {
+		if !strings.Contains(readme, "`trellis tree "+v) {
+			t.Errorf("README does not name `trellis tree %s`", v)
+		}
+	}
+	for _, want := range []string{"130", "authenticated `gh`", "VERSION bump is a release"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README lacks %q", want)
+		}
+	}
+}
