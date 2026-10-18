@@ -137,7 +137,7 @@ func readMessage(dir, name string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, maxMessageFile)
 	n, _ := f.Read(buf)
 	return string(buf[:n])

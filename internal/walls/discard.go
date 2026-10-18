@@ -121,7 +121,8 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) string 
 // A branch that does not exist is git's own error to report.
 func measureBranch(a *analysis, c gitCall, form string) string {
 	names := strings.Fields(strings.TrimPrefix(form, "branch -D "))
-	args := []string{"rev-list", "--count"}
+	args := make([]string, 0, len(names)+5)
+	args = append(args, "rev-list", "--count")
 	for _, n := range names {
 		args = append(args, "refs/heads/"+n)
 	}
