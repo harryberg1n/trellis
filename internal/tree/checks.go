@@ -49,8 +49,14 @@ func awaitChecks(env Env, gh host.GH, pr int, branch, head string) (bool, error)
 		if noWorkflows {
 			return false, nil
 		}
-		if waited >= checksWindow && !runOpenOn(gh, branch, head) {
-			break
+		if waited >= checksWindow {
+			open, err := runOpenOn(env, gh, branch, head)
+			if err != nil {
+				return false, fmt.Errorf("tree merge: runs of the head could not be read: %s", firstLine(err))
+			}
+			if !open {
+				break
+			}
 		}
 		if waited >= queuedWindow {
 			return false, &Fixable{Msg: fmt.Sprintf("tree merge: no checks appeared and a run of this head is still queued or in progress after %ds: run again",
@@ -70,22 +76,26 @@ func awaitChecks(env Env, gh host.GH, pr int, branch, head string) (bool, error)
 }
 
 // runOpenOn reports whether a pull_request workflow run of head is queued or in
-// progress. A run list that cannot be read counts none: the poll then judges
-// the checks there are, as it did before the runs were looked at. Source:
+// progress. A run list that cannot be read, after the retries, is an error: the
+// poll never takes an unread list for no run. Source:
 // aphrollo-tools internal/workspace/mergewait.go at 12b3724e
 // (requiredRunsOpen); incident merge-path: a PR merged with its required check
 // not made yet because the run was still queued.
-func runOpenOn(gh host.GH, branch, head string) bool {
-	runs, err := gh.PullRequestRuns(branch)
+func runOpenOn(env Env, gh host.GH, branch, head string) (bool, error) {
+	var runs []host.Run
+	err := env.retry("runs of "+branch, func() (err error) {
+		runs, err = gh.PullRequestRuns(branch)
+		return err
+	})
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, r := range runs {
 		if strings.EqualFold(r.HeadSHA, head) && r.Open() {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // watchAndReady waits for the checks to finish, then judges the pull request,

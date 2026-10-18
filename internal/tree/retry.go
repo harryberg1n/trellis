@@ -67,12 +67,10 @@ const maxLineKept = 4096
 func (w *lastLine) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	n := len(p)
+	// A verb output that fails must not stop the child: its pipe is read to the
+	// end, and the last line is kept all the same.
 	if w.out != nil {
-		var err error
-		if n, err = w.out.Write(p); err != nil {
-			return n, err
-		}
+		_, _ = w.out.Write(p)
 	}
 	for _, b := range p {
 		if b == '\n' || b == '\r' {
@@ -83,7 +81,7 @@ func (w *lastLine) Write(p []byte) (int, error) {
 			w.cur = append(w.cur, b)
 		}
 	}
-	return n, nil
+	return len(p), nil
 }
 
 func (w *lastLine) endLine() {

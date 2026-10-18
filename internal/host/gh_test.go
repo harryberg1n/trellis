@@ -328,3 +328,15 @@ func TestGH_ATimeoutNamesTheCommandAndTheDeadline(t *testing.T) {
 		t.Errorf("err = %v, want it to still wrap run.ErrTimeout", err)
 	}
 }
+
+func TestGH_ReadyOfflineIsNeitherNotInstalledNorAnAnswerOfGitHub(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("exit status 1: error connecting to api.github.com\ncheck your internet connection")
+	}}
+
+	err := GH{Runner: r}.Ready()
+
+	if errors.Is(err, ErrNotInstalled) || !Transient(err) {
+		t.Errorf("err = %v, want a transient failure that is not ErrNotInstalled", err)
+	}
+}

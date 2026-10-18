@@ -22,7 +22,10 @@ import (
 // 5xx are GitHub's status lines as gh prints them ("HTTP 502: Bad Gateway");
 // "unexpected end of json input" is gh failing to parse the error page of a
 // 500 on a paginated read (GitHub, 2026-10-07); "timed out after" is the text
-// of a gh child that ran out of its deadline (see GH.ghWithin).
+// of a gh child that ran out of its deadline (see GH.ghWithin); "error connecting
+// to" is gh's own line when the host cannot be reached, "error connecting to
+// <host>" and then "check your internet connection or https://githubstatus.com"
+// (gh 2.89.0, cmd/gh/main.go, printed for a net.DNSError or a dial failure).
 var transientMarks = []string{
 	"dial tcp",
 	"connectex",
@@ -35,6 +38,7 @@ var transientMarks = []string{
 	"no such host",
 	"temporary failure in name resolution",
 	"network is unreachable",
+	"error connecting to",
 	"unexpected eof",
 	"timed out after",
 	"context deadline exceeded",

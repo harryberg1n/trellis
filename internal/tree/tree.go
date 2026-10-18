@@ -103,9 +103,14 @@ func (e Env) wait(d time.Duration) {
 // Fixable is a failure the operator can fix and run the verb again: red CI, a
 // conflict, a branch that is behind, a head that moved. The command exits 2
 // for it and 1 for any other error.
-type Fixable struct{ Msg string }
+type Fixable struct {
+	Msg string
+	Err error // the cause, when callers should be able to tell it (a timeout); may be nil
+}
 
 func (f *Fixable) Error() string { return f.Msg }
+
+func (f *Fixable) Unwrap() error { return f.Err }
 
 func (e Env) say(format string, a ...any) { _, _ = fmt.Fprintf(e.Out, format+"\n", a...) }
 
@@ -182,7 +187,7 @@ func newTree(env Env, name, path string) error {
 	if strings.Trim(name, "0123456789") == "" {
 		return errors.New("tree new: a tree name cannot be only digits")
 	}
-	if strings.HasPrefix(name, "-") || name == "@" { // git takes a lone @ for HEAD
+	if strings.HasPrefix(name, "-") || name == "@" { // a lone @ is HEAD; check-ref-format --branch lets it through (git 2.53)
 		return invalidName(name)
 	}
 	w, err := env.locate("new")
@@ -209,7 +214,7 @@ func newTree(env Env, name, path string) error {
 		return fmt.Errorf("tree new: path %s exists", path)
 	}
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "fetch", "origin"); err != nil {
+		if _, err := env.runGit(w.Primary, "fetch", "--prune", "origin"); err != nil {
 			return fmt.Errorf("tree new: %w", err)
 		}
 		if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name); err == nil {
@@ -478,6 +483,9 @@ func runCheck(env Env, dir, name, cmd string) error {
 	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout, Stdout: tail, Stderr: tail})
 	if err != nil {
 		env.record(checkEvent(name, "red"))
+		if errors.Is(err, run.ErrTimeout) {
+			return &Fixable{Msg: fmt.Sprintf("tree merge: check %q timed out after %ds", cmd, int(checkTimeout.Seconds())), Err: err}
+		}
 		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLineOf(tail, res, err))}
 	}
 	env.record(checkEvent(name, "green"))

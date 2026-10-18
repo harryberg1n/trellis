@@ -1077,3 +1077,35 @@ func setAge(t *testing.T, path string, now time.Time, age time.Duration) {
 		t.Fatal(err)
 	}
 }
+
+func TestUpdate_AReRunAtTheSameVersionStillSweepsStaleStages(t *testing.T) {
+	w := newWorld(t)
+	w.latest = "v0.0.3"
+	old := filepath.Join(w.root, "stage", "v0.0.1")
+	testiso.Write(t, filepath.Join(old, "x"), "stale")
+	setAge(t, old, w.now, 30*time.Hour)
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the stale stage survived an update that found nothing to do: %v", err)
+	}
+}
+
+func TestUpdate_ASmokeCheckThatTimedOutSaysSoAndWrapsTheTimeout(t *testing.T) {
+	w := newWorld(t)
+	w.smoke = func(run.Spec) (run.Result, error) {
+		return run.Result{}, errors.Join(run.ErrTimeout, errors.New("signal: killed"))
+	}
+
+	err := updater{Env: w.env()}.smoke("staged", "v0.0.4")
+
+	if want := "the staged binary failed its smoke check: timed out after 10s"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+	if !errors.Is(err, run.ErrTimeout) {
+		t.Errorf("err = %v, want it to wrap run.ErrTimeout", err)
+	}
+}

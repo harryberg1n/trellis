@@ -78,6 +78,7 @@ func Run(env Env, o Options) error {
 	if err != nil {
 		return flat(err)
 	}
+	u.sweepStages() // before any return: a re-run that finds nothing to do sweeps too
 	if tag == env.Version || (o.To == "" && compareTags(tag, env.Version) < 0) {
 		u.say("[skip] already at %s", env.Version)
 		return u.refresh(o.ForgetMissing)
@@ -178,7 +179,6 @@ func (u updater) pin(tag string) (string, error) {
 		return bin, nil
 	}
 	stage := filepath.Join(u.Root, "stage", tag)
-	u.sweepStages()
 	if u.dry {
 		u.step("download %s and %s from %s into %s", u.asset(), sumsAsset, tag, stage)
 		u.step("verify its sha256 and smoke-check the staged binary")
@@ -259,6 +259,9 @@ func verify(path, sums, name string) error {
 // smoke runs the staged binary's `version` and requires it to name the tag.
 func (u updater) smoke(staged, tag string) error {
 	res, err := u.Runner.Light(run.Spec{Name: staged, Args: []string{"version"}, Timeout: smokeTimeout})
+	if errors.Is(err, run.ErrTimeout) {
+		return &timeoutError{msg: fmt.Sprintf("the staged binary failed its smoke check: timed out after %ds", int(smokeTimeout.Seconds()))}
+	}
 	if err != nil {
 		return fmt.Errorf("the staged binary failed its smoke check: %s", strings.Join(strings.Fields(err.Error()), " "))
 	}
@@ -564,3 +567,10 @@ func (u updater) sweepStages() {
 		u.say("remove stale stage %s", path)
 	}
 }
+
+// timeoutError is a one-line message that still is run.ErrTimeout.
+type timeoutError struct{ msg string }
+
+func (e *timeoutError) Error() string { return e.msg }
+
+func (*timeoutError) Unwrap() error { return run.ErrTimeout }

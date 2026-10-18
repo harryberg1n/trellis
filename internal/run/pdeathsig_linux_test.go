@@ -60,9 +60,10 @@ func TestLight_ChildDoesNotOutliveAParentThatIsKilled(t *testing.T) {
 	}
 	_ = parent.Wait()
 
-	for i := 0; alive(pid); i++ {
-		if i == 5_000_000 {
-			t.Fatalf("child %d survived the SIGKILL of its parent", pid)
+	deadline := time.Now().Add(30 * time.Second)
+	for alive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d survived the SIGKILL of its parent for 30 s", pid)
 		}
 	}
 }

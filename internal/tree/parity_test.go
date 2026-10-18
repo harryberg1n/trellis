@@ -35,7 +35,7 @@ func headOf(t *testing.T, path string) string {
 
 // 1. The merge is bound to the judged head.
 
-func TestMerge_IsBoundToTheHeadTheChecksJudged(t *testing.T) {
+func TestMerge_PassesTheHeadItJudgedToTheMerge(t *testing.T) {
 	f := newFixture(t)
 	path := f.openTree(t)
 	commitFile(t, path, "mine.txt", "mine\n")
@@ -624,5 +624,125 @@ func TestMerge_AnOriginCommitThatWasFetchedButNeverTakenIsNotOverwritten(t *test
 	}
 	if got := testiso.Git(t, f.origin, "log", "--format=%s", "feat"); !strings.Contains(got, "edit theirs.txt") || strings.Contains(got, "mine.txt") {
 		t.Errorf("origin feat log = %q, want their commit kept", got)
+	}
+}
+
+// Fix round 1.
+
+func TestNew_ABranchDeletedOnOriginAfterAFetchIsNoLongerInTheWay(t *testing.T) {
+	f := newFixture(t)
+	testiso.Git(t, f.primary, "push", "-q", "origin", "main:refs/heads/gone")
+	testiso.Git(t, f.primary, "fetch", "-q", "origin") // origin/gone is a remote-tracking ref now
+	testiso.Git(t, f.origin, "branch", "-D", "gone")
+
+	if err := New(f.env(f.primary), "gone", ""); err != nil {
+		t.Fatalf("tree new = %v, want the stale origin/gone to be pruned, not to refuse", err)
+	}
+}
+
+func TestMerge_ATransientRunListAtTheEndOfTheWindowIsRetriedNotTakenForNoRun(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.noChecks = true
+	f.flaky = map[string][]string{"run list --json": {"gh: exit status 1: HTTP 502: Bad Gateway"}}
+	f.runsOnHead(t, path, runQueued, runDone)
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(f.out.String(), "runs of feat: GitHub could not be reached (1 of 5 tries): HTTP 502: Bad Gateway; trying again in 5s\n") {
+		t.Errorf("output = %q, want the retry line of the run list", f.out.String())
+	}
+	if f.clk.afters != 20 {
+		t.Errorf("waits = %d, want 20 (18, the retry, and one for the queued run)", f.clk.afters)
+	}
+}
+
+func TestMerge_ARunListThatCannotBeReadNeverAcceptsNoChecks(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.noChecks = true
+	f.flaky = map[string][]string{"run list --json": slices.Repeat([]string{"gh: exit status 1: HTTP 404: Not Found"}, 5)}
+
+	err := Merge(f.env(path), "")
+
+	if want := "tree merge: runs of the head could not be read: HTTP 404: Not Found"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") {
+		t.Errorf("merged on an unread run list")
+	}
+}
+
+func TestMerge_AnOfflineProbeSaysGhCouldNotReachGitHub(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.gh.Answer = func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("gh: exit status 1: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com")
+	}
+
+	err := Merge(f.env(path), "")
+
+	if want := "tree merge: gh could not reach GitHub: error connecting to api.github.com"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+func TestMerge_AnOfflineChecksReadIsRetried(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.flaky = map[string][]string{"pr checks --json": {"gh: exit status 1: error connecting to api.github.com\ncheck your internet connection"}}
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(f.out.String(), "(1 of 5 tries): error connecting to api.github.com; trying again in 5s\n") {
+		t.Errorf("output = %q, want the retry line", f.out.String())
+	}
+}
+
+func TestMerge_ACheckThatTimedOutSaysSoAndWrapsTheTimeout(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	env := f.env(path)
+	env.Runner = timingOut{Inner: f.gh}
+
+	err := Merge(env, "make test")
+
+	if want := `tree merge: check "make test" timed out after 1800s`; fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+	if !errors.Is(err, run.ErrTimeout) {
+		t.Errorf("err = %v, want it to wrap run.ErrTimeout", err)
+	}
+}
+
+// timingOut answers the shell of a --check with the timeout, after some output.
+type timingOut struct{ Inner run.Runner }
+
+func (c timingOut) Light(spec run.Spec) (run.Result, error) {
+	if spec.Name == "sh" || spec.Name == "cmd" {
+		_, _ = spec.Stdout.Write([]byte("still compiling\n"))
+		return run.Result{}, errors.Join(run.ErrTimeout, errors.New("signal: killed"))
+	}
+	return c.Inner.Light(spec)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+func TestLastLine_AWriterThatFailsDoesNotStopTheChildsOutput(t *testing.T) {
+	w := &lastLine{out: failingWriter{}}
+
+	n, err := w.Write([]byte("one\ntwo\n"))
+
+	if n != 8 || err != nil {
+		t.Errorf("Write = %d, %v; want 8, nil so the child's pipe is still read", n, err)
+	}
+	if got := w.Last(); got != "two" {
+		t.Errorf("Last = %q, want two", got)
 	}
 }

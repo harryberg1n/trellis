@@ -46,3 +46,10 @@ func TestRetryAfter_ReadsTheSecondsAndCapsThemAtTwoMinutes(t *testing.T) {
 		}
 	}
 }
+
+func TestTransient_OfflineDNSIsAFailureToReachGitHub(t *testing.T) {
+	err := errors.New("exit status 1: error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com")
+	if !Transient(err) {
+		t.Error("Transient = false for gh's offline message")
+	}
+}
