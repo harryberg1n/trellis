@@ -20,8 +20,9 @@ func TestBranch(t *testing.T) {
 		t.Errorf("Branch = %q, want feature/deep/x", got)
 	}
 	testsupport.Git(t, repo, "checkout", "-q", "--detach")
-	if got, _ := Branch(git); got != "detached" {
-		t.Errorf("Branch = %q, want detached", got)
+	want := "detached-" + testsupport.Git(t, repo, "rev-parse", "--short=12", "HEAD")
+	if got, _ := Branch(git); got != want || len(got) != len("detached-")+12 {
+		t.Errorf("Branch = %q, want %q", got, want)
 	}
 }
 
@@ -42,5 +43,28 @@ func TestConfigValue_SubsectionKey(t *testing.T) {
 	v, ok, err := ConfigValue(filepath.Join(repo, ".git"), `remote "origin"`, "url")
 	if err != nil || !ok || v != "https://example.invalid/r.git" {
 		t.Errorf("ConfigValue = %q, %v, %v", v, ok, err)
+	}
+}
+
+func TestFindRoot_HonoursCeilingDirectories(t *testing.T) {
+	repo := testiso.Repo(t)
+	sub := filepath.Join(repo, "sub")
+	testsupport.Write(t, filepath.Join(sub, "f"), "x")
+	t.Setenv("GIT_CEILING_DIRECTORIES", repo)
+	if _, err := FindRoot(sub); !errors.Is(err, ErrNotARepo) {
+		t.Errorf("FindRoot below the ceiling: %v, want ErrNotARepo", err)
+	}
+	if got, err := FindRoot(repo); err != nil || got != repo {
+		t.Errorf("FindRoot at the ceiling = %q, %v; want %q", got, err, repo)
+	}
+}
+
+func TestFindRoot_NeedsAHeadFile(t *testing.T) {
+	repo := testiso.Repo(t)
+	hollow := filepath.Join(repo, "hollow")
+	testsupport.Write(t, filepath.Join(hollow, ".git", "config"), "")
+	got, err := FindRoot(hollow)
+	if err != nil || got != repo {
+		t.Errorf("FindRoot = %q, %v; want the enclosing repo %q (a .git without HEAD is not one)", got, err, repo)
 	}
 }
