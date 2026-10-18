@@ -223,7 +223,7 @@ const (
 
 // historyTimeout is the time the one history call gets: five seconds a day of
 // the window, where each commit once had its own thirty.
-const historyTimeout = time.Duration(historyWindow/(24*time.Hour)) * 5 * time.Second
+const historyTimeout = historyWindow / (24 * time.Hour) * 5 * time.Second
 
 var (
 	trailingPR = regexp.MustCompile(`\(#(\d+)\)\s*$`)
