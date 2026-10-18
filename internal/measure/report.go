@@ -30,8 +30,9 @@ func Report(f Facts) []byte {
 	for _, w := range speed {
 		p("  %s  n=%d  p50=%.1f  p90=%.1f", w.Week, w.N, w.P50.Minutes(), w.P90.Minutes())
 	}
-	var mins []float64
-	for _, l := range LeadTimes(f) {
+	leads := LeadTimes(f)
+	mins := make([]float64, 0, len(leads))
+	for _, l := range leads {
 		mins = append(mins, l.Time.Minutes())
 	}
 	sort.Float64s(mins) // the order of the log must not move the interval
@@ -41,9 +42,10 @@ func Report(f Facts) []byte {
 	p("")
 	p("cost: agent dollars at list price")
 	costs := LaneCosts(f)
-	var dollars []float64
+	lanes := sortedKeys(costs)
+	dollars := make([]float64, 0, len(lanes))
 	var total float64
-	for _, lane := range sortedKeys(costs) {
+	for _, lane := range lanes {
 		dollars = append(dollars, costs[lane])
 		total += costs[lane]
 	}

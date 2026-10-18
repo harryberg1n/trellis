@@ -232,7 +232,7 @@ func RowCosts(f Facts) []RowCost {
 	}
 	rows := map[string]*RowCost{}
 	merges := linked(f)
-	var bytesBy = map[string]int64{}
+	bytesBy := map[string]int64{}
 	for _, d := range f.Events {
 		if d.Kind != kernel.EvWallDenied {
 			continue

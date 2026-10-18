@@ -64,7 +64,7 @@ func Speed(f Facts) []WeekSpeed {
 	for _, l := range LeadTimes(f) {
 		byWeek[week(l.MergedAt)] = append(byWeek[week(l.MergedAt)], l.Time)
 	}
-	var out []WeekSpeed
+	out := make([]WeekSpeed, 0, len(byWeek))
 	for _, w := range sortedKeys(byWeek) {
 		ds := byWeek[w]
 		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
