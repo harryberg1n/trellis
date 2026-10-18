@@ -16,7 +16,7 @@ func mainCommit(a *analysis) string {
 			continue
 		}
 		f, ok := repoAt(c.Dir)
-		if !ok || !f.onDefault() {
+		if !ok || !onDefault(f) {
 			continue
 		}
 		return fmt.Sprintf("git %s in the primary checkout, which is on %s", c.Verb, f.Branch)

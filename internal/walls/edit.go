@@ -25,7 +25,7 @@ func primaryWrite(a *analysis) string {
 
 func primaryCause(what, target string) string {
 	f, ok := repoAt(filepath.Dir(target))
-	if !ok || !f.onDefault() {
+	if !ok || !onDefault(f) {
 		return ""
 	}
 	rel, err := filepath.Rel(f.Root, target)

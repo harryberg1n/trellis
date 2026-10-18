@@ -128,3 +128,34 @@ func TestDefaultBranch_WithoutOriginHEADReadsConfigThenTheBranchThatExists(t *te
 		t.Errorf("init.defaultBranch names no branch: DefaultBranch = %q, want main", got)
 	}
 }
+
+func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
+	repo := testiso.Repo(t)
+	testsupport.Git(t, repo, "config", "remote.origin.url", "https://example.invalid/o/r.git")
+	lane := filepath.Join(filepath.Dir(repo), "lane")
+	testsupport.Git(t, repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+
+	got, err := Open(filepath.Join(repo, "no", "such", "dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Repo{
+		Root: repo, Common: filepath.Join(repo, ".git"), GitDir: filepath.Join(repo, ".git"),
+		Branch: "main", Primary: true, Remote: "https://example.invalid/o/r.git", Default: "main",
+	}
+	if got != want {
+		t.Errorf("Open(primary) = %+v, want %+v", got, want)
+	}
+
+	got, err = Open(lane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != lane || got.Branch != "lane/x" || got.Primary || got.Common != want.Common ||
+		got.GitDir == got.Common || got.Remote != want.Remote {
+		t.Errorf("Open(lane) = %+v", got)
+	}
+	if _, err := Open(filepath.Dir(repo)); !errors.Is(err, ErrNotARepo) {
+		t.Errorf("Open outside a repo: %v, want ErrNotARepo", err)
+	}
+}

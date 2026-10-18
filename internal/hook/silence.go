@@ -30,7 +30,7 @@ type Deps struct {
 	Fallback string
 	// Repo is the repository the caller already located from the payload's
 	// cwd; parse then does not locate it again. nil means locate it.
-	Repo *Repo
+	Repo *objects.Repo
 }
 
 // Run reads one payload from stdin and records it. It returns the exit code,
