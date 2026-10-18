@@ -210,3 +210,36 @@ func TestEngine_SteadyStateStepReadsTheLogTailOnce(t *testing.T) {
 		t.Fatalf("Step read %d log bytes, want %d (one tail read)", got, fi.Size())
 	}
 }
+
+func TestFold_UndeletablePendingFileDoesNotWedge(t *testing.T) {
+	s, dir, _ := open(t)
+	if err := s.Park(ev(kernel.EvEdit, "lane/p")); err != nil {
+		t.Fatal(err)
+	}
+	s.SetRemove(func(string) error { return errors.New("file is held open") })
+	// The first Step folds the parked event; its file cannot be deleted.
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/p"), kernel.Context{}); err != nil {
+		t.Fatalf("first Step with an undeletable pending file: %v", err)
+	}
+	// The leftover is already logged: the next Step must succeed and not re-append it.
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "lane/p"), kernel.Context{}); err != nil {
+		t.Fatalf("second Step with an undeletable pending file: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "events.pending", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("%d pending files left, want the 1 undeletable one", len(files))
+	}
+	got, err := s.Read(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parked := 0
+	for _, e := range got {
+		if e.Detail["park_id"] != "" {
+			parked++
+		}
+	}
+	if parked != 1 || len(got) != 3 {
+		t.Fatalf("log has %d events, %d of them the parked one; want 3 and 1", len(got), parked)
+	}
+}
