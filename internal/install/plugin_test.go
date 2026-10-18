@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,24 @@ func TestPluginManifest_PluginJSONNamesTrellis(t *testing.T) {
 	}
 	if p["name"] != "trellis" || p["version"] == "" || p["description"] == "" {
 		t.Errorf("plugin.json: %v", p)
+	}
+	version, err := os.ReadFile(filepath.Join("..", "..", "VERSION"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(version)), p["version"]; got != want {
+		t.Errorf("VERSION is %q, plugin.json version is %q; they must match", got, want)
+	}
+}
+
+func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`cat VERSION`, `"v${version}" != "$GITHUB_REF_NAME"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("release.yml lacks the VERSION check %q", want)
+		}
 	}
 }
