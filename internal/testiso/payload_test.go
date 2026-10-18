@@ -29,3 +29,12 @@ func TestFill_EscapesEveryValue(t *testing.T) {
 		t.Errorf("Fill = %s, want %s", got, want)
 	}
 }
+
+func TestFill_ExpandsInKeyOrder(t *testing.T) {
+	for range 20 {
+		got := string(Fill([]byte(`@A@`), map[string]string{"@A@": "@B@", "@B@": "x"}))
+		if got != "x" {
+			t.Fatalf("Fill = %q, want x: placeholders expand in sorted key order", got)
+		}
+	}
+}

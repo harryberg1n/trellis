@@ -36,6 +36,21 @@ const (
 	DetailTranscript = "transcript"
 	DetailReason     = "reason"
 	DetailPath       = "path"
+	DetailBash       = "bash"
+	DetailBlob       = "blob"
+	DetailTree       = "tree"
+	DetailCommit     = "commit"
+	DetailRef        = "ref"
+	DetailRecording  = "recording"
+	DetailStoreError = "store_error"
+	DetailAfter      = "after"
+)
+
+// Keys of a harness payload's tool_input.
+const (
+	InputCommand      = "command"
+	InputFilePath     = "file_path"
+	InputNotebookPath = "notebook_path"
 )
 
 // Hook event names, as the harness writes hook_event_name.

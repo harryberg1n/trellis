@@ -108,7 +108,7 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 			kind = kernel.EvEdit
 		case p.ToolName == kernel.ToolBash:
 			kind = kernel.EvEdit
-			detail = map[string]string{"bash": "1"}
+			detail = map[string]string{kernel.DetailBash: "1"}
 		}
 	case kernel.HookStop:
 		kind = kernel.EvTurnAnchored
@@ -148,17 +148,17 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	if person {
 		args[kernel.ArgPerson] = "1"
 	}
-	if kernel.IsShellTool(p.ToolName) && p.input("command") != "" {
-		args[kernel.ArgCommand] = p.input("command")
+	if kernel.IsShellTool(p.ToolName) && p.input(kernel.InputCommand) != "" {
+		args[kernel.ArgCommand] = p.input(kernel.InputCommand)
 	}
 	out.ctx = kernel.Context{Tool: p.ToolName, Args: args}
 
 	if !isFileTool(p.ToolName) {
 		return out, nil
 	}
-	file := p.input("file_path")
+	file := p.input(kernel.InputFilePath)
 	if file == "" {
-		file = p.input("notebook_path")
+		file = p.input(kernel.InputNotebookPath)
 	}
 	if file == "" {
 		if kind != "" {

@@ -86,7 +86,7 @@ func record(deps Deps, p *parsed) error {
 		if err != nil {
 			return fmt.Errorf("hook: blob for %s: %w", ev.Detail[kernel.DetailPath], err)
 		}
-		ev.Detail["blob"] = blob
+		ev.Detail[kernel.DetailBlob] = blob
 	case ev.Kind == kernel.EvTurnAnchored:
 		if deps.Runner == nil {
 			return errors.New("hook: no runner to anchor the turn with")
@@ -99,7 +99,7 @@ func record(deps Deps, p *parsed) error {
 		if err != nil {
 			return fmt.Errorf("hook: anchoring the turn: %w", err)
 		}
-		ev.Detail["tree"], ev.Detail["commit"], ev.Detail["ref"] = tree, commit, objects.RefFor(ev.Lane)
+		ev.Detail[kernel.DetailTree], ev.Detail[kernel.DetailCommit], ev.Detail[kernel.DetailRef] = tree, commit, objects.RefFor(ev.Lane)
 	}
 	if len(ev.Detail) == 0 {
 		ev.Detail = nil
@@ -153,16 +153,16 @@ func fail(deps Deps, event string, p parsed, err error) {
 		Detail:  map[string]string{"error": err.Error(), "event": event},
 	}
 	if p.ev.Kind != "" {
-		ev.Detail["recording"] = p.ev.Kind
+		ev.Detail[kernel.DetailRecording] = p.ev.Kind
 	}
 	if deps.Store != nil {
 		aerr := appendGuarded(deps.Store, ev)
 		if aerr == nil || errors.Is(aerr, store.ErrParked) {
 			return
 		}
-		ev.Detail["store_error"] = aerr.Error()
+		ev.Detail[kernel.DetailStoreError] = aerr.Error()
 	} else if deps.Err != nil {
-		ev.Detail["store_error"] = deps.Err.Error()
+		ev.Detail[kernel.DetailStoreError] = deps.Err.Error()
 	}
 	if deps.Fallback == "" {
 		return
