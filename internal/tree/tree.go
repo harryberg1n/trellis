@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -421,8 +422,49 @@ func Rm(env Env, name string, force bool) error {
 		if dirty != "" {
 			return fmt.Errorf("tree rm: %s has %s; --force removes it anyway", name, dirty)
 		}
+		if err := refuseUnmerged(env, w, name); err != nil {
+			return err
+		}
 	}
 	return removeTree(env, w, path, name, force)
+}
+
+// refuseUnmerged is a refusal when the branch holds commits that are neither
+// in the default branch (origin's, or the local one without a remote) nor in
+// its upstream: deleting the branch would lose them.
+func refuseUnmerged(env Env, w where, name string) error {
+	if found, err := env.branchExists(w.Primary, name); err != nil {
+		return fmt.Errorf("tree rm: %w", err)
+	} else if !found {
+		return nil
+	}
+	base := baseOf(w.Repo)
+	n, err := env.countCommits(w.Primary, base+".."+name)
+	if err != nil {
+		return fmt.Errorf("tree rm: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	if _, uerr := env.runGit(w.Primary, "rev-parse", "--verify", "-q", name+"@{upstream}"); uerr == nil {
+		if ahead, err := env.countCommits(w.Primary, name+"@{upstream}.."+name); err == nil && ahead == 0 {
+			return nil
+		}
+	}
+	noun := "commits"
+	if n == 1 {
+		noun = "commit"
+	}
+	return fmt.Errorf("tree rm: %s has %d %s not merged into %s; --force removes it anyway", name, n, noun, base)
+}
+
+// countCommits is the number of commits in a git revision range.
+func (e Env) countCommits(dir, rng string) (int, error) {
+	out, err := e.runGit(dir, "rev-list", "--count", rng)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(out)
 }
 
 // pathOf is the path of the worktree on branch name.

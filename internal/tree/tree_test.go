@@ -1264,3 +1264,83 @@ func (f *fixture) mergeArgs() []string {
 	}
 	return args
 }
+
+func TestRm_RefusesUnmergedCommitsWithoutForce(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	commitFile(t, path, "b.txt", "2\n")
+	commitFile(t, path, "c.txt", "3\n")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "3 commits not merged into origin/main") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("err = %v, want a refusal naming 3 unmerged commits and --force", err)
+	}
+	if !exists(path) {
+		t.Errorf("tree with unmerged commits removed without --force")
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "feat"); got == "" {
+		t.Errorf("branch feat deleted without --force")
+	}
+}
+
+func TestRm_RemovesABranchMergedIntoOrigin(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	testiso.Git(t, path, "push", "-q", "origin", "feat:main")
+	testiso.Git(t, f.primary, "fetch", "-q", "origin")
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("merged tree %s still exists", path)
+	}
+}
+
+func TestRm_RemovesABranchItsUpstreamHolds(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+	testiso.Git(t, path, "push", "-q", "-u", "origin", "feat")
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("pushed tree %s still exists", path)
+	}
+}
+
+func TestRm_ForceRemovesUnmergedCommits(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+
+	if err := Rm(f.env(f.primary), "feat", true); err != nil {
+		t.Fatal(err)
+	}
+	if exists(path) {
+		t.Errorf("tree %s still exists", path)
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "feat"); got != "" {
+		t.Errorf("branch feat = %q, want it deleted", got)
+	}
+}
+
+func TestRm_LocalRepoRefusesCommitsNotOnTheLocalDefault(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+
+	err := Rm(f.env(path), "", false)
+
+	if err == nil || !strings.Contains(err.Error(), "1 commit not merged into main") {
+		t.Fatalf("err = %v, want a refusal naming 1 commit not merged into main", err)
+	}
+}

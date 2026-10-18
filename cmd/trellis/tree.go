@@ -24,7 +24,7 @@ verbs:
                           the tree's commits instead
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
-  rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work without --force
+  rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
 
 exit codes of merge and sync: 0 done; 2 when you can fix it and run it again (red or cancelled
 checks, a conflict, a branch that is behind or blocked, a head that moved); 1 anything else.
@@ -94,7 +94,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		fs.StringVar(&check, "check", "", "a command to run in the tree first; red stops the merge")
 		fs.BoolVar(&rebase, "rebase", false, "keep the tree's commits (a rebase merge) instead of squashing them into one")
 	case "rm":
-		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted work")
+		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted or unmerged work")
 	case "sync":
 	default:
 		_, _ = fmt.Fprintf(stderr, "trellis tree: unknown verb %q\n\n%s", verb, treeUsage)
