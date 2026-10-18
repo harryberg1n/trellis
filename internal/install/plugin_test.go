@@ -80,6 +80,13 @@ func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
 			t.Errorf("release.yml lacks the VERSION check %q", want)
 		}
 	}
+	// The built binary names the tag before the release is created.
+	smoke := strings.Index(string(raw), `out="$(dist/trellis-linux-amd64 version)"`)
+	names := strings.Contains(string(raw), `*"$TAG"*) ;;`)
+	publish := strings.Index(string(raw), "gh release create")
+	if smoke < 0 || !names || publish < smoke {
+		t.Errorf("release.yml must run dist/trellis-linux-amd64 version and require the tag in it before gh release create (smoke at %d, requires tag %v, publish at %d)", smoke, names, publish)
+	}
 }
 
 func TestInstall_WiresExactlyTheEventsTheKernelNames(t *testing.T) {
