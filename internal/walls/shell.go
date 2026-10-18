@@ -471,6 +471,59 @@ func writeTargets(seg []word, dir string) []string {
 	return out
 }
 
+// withoutRedirects is the words of a command with its redirections left out:
+// `2>&1`, `> out`, `>>log`, `< in` and their target words are the shell's, not
+// the command's arguments. Live deny on honest work, fanpyp box, 2026-10-19
+// (v0.0.11): `git merge -q --ff-only origin/main 2>&1 | tail -1` was refused
+// because `2>&1` was read as a second merge operand.
+func withoutRedirects(ws []word) []word {
+	out := make([]word, 0, len(ws))
+	skipNext := false
+	for _, w := range ws {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if _, _, wantsNext, ok := splitRedirect(w); ok {
+			skipNext = wantsNext
+			continue
+		}
+		if _, wantsNext, ok := splitInput(w); ok {
+			skipNext = wantsNext
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// splitInput reads an input redirection out of one word: `<` optionally after
+// a file descriptor, the source attached or in the next word. A here-document
+// (`<<`) or here-string (`<<<`) is not one: their bodies are read elsewhere.
+func splitInput(w word) (source string, wantsNext, ok bool) {
+	raw := []rune(w.raw)
+	i := -1
+	for k, c := range raw {
+		if c == '<' {
+			i = k
+			break
+		}
+	}
+	if i < 0 || (i+1 < len(raw) && raw[i+1] == '<') {
+		return "", false, false
+	}
+	for _, c := range raw[:i] {
+		if c < '0' || c > '9' {
+			return "", false, false
+		}
+	}
+	text := []rune(w.text)
+	if i+1 >= len(text) {
+		return "", true, true
+	}
+	return string(text[i+1:]), false, true
+}
+
 // splitRedirect reads an output redirection out of one word: `>`, `>>` or
 // `>|`, optionally after a file descriptor, the target attached or in the next
 // word. `2>&1` writes no file. The operator is read off raw, so a quoted `>`
@@ -689,7 +742,7 @@ func parseGit(seg []word, dir string) (gitCall, bool) {
 	if i >= len(seg) || baseCommand(seg[i].text) != "git" {
 		return gitCall{}, false
 	}
-	g := run.ParseGitArgs(texts(seg[i+1:]))
+	g := run.ParseGitArgs(texts(withoutRedirects(seg[i+1:])))
 	if g.Verb == "" {
 		return gitCall{}, false
 	}
