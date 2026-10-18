@@ -35,3 +35,10 @@ func (g *groupTree) kill() {
 }
 
 func (*groupTree) finish() {}
+
+// terminate asks the group to end with SIGTERM.
+func (g *groupTree) terminate() {
+	if g.pid > 0 {
+		_ = syscall.Kill(-g.pid, syscall.SIGTERM)
+	}
+}

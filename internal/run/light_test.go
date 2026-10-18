@@ -214,3 +214,63 @@ type ctxKey struct{}
 type recordCtx struct{ f func(Spec) }
 
 func (r *recordCtx) Light(s Spec) (Result, error) { r.f(s); return Result{}, nil }
+
+// reportedPid listens for the pid a helper child sends over TCP.
+func reportedPid(t *testing.T, role string) (accept func() int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	t.Setenv(roleEnv, role)
+	t.Setenv(addrEnv, ln.Addr().String())
+	return func() int {
+		if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := ln.Accept()
+		if err != nil {
+			t.Fatalf("the %s child never reported: %v", role, err)
+		}
+		defer func() { _ = conn.Close() }() // read-only use
+		if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pid
+	}
+}
+
+func TestLight_AChildThatExitedZeroWhileAGrandchildHoldsThePipesSucceeds(t *testing.T) {
+	accept := reportedPid(t, "exiter")
+	fc := clock.Fake(time.Unix(1000, 0))
+	type outcome struct {
+		res Result
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := Light(fc, Spec{Name: os.Args[0], Timeout: time.Hour, WaitDelay: 50 * time.Millisecond})
+		done <- outcome{res, err}
+	}()
+	pid := accept()
+	t.Cleanup(func() {
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill() // the grandchild would otherwise outlive the test
+		}
+	})
+
+	got := <-done
+
+	if got.err != nil || got.res.ExitCode != 0 {
+		t.Errorf("err = %v, exit %d; want success: the child exited 0", got.err, got.res.ExitCode)
+	}
+}

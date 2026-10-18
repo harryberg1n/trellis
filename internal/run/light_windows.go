@@ -84,3 +84,6 @@ func (j *jobTree) finish() {
 	_ = windows.CloseHandle(j.job)
 	j.job = 0
 }
+
+// terminate ends the job at once: a job object has no gentler signal.
+func (j *jobTree) terminate() { j.kill() }
