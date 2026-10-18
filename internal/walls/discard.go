@@ -123,7 +123,7 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 // statusCost counts the files git status lists in dir, for paths or for the
 // whole tree: the measurement of discard-uncommitted.
 func statusCost(r run.Runner, dir string, paths []string) (cost, error) {
-	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
+	args := append([]string{"--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
 	out, err := objects.Git(r, dir, nil, args...)
 	if err != nil {
 		return cost{}, err
