@@ -27,7 +27,7 @@ Install: download the binary for your platform from the latest GitHub release, c
 
 ## Tests
 
-`go test -race ./...` is the CI run. `go test -short ./...` skips the hook latency tests (`internal/hook`, `-run Latency`), which are timing measurements and are meant to run without `-race`.
+`go test -race -shuffle=on ./...` is the CI run. Hook latency is not a test: every event the hook writes carries `took_ms`, and `trellis report` prints p50 and p95 per hook against the criteria over the live log.
 
 ## Versions and releases
 
