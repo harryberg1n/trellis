@@ -1,8 +1,19 @@
 // Copied from aphrollo-tools internal/mask/lex.go at 12b3724e. Incident: a check
 // on code blocked on a token that sat inside a string or a comment; detectors
-// run on text with those bytes blanked. The only changes are the package
-// path: the lexer reads this package's Language, the lexing subset of
-// aphrollo-tools internal/lang.Language (see row.go).
+// run on text with those bytes blanked.
+//
+// What differs from the original, and nothing else:
+//  1. Package path. The import of aphrollo-tools internal/lang is gone, and
+//     lang.Language and lang.Escape read Language and Escape, the lexing
+//     subset of lang.Language copied into this package (see row.go).
+//  2. The Lexer field StringNewlines. The original keeps every newline when it
+//     blanks a string. A wall must tell a newline that ends a command from one
+//     inside a quoted commit message, so with StringNewlines set a newline
+//     inside a string is blanked like any other byte. The zero value behaves
+//     as the original.
+//  3. The blank closure in Lex: its test is now
+//     cond && (b[i] != '\n' || x.StringNewlines && mode == inString), where the
+//     original had cond && b[i] != '\n'.
 
 package mask
 
