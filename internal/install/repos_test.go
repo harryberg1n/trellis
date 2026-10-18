@@ -193,7 +193,7 @@ func TestPin_CopiesOnceAndKeepsAnExistingPin(t *testing.T) {
 
 func TestRecordRepo_ParallelRecordsLoseNoLine(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	var repos []string
+	repos := make([]string, 0, 8)
 	for range 8 {
 		repos = append(repos, testiso.Repo(t))
 	}

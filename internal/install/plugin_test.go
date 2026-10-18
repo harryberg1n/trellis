@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -81,9 +82,9 @@ func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
 		}
 	}
 	// The built binary names the tag before the release is created.
-	smoke := strings.Index(string(raw), `out="$(dist/trellis-linux-amd64 version)"`)
+	smoke := bytes.Index(raw, []byte(`out="$(dist/trellis-linux-amd64 version)"`))
 	names := strings.Contains(string(raw), `*"$TAG"*) ;;`)
-	publish := strings.Index(string(raw), "gh release create")
+	publish := bytes.Index(raw, []byte("gh release create"))
 	if smoke < 0 || !names || publish < smoke {
 		t.Errorf("release.yml must run dist/trellis-linux-amd64 version and require the tag in it before gh release create (smoke at %d, requires tag %v, publish at %d)", smoke, names, publish)
 	}

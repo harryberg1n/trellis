@@ -13,12 +13,12 @@ import (
 
 func TestWriteSettings_KeepsASymlinkedSettingsFileAndWritesThroughIt(t *testing.T) {
 	f := newFixture(t)
-	real := filepath.Join(t.TempDir(), "shared-settings.json")
-	testiso.Write(t, real, foreignSettings)
+	shared := filepath.Join(t.TempDir(), "shared-settings.json")
+	testiso.Write(t, shared, foreignSettings)
 	if err := os.MkdirAll(filepath.Dir(f.settings()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, f.settings()); err != nil {
+	if err := os.Symlink(shared, f.settings()); err != nil {
 		t.Skipf("no symlinks here: %v", err)
 	}
 
@@ -33,7 +33,7 @@ func TestWriteSettings_KeepsASymlinkedSettingsFileAndWritesThroughIt(t *testing.
 	if fi.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("the settings link was replaced by a file")
 	}
-	got := readFile(t, real)
+	got := readFile(t, shared)
 	if !strings.Contains(got, `hook SessionStart`) || !strings.Contains(got, "foreign") {
 		t.Errorf("link target = %q, want the trellis hooks beside the foreign ones", got)
 	}

@@ -195,7 +195,7 @@ func TestWithContext_GivesTheContextToAChildThatHasNone(t *testing.T) {
 	var got []context.Context
 	inner := &recordCtx{func(s Spec) { got = append(got, s.Ctx) }}
 	r := WithContext(inner, ctx)
-	own := context.WithValue(context.Background(), struct{}{}, 1)
+	own := context.WithValue(context.Background(), ctxKey{}, 1)
 
 	_, _ = r.Light(Spec{})
 	_, _ = r.Light(Spec{Ctx: own})
@@ -208,6 +208,8 @@ func TestWithContext_GivesTheContextToAChildThatHasNone(t *testing.T) {
 		t.Errorf("a nil context wrapped the runner")
 	}
 }
+
+type ctxKey struct{}
 
 type recordCtx struct{ f func(Spec) }
 
