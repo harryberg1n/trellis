@@ -55,9 +55,14 @@ linters:
           arguments:
             - 'fmt\.Print.*'
             - 'fmt\.Fprint.*'
-            - '\(\*os\.File\)\.Close'
-            - '\(\*bytes\.Buffer\)\.Write.*'
-            - '\(\*strings\.Builder\)\.Write.*'
+            # Two revive builds of the same golangci-lint version print the
+            # receiver differently ("(*bytes.Buffer).Write" and
+            # "bytes.Buffer.Write"); match both so a local run equals CI.
+            - '(\(\*)?os\.File\)?\.Close'
+            - '(\(\*)?bytes\.Buffer\)?\.Write.*'
+            - '(\(\*)?strings\.Builder\)?\.Write.*'
+            - 'io\.Writer\.Write'
+            - 'hash\.Hash\.Write'
     gocritic:
       enabled-tags: [diagnostic, style, performance]
       disabled-checks: [hugeParam, unnamedResult, commentedOutCode, whyNoLint]

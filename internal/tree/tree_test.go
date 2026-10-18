@@ -1865,3 +1865,39 @@ func TestMerge_LocalSquashFailingOnAForeignIndexLockLeavesTheLockAndSaysOneLine(
 		t.Errorf("the tree was removed by a merge that failed")
 	}
 }
+
+func TestRm_SaysWhereTheShellIsWhenItStoodInTheRemovedTree(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	squashByHand(t, f, "- edit a.txt\n\ntip "+testiso.Git(t, path, "rev-parse", "HEAD"))
+	f.out.Reset()
+
+	if err := Rm(f.env(path), "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.out.String(), "removed "+path+"\nyour shell is still in "+path+": cd "+f.primary+"\n"; got != want {
+		t.Errorf("printed %q, want %q", got, want)
+	}
+}
+
+func TestRm_FromThePrimarySaysOnlyRemoved(t *testing.T) {
+	f := newLocalFixture(t)
+	if err := New(f.env(f.primary), "feat", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := f.primary + "--feat"
+	commitFile(t, path, "a.txt", "1\n")
+	squashByHand(t, f, "- edit a.txt\n\ntip "+testiso.Git(t, path, "rev-parse", "HEAD"))
+	f.out.Reset()
+
+	if err := Rm(f.env(f.primary), "feat", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.out.String(), "removed "+path+"\n"; got != want {
+		t.Errorf("printed %q, want %q", got, want)
+	}
+}
