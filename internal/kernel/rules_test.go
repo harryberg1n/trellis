@@ -13,7 +13,7 @@ func loadEvents(t *testing.T) []Event {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only
 	var evs []Event
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

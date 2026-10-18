@@ -46,8 +46,10 @@ func childMain() int {
 	if err != nil {
 		return 3
 	}
-	fmt.Fprintf(conn, "%d\n", gc.Process.Pid)
-	conn.Close()
+	if _, err := fmt.Fprintf(conn, "%d\n", gc.Process.Pid); err != nil {
+		return 4
+	}
+	_ = conn.Close() // the pid is sent; nothing more to report
 	blockForever()
 	return 0
 }

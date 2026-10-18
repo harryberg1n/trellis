@@ -28,7 +28,7 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(60 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,11 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the child never reported its grandchild: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	if err := conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	line, err := bufio.NewReader(conn).ReadString('\n')
-	conn.Close()
+	_ = conn.Close() // read-only use; the read error below is the one that matters
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestLight_TreeKillEndsGrandchildren(t *testing.T) {
 	for i := 0; alive(pid); i++ {
 		if i == 5_000_000 {
 			if p, err := os.FindProcess(pid); err == nil {
-				p.Kill() // do not leave it behind
+				_ = p.Kill() // best effort, so it is not left behind; the Fatalf below reports
 			}
 			t.Fatalf("grandchild %d is still alive after the tree kill", pid)
 		}
