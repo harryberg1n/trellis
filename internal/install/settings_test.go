@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -114,7 +115,7 @@ func TestAddEntries_RunTwiceKeepsAndNewerReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(again) != string(once) || strings.Join(actions, ",") != "keep hook Stop" {
+	if !bytes.Equal(again, once) || strings.Join(actions, ",") != "keep hook Stop" {
 		t.Errorf("second run changed the doc or said %v", actions)
 	}
 	newer := wantT("Stop")
