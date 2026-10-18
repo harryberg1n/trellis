@@ -54,16 +54,18 @@ func updateVerb(args []string, stdout, stderr io.Writer) int {
 }
 
 // updatePaths is the state root and the running binary. The root is checked
-// against the repository around the working directory when there is one.
+// against the repository around the working directory when there is one;
+// outside a repository, for example in the home directory, nothing is checked.
 func updatePaths() (root, exe string, err error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", "", err
 	}
+	repoRoot := ""
 	if repo, oerr := objects.Open(wd); oerr == nil {
-		wd = repo.Root
+		repoRoot = repo.Root
 	}
-	if root, err = store.Root(wd); err != nil {
+	if root, err = store.Root(repoRoot); err != nil {
 		return "", "", err
 	}
 	exe, err = os.Executable()

@@ -13,7 +13,7 @@ import (
 const usage = `usage: trellis <verb>
 
 verbs:
-  version   print the version and commit
+  version   print the version and commit (also --version)
   hook      record one agent hook payload read from stdin: trellis hook <event>
   report    print speed, cost and labels; --issue files them on harryberg1n/trellis
   allow     waive the next deny of a wall once: trellis allow <row-id>
@@ -22,7 +22,7 @@ verbs:
   eject     remove the hooks install added
   tree      worktrees over plain git and gh: trellis tree new|sync|merge|rm
   update    fetch the newest release, verify and pin it, re-install every repo: trellis update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]
-  help      print this text
+  help      print this text (also --help, -h)
 `
 
 func main() {
@@ -41,7 +41,7 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
-	case "version":
+	case "version", "--version":
 		_, _ = fmt.Fprintf(stdout, "trellis %s (%s)\n", buildinfo.Version, buildinfo.Commit)
 		return 0
 	case "hook":
@@ -61,7 +61,7 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return treeVerb(args[1:], stdout, stderr)
 	case "update":
 		return updateVerb(args[1:], stdout, stderr)
-	case "help":
+	case "help", "--help", "-h":
 		_, _ = io.WriteString(stdout, usage)
 		return 0
 	}

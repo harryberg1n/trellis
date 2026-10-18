@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -93,5 +94,18 @@ func TestRoot_StateRootThroughAnotherSpellingOfTheRepoIsRefused(t *testing.T) {
 	t.Setenv("TRELLIS_STATE", filepath.Join(testiso.AltSpelling(t, repo), "state"))
 	if root, err := Root(repo); err == nil {
 		t.Fatalf("Root = %s, want an error: the state root is inside the repo under another spelling", root)
+	}
+}
+
+func TestRoot_WithoutARepoSkipsTheContainmentCheck(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(wd, "state")
+	t.Setenv("TRELLIS_STATE", state)
+	got, err := Root("")
+	if err != nil || got != state {
+		t.Fatalf("Root(\"\") = %q, %v; want %q: with no repo there is nothing to be inside of", got, err, state)
 	}
 }

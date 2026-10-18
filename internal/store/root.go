@@ -13,7 +13,9 @@ import (
 
 // Root resolves the state root for the repo at repoPath: TRELLIS_STATE if
 // set, else the platform default. It refuses a root inside the repo, so state
-// is never written into the working tree.
+// is never written into the working tree. An empty repoPath means no
+// repository is involved, so there is nothing to be inside of: the home
+// directory of a user is not a repo and the default root lives under it.
 func Root(repoPath string) (string, error) {
 	root := os.Getenv("TRELLIS_STATE")
 	if root == "" {
@@ -25,6 +27,9 @@ func Root(repoPath string) (string, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
+	}
+	if repoPath == "" {
+		return absRoot, nil
 	}
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
