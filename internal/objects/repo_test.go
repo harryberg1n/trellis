@@ -257,3 +257,30 @@ func TestHasMarker_ADirectoryNamedTrellisTomlIsNotTheMarker(t *testing.T) {
 		t.Errorf("HasMarker with a directory called trellis.toml = true, want false")
 	}
 }
+
+// A rebase detaches HEAD and names the branch it rebuilds in head-name, under
+// the worktree's own git dir: .git/worktrees/<name>/ for a linked worktree,
+// never the common dir.
+func TestBranch_ARebaseInAWorktreeKeepsItsBranch(t *testing.T) {
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		t.Run(dir, func(t *testing.T) {
+			primary := testiso.Repo(t)
+			tree := testiso.AddTree(t, primary, "tree", "tree/x")
+			testiso.Git(t, tree, "checkout", "-q", "--detach")
+			_, gitDir, err := GitDirs(tree)
+			if err != nil || filepath.Base(filepath.Dir(gitDir)) != "worktrees" {
+				t.Fatalf("GitDirs(tree) = %q, %v; want a dir under worktrees/", gitDir, err)
+			}
+			// A head-name in the common dir belongs to the primary's rebase, not this one.
+			testiso.Write(t, filepath.Join(primary, ".git", dir, "head-name"), "refs/heads/primary-rebase\n")
+			if r, err := Open(tree); err != nil || r.Branch == "primary-rebase" || !strings.HasPrefix(r.Branch, "detached-") {
+				t.Fatalf("Open with the head-name in the common dir only: branch %q, %v; want detached-<sha>", r.Branch, err)
+			}
+			testiso.Write(t, filepath.Join(gitDir, dir, "head-name"), "refs/heads/lane/rebased\n")
+			r, err := Open(tree)
+			if err != nil || r.Branch != "lane/rebased" || !r.Detached {
+				t.Errorf("Open = branch %q, detached %v, %v; want lane/rebased, still detached", r.Branch, r.Detached, err)
+			}
+		})
+	}
+}

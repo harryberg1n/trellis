@@ -54,7 +54,9 @@ func ceilingDirs() map[string]bool {
 // GitDirs returns it), "feature/x" for refs/heads/feature/x. When HEAD holds a
 // commit id the name is "detached-" and its first 12 characters, so detached
 // sessions at different commits get different replay refs, and detached is
-// true: a real branch called detached-x is not detached.
+// true: a real branch called detached-x is not detached. During a rebase HEAD
+// holds a commit id but the name is the branch being rebuilt (see rebasedBranch),
+// detached still true.
 func Branch(gitDir string) (name string, detached bool, err error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
@@ -63,6 +65,9 @@ func Branch(gitDir string) (name string, detached bool, err error) {
 	head := strings.TrimSpace(string(raw))
 	ref, ok := strings.CutPrefix(head, "ref:")
 	if !ok {
+		if name := rebasedBranch(gitDir); name != "" {
+			return name, true, nil
+		}
 		return "detached-" + head[:min(12, len(head))], true, nil
 	}
 	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), false, nil
@@ -188,4 +193,23 @@ const MarkerFile = "trellis.toml"
 func HasMarker(root string) bool {
 	fi, err := os.Stat(filepath.Join(root, MarkerFile))
 	return err == nil && !fi.IsDir()
+}
+
+// Source: aphrollo-tools 12b3724e internal/tdd/core/events.go (rebasedBranch).
+// Incident: every edit during a rebase conflict landed on a phantom detached lane.
+//
+// rebasedBranch is the branch a rebase in progress in gitDir is rebuilding:
+// HEAD is detached while it runs, and the rebase names the branch in head-name
+// under gitDir, the worktree's own git dir. "" when none is in progress.
+func rebasedBranch(gitDir string) string {
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		raw, err := os.ReadFile(filepath.Join(gitDir, dir, "head-name"))
+		if err != nil {
+			continue
+		}
+		if name, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "refs/heads/"); ok && name != "" {
+			return name
+		}
+	}
+	return ""
 }
