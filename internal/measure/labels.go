@@ -56,13 +56,40 @@ type Usage struct {
 	Transcript    []byte
 }
 
+// PR is a merged pull request: its number, head branch and merge time.
+type PR struct {
+	Number   int
+	Branch   string
+	MergedAt time.Time
+}
+
 // Facts is everything the report reads. Now is the caller's clock.
 type Facts struct {
 	Merges []Merge
 	Issues []Issue
+	PRs    []PR
 	Events []kernel.Event
 	Usage  []Usage
 	Now    time.Time
+}
+
+// linked is the merges with a lane filled in for each squash or rebase merge
+// "(#N)" that has none: the lane whose name is the head branch of PR N. A lane
+// already on the merge (a merge commit's branch, or a Detail["pr"] override
+// resolved by the caller) is kept.
+func linked(f Facts) []Merge {
+	branch := map[int]string{}
+	for _, p := range f.PRs {
+		branch[p.Number] = p.Branch
+	}
+	out := make([]Merge, len(f.Merges))
+	copy(out, f.Merges)
+	for i, m := range out {
+		if m.Lane == "" && m.PR > 0 {
+			out[i].Lane = branch[m.PR]
+		}
+	}
+	return out
 }
 
 var (
@@ -92,6 +119,7 @@ func laneKey(m Merge) string {
 // the two.
 func Labels(f Facts) map[string]Label {
 	out := map[string]Label{}
+	f.Merges = linked(f)
 	for _, m := range f.Merges {
 		if m.Lane == "" && m.PR == 0 {
 			continue // a revert or direct commit owns no lane

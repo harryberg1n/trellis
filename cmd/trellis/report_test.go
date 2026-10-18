@@ -25,6 +25,7 @@ type ghFake struct {
 	mu     sync.Mutex
 	gh     []runpkg.Spec
 	issues string
+	prs    string
 }
 
 func (g *ghFake) Light(s runpkg.Spec) (runpkg.Result, error) {
@@ -36,6 +37,9 @@ func (g *ghFake) Light(s runpkg.Spec) (runpkg.Result, error) {
 	g.gh = append(g.gh, s)
 	switch s.Args[1] {
 	case "list":
+		if s.Args[0] == "pr" {
+			return runpkg.Result{Stdout: []byte(g.prs)}, nil
+		}
 		return runpkg.Result{Stdout: []byte(g.issues)}, nil
 	case "create":
 		return runpkg.Result{Stdout: []byte("https://github.com/harryberg1n/trellis/issues/77\n")}, nil
@@ -94,13 +98,13 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 	_, err = st.Append(
 		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "A", Session: "s1", At: at(1, 9), Detail: map[string]string{"pr": "1"}},
 		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "B", Session: "s2", At: at(3, 9), Detail: map[string]string{"pr": "2"}},
-		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "C", Session: "s3", At: at(7, 8), Detail: map[string]string{"pr": "3"}},
+		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "C", Session: "s3", At: at(7, 8)},
 		kernel.Event{Kind: kernel.EvSessionUsage, Lane: "A", Session: "s1", At: at(1, 11), Detail: map[string]string{"transcript": transcript}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gh := &ghFake{inner: testsupport.Recorder(), issues: "[]"}
+	gh := &ghFake{inner: testsupport.Recorder(), issues: "[]", prs: `[{"number":3,"headRefName":"C","mergedAt":"2026-10-07T09:00:00Z"}]`}
 	return reportEnv{Repo: repo, Root: stateRoot, Runner: gh, Clock: c}, gh, transcript
 }
 
@@ -150,18 +154,20 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 	}
 	// The first gh call reads the consumer's escape issues; every other one
 	// names the trellis repo.
-	if len(gh.gh) != 3 {
-		t.Fatalf("gh calls = %d, want 3 (escape list, title list, create): %+v", len(gh.gh), gh.gh)
+	if len(gh.gh) != 4 {
+		t.Fatalf("gh calls = %d, want 3 (escape list, pr list, title list, create): %+v", len(gh.gh), gh.gh)
 	}
-	if got := gh.gh[0].Args; slicesContain(got, "--repo") {
-		t.Errorf("escape list names a repo: %v", got)
+	for _, s := range gh.gh[:2] {
+		if slicesContain(s.Args, "--repo") {
+			t.Errorf("a read of the consumer repo names a repo: %v", s.Args)
+		}
 	}
-	for _, s := range gh.gh[1:] {
+	for _, s := range gh.gh[2:] {
 		if !hasPair(s.Args, "--repo", "harryberg1n/trellis") {
 			t.Errorf("gh %v lacks --repo harryberg1n/trellis", s.Args)
 		}
 	}
-	create := gh.gh[2]
+	create := gh.gh[3]
 	wantTitle := "report " + filepath.Base(env.Repo) + " 2026-W41"
 	if !hasPair(create.Args, "--title", wantTitle) {
 		t.Errorf("create argv = %v, want --title %q", create.Args, wantTitle)

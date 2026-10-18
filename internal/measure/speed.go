@@ -34,7 +34,7 @@ func LeadTimes(f Facts) map[string]time.Duration {
 		}
 	}
 	out := map[string]time.Duration{}
-	for _, m := range f.Merges {
+	for _, m := range linked(f) {
 		if m.Lane == "" {
 			continue
 		}
@@ -55,7 +55,7 @@ func LeadTimes(f Facts) map[string]time.Duration {
 func Speed(f Facts) []WeekSpeed {
 	lead := LeadTimes(f)
 	byWeek := map[string][]time.Duration{}
-	for _, m := range f.Merges {
+	for _, m := range linked(f) {
 		d, ok := lead[m.Lane]
 		if m.Lane == "" || !ok {
 			continue
