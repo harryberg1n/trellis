@@ -6,9 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -52,6 +50,7 @@ type Store struct {
 	skipped     map[int64]bool
 	mu          sync.Mutex // in-process; the file lock covers other processes
 	rename      func(oldpath, newpath string) error
+	remove      func(name string) error
 	fsync       func(*os.File) error
 	lockTimeout time.Duration
 }
@@ -72,7 +71,7 @@ func Open(repoDir string, c clock.Clock, opts ...Option) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(repoDir, "events.pending"), 0o755); err != nil {
 		return nil, err
 	}
-	s := &Store{dir: repoDir, clock: c, rename: os.Rename, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
+	s := &Store{dir: repoDir, clock: c, rename: os.Rename, remove: os.Remove, fsync: (*os.File).Sync, skipped: map[int64]bool{}, lockTimeout: LockTimeout}
 	for _, o := range opts {
 		o(s)
 	}
@@ -176,9 +175,10 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		kept := ps[:0]
 		for _, p := range ps {
 			if id := p.ev.Detail[parkIDKey]; id != "" && have[id] {
-				if rerr := os.Remove(p.name); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-					return nil, fmt.Errorf("store: dropping logged pending event: %w", rerr)
-				}
+				// Best effort: a file another process holds open (an indexer, a
+				// scanner) must not wedge every append. The park-id dedupe drops
+				// the leftover on a later fold; it is not re-appended now.
+				_ = tx.s.remove(p.name)
 				continue
 			}
 			kept = append(kept, p)
@@ -205,7 +205,7 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 	for _, p := range ps {
 		// The events are in the log: a leftover file is dropped by the dedupe
 		// above on the next fold, so failing the Tx here would only mislead.
-		_ = os.Remove(p.name)
+		_ = tx.s.remove(p.name)
 	}
 	return out, nil
 }

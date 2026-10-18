@@ -74,3 +74,7 @@ func (tx *Tx) Save(cp Checkpoint) error {
 // SetRename replaces the rename used to publish state.json. A test injects a
 // failure through it; nil is not allowed.
 func (s *Store) SetRename(f func(oldpath, newpath string) error) { s.rename = f }
+
+// SetRemove replaces the remove used to delete folded pending files. A test
+// injects a failure through it; nil is not allowed.
+func (s *Store) SetRemove(f func(name string) error) { s.remove = f }
