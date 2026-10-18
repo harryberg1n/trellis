@@ -668,3 +668,39 @@ func TestMainCommit_FollowsAnExportedGitDir(t *testing.T) {
 		t.Errorf("an exported GIT_DIR with a harmless git verb: denies %+v, want none", d)
 	}
 }
+
+// With a squash merge the PR title is the subject on main, so the title, the
+// squash subject and a merge commit's message are read like a commit message.
+func TestUndercover_PRTitleSubjectAndMergeMessageAreRead(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	bad := "fix the parser, written by Claude"
+	for _, cmd := range []string{
+		"gh pr create --title " + dq(bad) + " --body ok",
+		"gh pr create -t " + dq(bad) + " --body ok",
+		"gh pr create --title=" + dq(bad),
+		"gh pr edit 7 --title " + dq(bad),
+		"gh pr merge 7 --squash --subject " + dq(bad),
+		"gh pr merge 7 --squash --body " + dq("ok\n\nCo-Authored-By: X <x@y>"),
+		"gh pr merge 7 -t " + dq(bad),
+		"git merge -m " + dq(bad) + " other",
+		"git merge --message=" + dq(bad) + " other",
+		"git merge --no-ff other -m " + dq("Co-Authored-By: X <x@y>"),
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "undercover" {
+			t.Errorf("%q: denies %+v, want one from undercover", cmd, d)
+		}
+	}
+	for _, cmd := range []string{
+		"gh pr create --title " + dq("fix the parser") + " --body ok",
+		"gh pr merge 7 --squash --subject " + dq("fix the parser"),
+		"gh pr merge 7 --squash --delete-branch",
+		"git merge -m " + dq("merge other") + " other",
+		"git merge other",
+	} {
+		if d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny); len(d) != 0 {
+			t.Errorf("%q: denies %+v, want none", cmd, d)
+		}
+	}
+}

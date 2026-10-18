@@ -12,8 +12,9 @@ const maxMessageFile = 1 << 20
 
 // undercover is the undercover policy (2026-09 owner): a commit message or PR
 // body with an attribution trailer or footer, or the tool or model name. It is
-// read from `git commit -m/-F` and `gh pr create/edit --body/--body-file`, at
-// PreToolUse, before the text exists anywhere else.
+// read from `git commit` and `git merge` -m/-F and from `gh pr create/edit/merge`
+// --title/--subject/--body/--body-file (with a squash the title is the subject on
+// main), at PreToolUse, before the text exists anywhere else.
 func undercover(a *analysis) string {
 	if !a.isShell() || !strings.Contains(foldName(a.command), "git") && !strings.Contains(foldName(a.command), "gh") {
 		return ""
@@ -44,13 +45,17 @@ func undercover(a *analysis) string {
 }
 
 // messages is the message text a git commit or gh pr create/edit segment
-// carries, and whether it reads the rest from standard input (-F -).
+// carries, and whether it reads the rest from standard input (-F -). Source of
+// the gh title, subject and merge reads: aphrollo-tools 12b3724e
+// internal/tdd/postedit/undercoverbash.go (ghFlagCandidates, ghPostingVerbs),
+// which reads the title and the squash subject because the title is the subject
+// on main.
 func messages(seg []word, dir string) (out []string, stdin bool) {
 	var args, valueFlags, fileFlags []string
-	if c, ok := parseGit(seg, dir); ok && c.Verb == "commit" {
+	if c, ok := parseGit(seg, dir); ok && (c.Verb == "commit" || c.Verb == "merge") {
 		args, valueFlags, fileFlags = c.Args, []string{"-m", "--message"}, []string{"-F", "--file"}
-	} else if all := texts(seg); len(all) > 2 && baseCommand(all[0]) == "gh" && all[1] == "pr" && (all[2] == "create" || all[2] == "edit") {
-		args, valueFlags, fileFlags = all[3:], []string{"-b", "--body"}, []string{"-F", "--body-file"}
+	} else if all := texts(seg); len(all) > 2 && baseCommand(all[0]) == "gh" && all[1] == "pr" && (all[2] == "create" || all[2] == "edit" || all[2] == "merge") {
+		args, valueFlags, fileFlags = all[3:], []string{"-b", "--body", "-t", "--title", "--subject"}, []string{"-F", "--body-file"}
 	} else {
 		return nil, false
 	}
