@@ -211,7 +211,7 @@ func hasLine(text []byte, line string) bool {
 
 func writeExclude(common string, content []byte) error {
 	dir := filepath.Dir(excludePath(common))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
 	return store.WriteAtomic(dir, filepath.Base(excludePath(common)), content, store.WithMode(0o644), store.WithTempPattern(".exclude-*"))
@@ -225,18 +225,61 @@ func pin(bin, src string) error {
 		return err
 	}
 	dir := filepath.Dir(bin)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
-	return store.WriteAtomic(dir, filepath.Base(bin), content, store.WithMode(0o755), store.WithTempPattern(".pin-*"))
+	return store.WriteAtomic(dir, filepath.Base(bin), content, store.WithMode(exeMode), store.WithTempPattern(".pin-*"))
 }
 
-func writeSettings(repo string, doc []byte) error {
+func writeSettings(repo string, doc []byte) error { return writeSettingsWith(repo, doc) }
+
+// writeSettingsWith writes the settings file through a temp file in its own
+// directory and a rename, so a crash or an overlapping install leaves the old
+// file or the whole new one, never half. A symlinked file (or .claude dir) is
+// resolved first: the link target is replaced and the link stays.
+func writeSettingsWith(repo string, doc []byte, opts ...store.AtomicOption) error {
 	path := SettingsPath(repo)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	claude := filepath.Dir(path)
+	if err := os.MkdirAll(claude, dirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(path, doc, 0o644)
+	dir, err := filepath.EvalSymlinks(claude)
+	if err != nil {
+		return err
+	}
+	target, err := resolveLink(filepath.Join(dir, filepath.Base(path)))
+	if err != nil {
+		return err
+	}
+	mode := fileMode
+	if fi, err := os.Stat(target); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	dir = filepath.Dir(target)
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return err
+	}
+	opts = append([]store.AtomicOption{store.WithMode(mode), store.WithTempPattern(".settings-*")}, opts...)
+	return store.WriteAtomic(dir, filepath.Base(target), doc, opts...)
+}
+
+// resolveLink follows path while it is a symlink, a dangling one included.
+func resolveLink(path string) (string, error) {
+	for range 16 {
+		fi, err := os.Lstat(path)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return path, nil
+		}
+		dest, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(dest) {
+			dest = filepath.Join(filepath.Dir(path), dest)
+		}
+		path = dest
+	}
+	return "", fmt.Errorf("%s: too many levels of symbolic links", path)
 }
 
 // Eject removes the entries Install added, from this repo's settings, and

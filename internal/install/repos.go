@@ -48,14 +48,14 @@ func readLines(root, name string) ([]string, error) {
 }
 
 func writeLines(root, name string, lines []string) error {
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(root, dirMode); err != nil {
 		return err
 	}
 	var b strings.Builder
 	for _, l := range lines {
 		b.WriteString(l + "\n")
 	}
-	return store.WriteAtomic(root, name, []byte(b.String()), store.WithMode(0o644))
+	return store.WriteAtomic(root, name, []byte(b.String()), store.WithMode(fileMode))
 }
 
 // Repos is the recorded repository roots, in the order they were recorded.
