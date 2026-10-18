@@ -41,7 +41,7 @@ func TestInstallVerbs_InstallDoctorEjectCycle(t *testing.T) {
 	env, repo, state := installFixture(t)
 	settings := filepath.Join(repo, ".claude", "settings.local.json")
 
-	code, out, errs := runInstall(env, "install", "--dry")
+	code, out, errs := runInstall(env, "install", "--dry", "--allow-dev")
 	if code != 0 || errs != "" || !strings.HasPrefix(out, "would copy binary "+filepath.Join(state, "bin", "dev", "trellis")+"\nwould add hook PreToolUse\n") {
 		t.Fatalf("dry install: %d %q %q", code, out, errs)
 	}
@@ -49,7 +49,7 @@ func TestInstallVerbs_InstallDoctorEjectCycle(t *testing.T) {
 		t.Errorf("doctor before install: %d %q", code, out)
 	}
 
-	code, out, errs = runInstall(env, "install")
+	code, out, errs = runInstall(env, "install", "--allow-dev")
 	if code != 0 || errs != "" || !strings.HasPrefix(out, "copy binary ") || !strings.Contains(out, "add hook UserPromptSubmit\n") {
 		t.Fatalf("install: %d %q %q", code, out, errs)
 	}
@@ -75,10 +75,10 @@ func TestInstallVerbs_RepoFlagAndErrors(t *testing.T) {
 	if code, _, errs := runInstall(elsewhere, "doctor"); code != 1 || !strings.Contains(errs, "not in a git repository") {
 		t.Errorf("outside a repo: %d %q", code, errs)
 	}
-	if code, out, _ := runInstall(elsewhere, "install", "--repo", repo, "--dry"); code != 0 || !strings.Contains(out, "would add hook Stop") {
+	if code, out, _ := runInstall(elsewhere, "install", "--repo", repo, "--dry", "--allow-dev"); code != 0 || !strings.Contains(out, "would add hook Stop") {
 		t.Errorf("--repo: %d %q", code, out)
 	}
-	if code, _, errs := runInstall(env, "eject", "--dry"); code != 2 || !strings.Contains(errs, "--dry is an install flag") {
+	if code, _, errs := runInstall(env, "eject", "--dry"); code != 2 || !strings.Contains(errs, "--dry and --allow-dev are install flags") {
 		t.Errorf("eject --dry: %d %q", code, errs)
 	}
 	if code, _, _ := runInstall(env, "install", "--bogus"); code != 2 {
@@ -86,10 +86,18 @@ func TestInstallVerbs_RepoFlagAndErrors(t *testing.T) {
 	}
 }
 
+func TestInstallVerbs_DevBuildNeedsAllowDev(t *testing.T) {
+	env, _, _ := installFixture(t)
+	code, out, errs := runInstall(env, "install")
+	if code != 1 || out != "" || errs != "trellis install: refusing to pin an unversioned build; pass --allow-dev\n" {
+		t.Errorf("%d %q %q", code, out, errs)
+	}
+}
+
 func TestInstallVerbs_StateRootInsideTheRepoIsRefused(t *testing.T) {
 	env, repo, _ := installFixture(t)
 	t.Setenv("TRELLIS_STATE", filepath.Join(repo, "state"))
-	if code, _, errs := runInstall(env, "install"); code != 1 || !strings.Contains(errs, "is inside the repo") {
+	if code, _, errs := runInstall(env, "install", "--allow-dev"); code != 1 || !strings.Contains(errs, "is inside the repo") {
 		t.Errorf("%d %q", code, errs)
 	}
 }
@@ -99,7 +107,7 @@ func TestInstall_PinnedBinaryRunsTheHook(t *testing.T) {
 	repo := testiso.Repo(t)
 	state := filepath.Join(t.TempDir(), "state")
 
-	cmd := exec.Command(bin, "install", "--repo", repo)
+	cmd := exec.Command(bin, "install", "--allow-dev", "--repo", repo)
 	cmd.Env = append(os.Environ(), "TRELLIS_STATE="+state)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
