@@ -233,3 +233,9 @@ func TestAllowPeople_DeniesAnAgentRunningTrellisAllow(t *testing.T) {
 		t.Errorf("DenyLine = %q, want %q", got, want)
 	}
 }
+
+// segments is parse without the masked text.
+func segments(tool, cmd string) [][]word {
+	segs, _ := parse(tool, cmd)
+	return segs
+}

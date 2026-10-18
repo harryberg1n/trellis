@@ -12,6 +12,7 @@ package walls
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -253,20 +254,11 @@ func discardIntent(rest []string) (form string, paths []string, ok bool) {
 	return "", nil, false
 }
 
-func contains(args []string, tok string) bool {
-	for _, a := range args {
-		if a == tok {
-			return true
-		}
-	}
-	return false
-}
-
 func resetIntent(args []string) (string, []string, bool) {
-	if contains(args, "--hard") {
+	if slices.Contains(args, "--hard") {
 		return "reset --hard", nil, true
 	}
-	if contains(args, "--merge") {
+	if slices.Contains(args, "--merge") {
 		return "reset --merge", nil, true
 	}
 	return "", nil, false
@@ -280,10 +272,10 @@ func checkoutIntent(args []string) (string, []string, bool) {
 			return "checkout -- <paths>", append([]string{}, args[i+1:]...), true
 		}
 	}
-	if contains(args, ".") {
+	if slices.Contains(args, ".") {
 		return "checkout -- <paths>", []string{"."}, true
 	}
-	if contains(args, "-f") || contains(args, "--force") {
+	if slices.Contains(args, "-f") || slices.Contains(args, "--force") {
 		return "checkout -f", nil, true
 	}
 	return "", nil, false

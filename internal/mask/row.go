@@ -1,6 +1,7 @@
 // The types below are the lexing subset of aphrollo-tools internal/lang
 // (lang.go) at 12b3724e: Language, LineComment, BlockComment, StringForm and
-// Escape, with their fields unchanged. The rest of that package (extensions,
+// Escape, with their fields unchanged but StringForm.CharLiteral, which no
+// shell row sets. The rest of that package (extensions,
 // suppression directives, test patterns, the TOML loader) is not copied:
 // trellis lexes shell command lines only, and its rows are Go values in
 // shells.go.
@@ -72,9 +73,6 @@ type StringForm struct {
 	OpensAfter string
 	// BlankOpen: the opener is masked with the body.
 	BlankOpen bool
-	// CharLiteral: Open is a one-byte quote that starts a literal only when a
-	// char literal's shape closes on the same line.
-	CharLiteral bool
 	// Heredoc: the literal is a heredoc or nowdoc; see Lexer.
 	Heredoc bool
 }

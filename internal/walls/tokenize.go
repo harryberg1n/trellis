@@ -95,12 +95,6 @@ func dropReserved(ws []word) []word {
 	return ws
 }
 
-// segments is parse without the masked text.
-func segments(tool, cmd string) [][]word {
-	segs, _ := parse(tool, cmd)
-	return segs
-}
-
 // tokenize reads the words of one simple command in the tool's own syntax.
 func tokenize(tool, s string) []word {
 	if isPowerShell(tool) {

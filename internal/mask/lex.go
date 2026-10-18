@@ -14,6 +14,8 @@
 //  3. The blank closure in Lex: its test is now
 //     cond && (b[i] != '\n' || x.StringNewlines && mode == inString), where the
 //     original had cond && b[i] != '\n'.
+//  4. The char-literal form is gone: strForm.charLit, the branch in Lex that
+//     read it and charLiteralLen in mask.go. No shell row sets it.
 
 package mask
 
@@ -56,11 +58,11 @@ type blockMarker struct {
 type strForm struct {
 	open, close []byte
 	// doubled is close twice: in a doubling string it is one literal closer.
-	doubled                       []byte
-	escape                        Escape
-	multiline, blankOpen, charLit bool
-	placed                        bool
-	after                         string
+	doubled              []byte
+	escape               Escape
+	multiline, blankOpen bool
+	placed               bool
+	after                string
 	// heredoc: open is an operator followed by an identifier line; the body
 	// ends at a line holding that identifier (see heredocHead).
 	heredoc bool
@@ -86,7 +88,7 @@ func NewLexer(l Language) *Lexer {
 	for _, s := range l.Strings {
 		x.strs = append(x.strs, strForm{
 			open: []byte(s.Open), close: []byte(s.Close), doubled: []byte(s.Close + s.Close),
-			escape: s.Escape, multiline: s.Multiline, blankOpen: s.BlankOpen, charLit: s.CharLiteral,
+			escape: s.Escape, multiline: s.Multiline, blankOpen: s.BlankOpen,
 			placed: s.LineStart || s.OpensAfter != "", after: s.OpensAfter, heredoc: s.Heredoc,
 		})
 		x.starts[s.Open[0]] = true
@@ -212,18 +214,6 @@ func (x *Lexer) Lex(src string, blankStrings, blankComments bool) string {
 			}
 			f := x.stringAt(b, i)
 			if f == nil {
-				continue
-			}
-			if f.charLit {
-				// A lifetime's `'` is code: only a literal that closes on
-				// this line in a char literal's shape is a string. Advance by
-				// the literal's length with a skip count: an index computed as
-				// `i + n` is an arithmetic mutation site whose `i - n` walks
-				// the scan backwards forever.
-				if n, ok := charLiteralLen(b, i); ok {
-					blankRun(blankStrings, i+1, n-1)
-					skip = n
-				}
 				continue
 			}
 			if f.heredoc {
