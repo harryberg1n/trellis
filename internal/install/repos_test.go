@@ -1,10 +1,12 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/store"
@@ -183,5 +185,39 @@ func TestPin_CopiesOnceAndKeepsAnExistingPin(t *testing.T) {
 	}
 	if _, _, err := Pin(f.root, "../x", f.exe); err == nil {
 		t.Error("a version naming a parent directory was accepted")
+	}
+}
+
+func TestRecordRepo_ParallelRecordsLoseNoLine(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	var repos []string
+	for range 8 {
+		repos = append(repos, testiso.Repo(t))
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, len(repos)*2)
+	for i, r := range repos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- RecordRepo(root, r)
+			errs <- RecordCreatedPin(root, fmt.Sprintf("v0.0.%d", i))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Repos(root)
+	if err != nil || len(got) != 8 {
+		t.Fatalf("Repos = %v, %v; want 8 lines", got, err)
+	}
+	pins, err := CreatedPins(root)
+	if err != nil || len(pins) != 8 {
+		t.Fatalf("CreatedPins = %v, %v; want 8 lines", pins, err)
 	}
 }

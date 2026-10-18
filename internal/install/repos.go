@@ -68,14 +68,22 @@ func RecordRepo(root, repo string) error {
 	if err != nil {
 		return err
 	}
-	repos, err := Repos(root)
-	if err != nil {
-		return err
-	}
-	if slices.Contains(repos, canon) {
-		return nil
-	}
-	return writeLines(root, reposFile, append(repos, canon))
+	return addLine(root, reposFile, canon)
+}
+
+// addLine adds line to the record file once, holding the records lock across
+// the read and the write.
+func addLine(root, name, line string) error {
+	return lockRecords(root, func() error {
+		lines, err := readLines(root, name)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(lines, line) {
+			return nil
+		}
+		return writeLines(root, name, append(lines, line))
+	})
 }
 
 // recordInstall records the repository an install just wrote hooks into, and
@@ -110,15 +118,17 @@ func ForgetRepo(root, repo string) error {
 	if err != nil {
 		return err
 	}
-	repos, err := Repos(root)
-	if err != nil {
-		return err
-	}
-	kept := slices.DeleteFunc(slices.Clone(repos), func(r string) bool { return r == canon })
-	if len(kept) == len(repos) {
-		return nil
-	}
-	return writeLines(root, reposFile, kept)
+	return lockRecords(root, func() error {
+		repos, err := Repos(root)
+		if err != nil {
+			return err
+		}
+		kept := slices.DeleteFunc(slices.Clone(repos), func(r string) bool { return r == canon })
+		if len(kept) == len(repos) {
+			return nil
+		}
+		return writeLines(root, reposFile, kept)
+	})
 }
 
 // CreatedPins is the versions `trellis update` pinned itself.
@@ -128,14 +138,7 @@ func CreatedPins(root string) ([]string, error) { return readLines(root, pinsFil
 // called after the pin is written, so a crash between the two leaves a pin no
 // one will sweep.
 func RecordCreatedPin(root, version string) error {
-	pins, err := CreatedPins(root)
-	if err != nil {
-		return err
-	}
-	if slices.Contains(pins, version) {
-		return nil
-	}
-	return writeLines(root, pinsFile, append(pins, version))
+	return addLine(root, pinsFile, version)
 }
 
 // ReferencedVersions is the versions the trellis hooks in repo's settings point
