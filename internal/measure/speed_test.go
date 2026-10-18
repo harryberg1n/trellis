@@ -11,8 +11,8 @@ import (
 func TestSpeed_P50P90PerWeek(t *testing.T) {
 	// 2026-10-05 is a Monday: ISO week 2026-W41.
 	mon := time.Date(2026, 10, 5, 8, 0, 0, 0, time.UTC)
-	var evs []kernel.Event
-	var ms []Merge
+	evs := make([]kernel.Event, 0, 11)
+	ms := make([]Merge, 0, 11)
 	for i, mins := range []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100} {
 		lane := string(rune('a' + i))
 		evs = append(evs, kernel.Event{Kind: kernel.EvLaneOpened, Lane: lane, At: mon})

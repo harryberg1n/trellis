@@ -28,7 +28,6 @@ func TestGH_ListIssuesArgvAndDecoding(t *testing.T) {
 	r := &fakeRunner{out: `[{"number":7,"title":"escape: x","body":"see #3","createdAt":"2026-10-02T10:00:00Z"}]`}
 
 	got, err := GH{Runner: r, Dir: "d"}.ListIssues("", "escape:")
-
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +45,6 @@ func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
 	r := &fakeRunner{out: `[{"number":5,"headRefName":"feat-x"}]`}
 
 	got, err := GH{Runner: r, Dir: "d"}.ListMergedPRs("")
-
 	if err != nil {
 		t.Fatal(err)
 	}

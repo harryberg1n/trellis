@@ -168,7 +168,8 @@ func TestLabels_FourteenDayBoundary(t *testing.T) {
 }
 
 func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
-	f := Facts{Now: day(30),
+	f := Facts{
+		Now: day(30),
 		Merges: []Merge{
 			{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)},
 			{Sha: "eeeeeee5555", Subject: "Revert \"add b\"", Body: "This reverts commit bbbbbbb2222.", At: day(1)},
@@ -182,7 +183,8 @@ func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
 }
 
 func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
-	f := Facts{Now: day(30),
+	f := Facts{
+		Now:    day(30),
 		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, Lane: "named", At: day(0)}},
 		PRs:    []PR{{Number: 5, Branch: "feat-x"}},
 	}
