@@ -44,26 +44,31 @@ func (g *ghFake) Light(s runpkg.Spec) (runpkg.Result, error) {
 }
 
 // repoWithHistory is a repo on main: "add a (#1)" on 2026-10-01, a revert of
-// it on the 2nd and "add b (#2)" on the 3rd.
+// it on the 2nd and "add b (#2)" on the 3rd and
+// "add c (#3)", authored on 09-27 and committed on 10-07.
 func repoWithHistory(t *testing.T) string {
 	t.Helper()
 	repo := testiso.Repo(t)
-	commit := func(date, subject, body string) string {
+	commit := func(author, committer, subject, body string) string {
+		t.Setenv("GIT_COMMITTER_DATE", committer)
 		testsupport.Git(t, repo, "add", "-A")
 		msg := subject
 		if body != "" {
 			msg += "\n\n" + body
 		}
 		testsupport.Git(t, repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-			"commit", "-q", "--date="+date, "-m", msg)
+			"commit", "-q", "--date="+author, "-m", msg)
 		return testsupport.Git(t, repo, "rev-parse", "HEAD")
 	}
 	testsupport.Write(t, filepath.Join(repo, "a.go"), "package a\n\nvar A = 1\n")
-	first := commit("2026-10-01T09:00:00Z", "add a (#1)", "")
+	first := commit("2026-10-01T09:00:00Z", "2026-10-01T09:00:00Z", "add a (#1)", "")
 	testsupport.Write(t, filepath.Join(repo, "a.go"), "package a\n")
-	commit("2026-10-02T09:00:00Z", `Revert "add a (#1)"`, "This reverts commit "+first+".")
+	commit("2026-10-02T09:00:00Z", "2026-10-02T09:00:00Z", `Revert "add a (#1)"`, "This reverts commit "+first+".")
 	testsupport.Write(t, filepath.Join(repo, "b.go"), "package b\n")
-	commit("2026-10-03T09:00:00Z", "add b (#2)", "")
+	commit("2026-10-03T09:00:00Z", "2026-10-03T09:00:00Z", "add b (#2)", "")
+	testsupport.Write(t, filepath.Join(repo, "c.go"), "package c\n")
+	// Rebased: authored ten days before it landed on the 7th.
+	commit("2026-09-27T09:00:00Z", "2026-10-07T09:00:00Z", "add c (#3)", "")
 	return repo
 }
 
@@ -89,6 +94,7 @@ func reportFixture(t *testing.T) (reportEnv, *ghFake, string) {
 	_, err = st.Append(
 		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "A", Session: "s1", At: at(1, 9), Detail: map[string]string{"pr": "1"}},
 		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "B", Session: "s2", At: at(3, 9), Detail: map[string]string{"pr": "2"}},
+		kernel.Event{Kind: kernel.EvLaneOpened, Lane: "C", Session: "s3", At: at(7, 8), Detail: map[string]string{"pr": "3"}},
 		kernel.Event{Kind: kernel.EvSessionUsage, Lane: "A", Session: "s1", At: at(1, 11), Detail: map[string]string{"transcript": transcript}},
 	)
 	if err != nil {
@@ -108,12 +114,28 @@ func TestReport_GathersLabelsFromTheRepoHistory(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	for _, want := range []string{
-		"lanes merged: 2 (defect 1, clean 0, pending 1)",
+		"lanes merged: 3 (defect 1, clean 0, pending 2)",
 		"lanes with usage: 1  total $0.0125",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestReport_MergeTimeIsTheCommitDate(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	var out, errb bytes.Buffer
+
+	code := reportCmd(nil, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	// Lane C opened on 10-07 08:00 and was authored on 09-27 but committed on
+	// 10-07 09:00: 60 minutes, in the commit date's week 2026-W41.
+	if want := "  2026-W41  n=1  p50=60.0  p90=60.0\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
 	}
 }
 
@@ -150,7 +172,7 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 			t.Errorf("issue body contains %q:\n%s", bad, body)
 		}
 	}
-	if !strings.Contains(body, "lanes merged: 2") {
+	if !strings.Contains(body, "lanes merged: 3") {
 		t.Errorf("issue body is not the report:\n%s", body)
 	}
 	if got, want := out.String(), "filed https://github.com/harryberg1n/trellis/issues/77\n"; got != want {
