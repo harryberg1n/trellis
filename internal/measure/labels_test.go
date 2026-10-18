@@ -123,6 +123,50 @@ func TestLabels_LaneWithoutNameIsKeyedByPR(t *testing.T) {
 	}
 }
 
+func TestLabels_SecondMergeOnALaneKeepsTheDefect(t *testing.T) {
+	first := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
+	revert := Merge{Sha: "eeeeeee5555", Subject: "Revert", Body: "This reverts commit aaaaaaa1111.", At: day(1)}
+	second := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Lane: "L", At: day(5)}
+	for name, merges := range map[string][]Merge{
+		"defective first": {first, revert, second},
+		"defective last":  {second, first, revert},
+	} {
+		if got := Labels(Facts{Now: day(60), Merges: merges})["L"]; got != Defect {
+			t.Errorf("%s: lane L = %q, want %q", name, got, Defect)
+		}
+	}
+}
+
+func TestLabels_PendingOutranksCleanOnOneLane(t *testing.T) {
+	old := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
+	recent := Merge{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Lane: "L", At: day(19)}
+	if got := Labels(Facts{Now: day(20), Merges: []Merge{recent, old}})["L"]; got != Pending {
+		t.Errorf("lane L = %q, want %q", got, Pending)
+	}
+}
+
+func TestLabels_FourteenDayBoundary(t *testing.T) {
+	base := Merge{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Lane: "L", At: day(0)}
+	revertAt := func(at time.Time) Merge {
+		return Merge{Sha: "eeeeeee5555", Subject: "Revert", Body: "This reverts commit aaaaaaa1111.", At: at}
+	}
+	cases := []struct {
+		name string
+		f    Facts
+		want Label
+	}{
+		{"revert at exactly 14 days counts", Facts{Now: day(30), Merges: []Merge{base, revertAt(day(14))}}, Defect},
+		{"revert 1ns past 14 days does not", Facts{Now: day(30), Merges: []Merge{base, revertAt(day(14).Add(time.Nanosecond))}}, Clean},
+		{"merge exactly 14 days old is no longer pending", Facts{Now: day(14), Merges: []Merge{base}}, Clean},
+		{"merge 1ns short of 14 days is pending", Facts{Now: day(14).Add(-time.Nanosecond), Merges: []Merge{base}}, Pending},
+	}
+	for _, c := range cases {
+		if got := Labels(c.f)["L"]; got != c.want {
+			t.Errorf("%s: lane L = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
 	f := Facts{Now: day(30),
 		Merges: []Merge{

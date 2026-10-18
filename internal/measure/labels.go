@@ -111,26 +111,30 @@ func laneKey(m Merge) string {
 // a revert of its commit; a later merge whose subject starts with "fix" and
 // that touches its lines; a later commit or PR that names its PR; an "escape:"
 // issue that names its PR. Without one of them it is Pending until the window
-// closes at Now, then Clean. Line overlap alone is not a label: it is off
+// closes at Now, then Clean. A lane with several merges takes the worst: defect, then
+// pending, then clean. Line overlap alone is not a label: it is off
 // until a precision check has validated it.
 //
 // "Touches its lines" compares the fix's old-side ranges with the change's
 // new-side ranges by path, without following line shifts of merges between
 // the two.
 func Labels(f Facts) map[string]Label {
+	rank := map[Label]int{Clean: 1, Pending: 2, Defect: 3} // a lane keeps its worst merge
 	out := map[string]Label{}
 	f.Merges = linked(f)
 	for _, m := range f.Merges {
 		if m.Lane == "" && m.PR == 0 {
 			continue // a revert or direct commit owns no lane
 		}
+		l := Clean
 		switch {
 		case defective(f, m):
-			out[laneKey(m)] = Defect
+			l = Defect
 		case f.Now.Before(m.At.Add(Window)):
-			out[laneKey(m)] = Pending
-		default:
-			out[laneKey(m)] = Clean
+			l = Pending
+		}
+		if k := laneKey(m); rank[l] > rank[out[k]] {
+			out[k] = l
 		}
 	}
 	return out
