@@ -548,3 +548,38 @@ func TestQuarantine_AJunkLineIsSetAsideOnceAcrossProcesses(t *testing.T) {
 		t.Errorf("events.quarantine = %q, want the junk line once: %q", got, want)
 	}
 }
+
+func TestQuarantine_ConcurrentStoresSetAJunkLineAsideOnce(t *testing.T) {
+	s, dir, fc := open(t)
+	if _, err := s.Append(ev("edit", "tree/a")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("junk line\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		st, err := Open(dir, fc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = st.Read(1)
+		}()
+	}
+	wg.Wait()
+
+	got, err := os.ReadFile(filepath.Join(dir, "events.quarantine"))
+	if err != nil || string(got) != "junk line\n" {
+		t.Errorf("events.quarantine = %q, %v; want the line once", got, err)
+	}
+}
