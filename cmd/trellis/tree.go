@@ -18,8 +18,12 @@ const treeUsage = `usage: trellis tree <verb>
 verbs:
   new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory
   sync                    fetch origin and rebase this tree onto its default branch
-  merge [--check CMD]     push, open or find the pull request, wait for its checks, rebase-merge, remove the tree
-                          (a repository with no remote: a --no-ff merge into the default branch, no gh)
+  merge [--check CMD] [--rebase]
+                          push, open or find the pull request, wait for its checks, squash-merge it (one commit
+                          per PR, its number in the subject, the usual norm), remove the tree; --rebase keeps
+                          the tree's commits instead
+                          (a repository with no remote: one squash commit "Merge tree <name>" on the default
+                          branch, no gh; --rebase makes it a --no-ff merge)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work without --force
 
 exit codes of merge and sync: 0 done; 2 when you can fix it and run it again (red or cancelled
@@ -32,7 +36,7 @@ func treeUsageLine(verb string) string {
 	case "new":
 		return "tree new <name> [--path P]"
 	case "merge":
-		return "tree merge [--check CMD]"
+		return "tree merge [--check CMD] [--rebase]"
 	case "rm":
 		return "tree rm [<name>] [--force]"
 	}
@@ -82,12 +86,13 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	}
 	fs := newFlagSet("tree "+verb, treeUsageLine(verb), stderr)
 	var path, check string
-	var force bool
+	var force, rebase bool
 	switch verb {
 	case "new":
 		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of this checkout)")
 	case "merge":
 		fs.StringVar(&check, "check", "", "a command to run in the tree first; red stops the merge")
+		fs.BoolVar(&rebase, "rebase", false, "keep the tree's commits (a rebase merge) instead of squashing them into one")
 	case "rm":
 		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted work")
 	case "sync":
@@ -124,7 +129,11 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	case "sync":
 		err = tree.Sync(e)
 	case "merge":
-		err = tree.Merge(e, check)
+		var opts []tree.MergeOption
+		if rebase {
+			opts = append(opts, tree.Rebase())
+		}
+		err = tree.Merge(e, check, opts...)
 	case "rm":
 		err = tree.Rm(e, name, force)
 	}

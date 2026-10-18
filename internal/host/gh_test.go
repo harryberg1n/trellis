@@ -110,7 +110,7 @@ func TestGH_CreateWatchAndMergeArgv(t *testing.T) {
 	if _, err := g.WatchChecks(7); err != nil {
 		t.Fatal(err)
 	}
-	if err := g.MergePR(7); err != nil {
+	if err := g.MergePR(7, MergeRebase); err != nil {
 		t.Fatal(err)
 	}
 	want := [][]string{
@@ -150,5 +150,39 @@ func TestGH_CreateAndEditTargetTheRepoAndKeepTheBodyOffTheArgv(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.Specs()[1].Args, wantEdit) || string(r.Specs()[1].Stdin) != "BODY2" {
 		t.Errorf("edit spec = %+v", r.Specs()[1])
+	}
+}
+
+func TestGH_ChecksOfAPullRequestWithNoneYetIsEmpty(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{ExitCode: 1}, errors.New("exit status 1: no checks reported on the 'feat' branch")
+	}}
+
+	got, err := GH{Runner: r, Dir: "d"}.Checks(7)
+
+	if err != nil || len(got) != 0 {
+		t.Errorf("checks = %v, err = %v; want none and no error", got, err)
+	}
+}
+
+func TestGH_WorkflowCountArgvAndDecoding(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("3\n")}
+
+	got, err := GH{Runner: r, Dir: "d"}.WorkflowCount()
+
+	wantArgs := []string{"api", "repos/{owner}/{repo}/actions/workflows", "--jq", ".total_count"}
+	if err != nil || got != 3 || !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
+		t.Errorf("count = %d, err = %v, args = %v; want 3 from %v", got, err, r.Specs()[0].Args, wantArgs)
+	}
+}
+
+func TestGH_MergeCommitArgvAndDecoding(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`{"mergeCommit":{"oid":"abc123"}}`)}
+
+	got, err := GH{Runner: r, Dir: "d"}.MergeCommit(20)
+
+	wantArgs := []string{"pr", "view", "20", "--json", "mergeCommit"}
+	if err != nil || got != "abc123" || !reflect.DeepEqual(r.Specs()[0].Args, wantArgs) {
+		t.Errorf("sha = %q, err = %v, args = %v; want abc123 from %v", got, err, r.Specs()[0].Args, wantArgs)
 	}
 }

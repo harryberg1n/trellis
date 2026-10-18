@@ -136,11 +136,15 @@ type Check struct {
 var ErrNoChecks = errors.New("host: no checks reported")
 
 // Checks lists the checks of pull request number. gh exits non-zero when one
-// failed or is pending, and still prints the list, so the list wins.
+// failed or is pending, and still prints the list, so the list wins. A pull
+// request GitHub has no check runs for yet has an empty list, not an error.
 func (g GH) Checks(number int) ([]Check, error) {
 	out, err := g.gh(nil, "pr", "checks", strconv.Itoa(number), "--json", "name,bucket,link")
 	var checks []Check
 	if jerr := json.Unmarshal(out, &checks); jerr != nil {
+		if err != nil && strings.Contains(err.Error(), "no checks reported") {
+			return nil, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -197,8 +201,53 @@ func (g GH) Ready() error {
 	return err
 }
 
-// MergePR rebase-merges pull request number and deletes its branch.
-func (g GH) MergePR(number int) error {
-	_, err := g.gh(nil, "pr", "merge", strconv.Itoa(number), "--rebase", "--delete-branch")
+// MergeMethod is how gh lands a pull request: its gh flag.
+type MergeMethod string
+
+// The merge methods.
+const (
+	MergeSquash MergeMethod = "--squash"
+	MergeRebase MergeMethod = "--rebase"
+)
+
+// MergePR merges pull request number by method and deletes its branch.
+func (g GH) MergePR(number int, method MergeMethod) error {
+	_, err := g.gh(nil, "pr", "merge", strconv.Itoa(number), string(method), "--delete-branch")
 	return err
+}
+
+// WorkflowCount is the number of workflows the repository gh finds from Dir
+// defines. A repository with none never reports a check.
+func (g GH) WorkflowCount() (int, error) {
+	out, err := g.gh(nil, "api", "repos/{owner}/{repo}/actions/workflows", "--jq", ".total_count")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(string(trimNL(out)))
+	if err != nil {
+		return 0, fmt.Errorf("host: reading the workflow count: %w", err)
+	}
+	return n, nil
+}
+
+// MergeCommit is the sha of the commit that merged pull request number: the
+// tip of its commits on the base branch for a rebase merge. Empty when the
+// pull request is not merged.
+func (g GH) MergeCommit(number int) (string, error) {
+	out, err := g.gh(nil, "pr", "view", strconv.Itoa(number), "--json", "mergeCommit")
+	if err != nil {
+		return "", err
+	}
+	var pr struct {
+		MergeCommit *struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+	}
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return "", fmt.Errorf("host: reading gh pr view: %w", err)
+	}
+	if pr.MergeCommit == nil {
+		return "", nil
+	}
+	return pr.MergeCommit.OID, nil
 }

@@ -209,7 +209,11 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 		return nil, err
 	}
 	treeOfPR := map[int]string{}
+	landed := map[string]kernel.Event{} // tree.merged events by the sha they landed as
 	for _, ev := range events {
+		if sha := ev.Detail[kernel.DetailMerge]; ev.Kind == kernel.EvTreeMerged && sha != "" {
+			landed[strings.ToLower(sha)] = ev
+		}
 		if n, err := strconv.Atoi(ev.Detail[kernel.DetailPR]); err == nil && ev.Tree != "" {
 			treeOfPR[n] = ev.Tree
 		}
@@ -226,7 +230,11 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 			continue
 		}
 		m := measure.Merge{Sha: f[0], Subject: f[2], Body: f[3], At: at}
-		if g := trailingPR.FindStringSubmatch(m.Subject); g != nil {
+		if ev, ok := landed[strings.ToLower(m.Sha)]; ok {
+			// a merge the verb recorded: the sha is the link, whatever the subject says
+			m.Tree = ev.Tree
+			m.PR, _ = strconv.Atoi(ev.Detail[kernel.DetailPR])
+		} else if g := trailingPR.FindStringSubmatch(m.Subject); g != nil {
 			m.PR, _ = strconv.Atoi(g[1])
 		} else if g := mergePR.FindStringSubmatch(m.Subject); g != nil {
 			m.PR, _ = strconv.Atoi(g[1])
