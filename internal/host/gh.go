@@ -266,3 +266,20 @@ func (g GH) MergeCommit(number int) (string, error) {
 	}
 	return pr.MergeCommit.OID, nil
 }
+
+// HasMergedPR reports whether a merged pull request has branch as its head.
+// A branch GitHub deleted after the merge, squash or rebase, has no ancestry
+// in the default branch and no upstream left; this is how it is known merged.
+func (g GH) HasMergedPR(branch string) (bool, error) {
+	out, err := g.gh(nil, "pr", "list", "--head", branch, "--state", "merged", "--limit", "1", "--json", "number")
+	if err != nil {
+		return false, err
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return false, fmt.Errorf("host: reading gh pr list: %w", err)
+	}
+	return len(prs) > 0, nil
+}

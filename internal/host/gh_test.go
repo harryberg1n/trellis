@@ -204,3 +204,18 @@ func TestGH_MergeCommitArgvAndDecoding(t *testing.T) {
 		t.Errorf("sha = %q, err = %v, args = %v; want abc123 from %v", got, err, r.Specs()[0].Args, wantArgs)
 	}
 }
+
+func TestGH_HasMergedPRArgvAndDecoding(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[{"number":5}]`)}
+
+	got, err := GH{Runner: r, Dir: "d"}.HasMergedPR("feat")
+
+	want := []string{"pr", "list", "--head", "feat", "--state", "merged", "--limit", "1", "--json", "number"}
+	if err != nil || !got || !reflect.DeepEqual(r.Specs()[0].Args, want) {
+		t.Errorf("merged = %v, err = %v, args = %v; want true from %v", got, err, r.Specs()[0].Args, want)
+	}
+	none := &testsupport.FakeRunner{Answer: testsupport.Stdout("[]")}
+	if got, err := (GH{Runner: none}).HasMergedPR("feat"); err != nil || got {
+		t.Errorf("merged = %v, err = %v; want false", got, err)
+	}
+}

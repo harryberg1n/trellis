@@ -505,23 +505,51 @@ func refuseUnmerged(env Env, w where, name string) error {
 		return nil
 	}
 	base := baseOf(w.Repo)
+	if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", base+"^{commit}"); err != nil {
+		if w.Repo.Remote != "" {
+			return fmt.Errorf("tree rm: %s not fetched: run git fetch origin", base)
+		}
+		return fmt.Errorf("tree rm: %s: no such branch", base)
+	}
 	n, err := env.countCommits(w.Primary, base+".."+name)
 	if err != nil {
 		return fmt.Errorf("tree rm: %w", err)
 	}
 	if n == 0 {
-		return nil
+		return nil // an ancestor of the default branch
 	}
 	if _, uerr := env.runGit(w.Primary, "rev-parse", "--verify", "-q", name+"@{upstream}"); uerr == nil {
 		if ahead, err := env.countCommits(w.Primary, name+"@{upstream}.."+name); err == nil && ahead == 0 {
-			return nil
+			return nil // everything is pushed
 		}
+	}
+	if landed(env, w, name, base) {
+		return nil // a squash or rebase merge: the commits are not ancestors, the change is in
 	}
 	noun := "commits"
 	if n == 1 {
 		noun = "commit"
 	}
 	return fmt.Errorf("tree rm: %s has %d %s not merged into %s; --force removes it anyway", name, n, noun, base)
+}
+
+// landed reports whether the branch was merged in a way that leaves its
+// commits out of the default branch's ancestry: with a remote, gh finds a
+// merged pull request with the branch as head; without one, the default branch
+// holds the "Merge tree <name>" commit a local landing makes. A gh that cannot
+// answer is "not known to be merged".
+func landed(env Env, w where, name, base string) bool {
+	if w.Repo.Remote != "" {
+		merged, err := (host.GH{Runner: env.runner(), Dir: w.Primary}).HasMergedPR(name)
+		return err == nil && merged
+	}
+	want := "Merge tree " + name
+	for _, subject := range lines(mustGit(env, w.Primary, "log", "--format=%s", "--fixed-strings", "--grep="+want, base)) {
+		if subject == want {
+			return true
+		}
+	}
+	return false
 }
 
 // countCommits is the number of commits in a git revision range.
