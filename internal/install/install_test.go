@@ -308,7 +308,7 @@ func TestDoctor_ReportsVersionMismatchAndUnwritableRoot(t *testing.T) {
 	f := newFixture(t)
 	writeInstalled(t, f, "v0.0.1")
 	got := Doctor(f.opts("v0.0.2", false))
-	if !contains(got, "plugin v0.0.1, binary v0.0.2") {
+	if !contains(got, "hook v0.0.1, binary v0.0.2") {
 		t.Errorf("no version line in %q", got)
 	}
 
@@ -382,7 +382,7 @@ func TestInstall_StateRootWithASpaceStillRoundTrips(t *testing.T) {
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, f.settings()); !strings.Contains(got, `\"`+filepath.ToSlash(f.root)+`/bin/v0.0.2/trellis\" hook Stop`) {
+	if got := readFile(t, f.settings()); !strings.Contains(got, `'`+filepath.ToSlash(f.root)+`/bin/v0.0.2/trellis' hook Stop`) {
 		t.Errorf("command not quoted around the spaced path:\n%s", got)
 	}
 	if got := Doctor(f.opts("v0.0.2", false)); len(got) != 0 {
@@ -601,5 +601,20 @@ func TestEject_WithoutTheExcludeLineReportsNoExcludeAction(t *testing.T) {
 	}
 	if got := readFile(t, exclude); got != "*.log\n" {
 		t.Errorf("exclude changed: %q", got)
+	}
+}
+
+func TestDoctor_NamesTheEventsAPartialInstallLacks(t *testing.T) {
+	f := newFixture(t)
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	writeInstalled(t, f, "v0.0.2") // only Stop is wired now
+
+	got := Doctor(f.opts("v0.0.2", false))
+
+	want := "hook missing for PreToolUse, PostToolUse, SessionStart, SessionEnd, UserPromptSubmit: run trellis install"
+	if !contains(got, want) {
+		t.Errorf("no line %q in %q", want, got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -352,6 +353,7 @@ func checkHooks(found []located, o Options) []string {
 	var problems []string
 	seen := map[string]bool{}
 	ours := 0
+	wired := map[string]bool{}
 	for _, l := range found {
 		for _, h := range l.Entry.Hooks {
 			version, ok := Owned(h.Command, o.Root)
@@ -359,10 +361,11 @@ func checkHooks(found []located, o Options) []string {
 				continue
 			}
 			ours++
+			wired[l.Event] = true
 			bin, _ := executable(h.Command)
 			if version != o.Version && !seen[version] {
 				seen[version] = true
-				problems = append(problems, fmt.Sprintf("plugin %s, binary %s", version, o.Version))
+				problems = append(problems, fmt.Sprintf("hook %s, binary %s", version, o.Version))
 			}
 			if _, err := os.Stat(bin); err != nil && !seen[bin] {
 				seen[bin] = true
@@ -372,6 +375,8 @@ func checkHooks(found []located, o Options) []string {
 	}
 	if ours == 0 {
 		problems = append(problems, "trellis is not installed: "+SettingsPath(o.Repo))
+	} else if missing := slices.DeleteFunc(kernel.InstalledHookEvents(), func(e string) bool { return wired[e] }); len(missing) > 0 {
+		problems = append(problems, "hook missing for "+strings.Join(missing, ", ")+": run trellis install")
 	}
 	return problems
 }

@@ -18,15 +18,21 @@ func BinPath(root, version, ext string) string {
 }
 
 // Command is the hook command for one event: the pinned binary's absolute
-// path in double quotes, then `hook <event>`.
+// path in single quotes, then `hook <event>`.
 //
 // Claude Code runs a hook command through its default shell: bash, which on
-// Windows is Git Bash. The command is therefore bash syntax. The double quotes
-// keep a path with spaces in one word, and the path is written with forward
-// slashes because bash would read a backslash as an escape; Windows accepts
-// forward slashes in a path.
+// Windows is Git Bash. The command is therefore bash syntax. Single quotes keep
+// every byte of the path literal, a `$`, a backtick, a `"` or a backslash
+// included; the one byte they cannot hold, a single quote, is written as close quote, backslash, quote, open quote.
+// The path is written with forward slashes because bash would read a backslash
+// as an escape; Windows accepts forward slashes in a path.
 func Command(bin, event string) string {
-	return `"` + filepath.ToSlash(bin) + `" hook ` + event
+	return shellQuote(filepath.ToSlash(bin)) + " hook " + event
+}
+
+// shellQuote is s as one word of a POSIX shell, in single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Owned reports whether a hook command is one trellis wrote, and for which
@@ -46,17 +52,40 @@ func Owned(command, root string) (version string, ok bool) {
 	return filepath.Base(dir), true
 }
 
-// executable is the quoted path a trellis command starts with.
+// executable is the quoted path a trellis command starts with: the single-quoted
+// form Command writes, or the double-quoted form older installs wrote.
 func executable(command string) (string, bool) {
-	rest, ok := strings.CutPrefix(command, `"`)
-	if !ok {
-		return "", false
+	var path string
+	var ok bool
+	if rest, single := strings.CutPrefix(command, "'"); single {
+		path, ok = unquoteSingle(rest)
+	} else if rest, double := strings.CutPrefix(command, `"`); double {
+		path, _, ok = strings.Cut(rest, `"`)
 	}
-	path, _, ok := strings.Cut(rest, `"`)
 	if !ok || path == "" {
 		return "", false
 	}
 	return filepath.Clean(filepath.FromSlash(path)), true
+}
+
+// unquoteSingle reads the rest of a single-quoted word, after its opening
+// quote, undoing the close-escape-open sequence of shellQuote, and reports whether it was closed.
+func unquoteSingle(rest string) (string, bool) {
+	var b strings.Builder
+	for {
+		i := strings.IndexByte(rest, '\'')
+		if i < 0 {
+			return "", false
+		}
+		b.WriteString(rest[:i])
+		rest = rest[i+1:]
+		if after, esc := strings.CutPrefix(rest, `\''`); esc {
+			b.WriteByte('\'')
+			rest = after
+			continue
+		}
+		return b.String(), true
+	}
 }
 
 // sameDir reports whether two paths name one directory: equal as written, or
