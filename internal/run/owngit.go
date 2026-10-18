@@ -27,8 +27,10 @@ var readVerbs = map[string]bool{
 
 // branchWrites are the git branch options that create, move, copy, delete or
 // configure a branch.
-var branchWrites = []string{"-d", "-D", "-m", "-M", "-c", "-C", "-f", "--force", "--delete", "--move", "--copy",
-	"-u", "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track", "-t"}
+var branchWrites = []string{
+	"-d", "-D", "-m", "-M", "-c", "-C", "-f", "--force", "--delete", "--move", "--copy",
+	"-u", "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track", "-t",
+}
 
 // ownGitState is nil, or an error wrapping ErrOwnGitState when spec is a git
 // child that is not on the allowlist of what trellis's own children need.
@@ -66,7 +68,7 @@ func ownGitState(spec Spec) error {
 			bad = "(only list)"
 		}
 	case verb == "branch":
-		if !(slices.Contains(args, "--list") || slices.Contains(args, "--show-current")) || slices.ContainsFunc(args, func(a string) bool { return slices.Contains(branchWrites, a) }) {
+		if !slices.Contains(args, "--list") && !slices.Contains(args, "--show-current") || slices.ContainsFunc(args, func(a string) bool { return slices.Contains(branchWrites, a) }) {
 			bad = "(only --list and --show-current)"
 		}
 	default:

@@ -123,13 +123,41 @@ func TestWriteTargets(t *testing.T) {
 }
 
 func TestParseGit_ReadsGlobalOptionsOutOfTheWay(t *testing.T) {
-	seg := segments(`FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
+	seg := segments("Bash", `FOO=1 git -C sub -c core.hooksPath=/h --no-pager commit -m "x y"`)[0]
 	got, ok := parseGit(seg, filepath.FromSlash("/w"))
 	want := gitCall{Dir: filepath.FromSlash("/w/sub"), Globals: []string{"core.hooksPath=/h"}, Verb: "commit", Args: []string{"-m", "x y"}}
 	if !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("parseGit = %+v, %v; want %+v", got, ok, want)
 	}
-	if _, ok := parseGit(segments("echo git commit")[0], "/w"); ok {
+	if _, ok := parseGit(segments("Bash", "echo git commit")[0], "/w"); ok {
 		t.Error("echo git commit read as a git call")
+	}
+}
+
+func TestTokenize_PerTool(t *testing.T) {
+	cases := []struct {
+		name, tool, cmd string
+		want            [][]string
+	}{
+		{"powershell keeps backslashes", "PowerShell", `git -C D:\Projects\trellis push`, [][]string{{"git", "-C", `D:\Projects\trellis`, "push"}}},
+		{"bash escapes them", "Bash", `git -C D:\Projects\trellis push`, [][]string{{"git", "-C", "D:Projectstrellis", "push"}}},
+		{"powershell backtick escape", "PowerShell", "echo a`;b", [][]string{{"echo", "a;b"}}},
+		{"powershell doubled quote", "PowerShell", `echo 'it''s' "say ""x"""`, [][]string{{"echo", "it's", `say "x"`}}},
+		{"powershell here-string", "PowerShell", "echo @\"\nline one\nline two\n\"@ tail", [][]string{{"echo", "line one\nline two\n", "tail"}}},
+		{"comment hides a separator", "Bash", "git status # note; git reset --hard", [][]string{{"git", "status"}}},
+		{"quoted separator", "Bash", `echo "a; b" && ls`, [][]string{{"echo", "a; b"}, {"ls"}}},
+		{"escaped separator", "Bash", `echo a\;b; ls`, [][]string{{"echo", "a;b"}, {"ls"}}},
+		{"redirect ampersand", "Bash", `make 2>&1 | tee log`, [][]string{{"make", "2>&1"}, {"tee", "log"}}},
+		{"newline inside a message", "Bash", "git commit -m \"a\nb\"\nls", [][]string{{"git", "commit", "-m", "a\nb"}, {"ls"}}},
+		{"powershell comment", "PowerShell", "git status <# ; git reset --hard #>; ls", [][]string{{"git", "status"}, {"ls"}}},
+	}
+	for _, c := range cases {
+		var got [][]string
+		for _, seg := range segments(c.tool, c.cmd) {
+			got = append(got, texts(seg))
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: segments = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

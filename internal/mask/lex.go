@@ -24,6 +24,10 @@ type Lexer struct {
 	// opener, and a backslash that escapes. Every other byte of code is passed
 	// without asking each marker in turn.
 	starts [256]bool
+	// StringNewlines blanks a newline inside a string like any other byte. The
+	// original keeps every newline; trellis needs to tell a newline that ends a
+	// command from one inside a quoted message. The only change to this file.
+	StringNewlines bool
 }
 
 type lineMarker struct {
@@ -107,7 +111,7 @@ func (x *Lexer) Lex(src string, blankStrings, blankComments bool) string {
 		term    []byte // the identifier that closes the heredoc being read
 	)
 	blank := func(cond bool, i int) {
-		if cond && b[i] != '\n' {
+		if cond && (b[i] != '\n' || x.StringNewlines && mode == inString) {
 			b[i] = ' '
 		}
 	}
