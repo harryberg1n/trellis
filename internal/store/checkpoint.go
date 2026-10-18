@@ -32,7 +32,7 @@ func (tx *Tx) Checkpoint() (Checkpoint, error) {
 	if err != nil {
 		return cp, err
 	}
-	if err := json.Unmarshal(raw, &cp); err != nil {
+	if err := decodeCheckpoint(raw, &cp); err != nil {
 		tx.s.skip(logLine{off: -1, raw: raw})
 		return Checkpoint{}, nil
 	}

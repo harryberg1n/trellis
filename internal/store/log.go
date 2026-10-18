@@ -150,7 +150,7 @@ func (tx *Tx) FoldPending(stamp func(kernel.Event) kernel.Event) ([]kernel.Event
 		raw, err := os.ReadFile(name)
 		var ev kernel.Event
 		if err == nil {
-			err = json.Unmarshal(raw, &ev)
+			err = decodeEvent(raw, &ev)
 		}
 		if err != nil {
 			// Keep it for a human; never wedge the lock. If the rename fails the
@@ -369,7 +369,7 @@ func splitLines(buf []byte, base int64) []logLine {
 			continue
 		}
 		l := logLine{raw: raw, off: off, terminated: terminated}
-		l.ok = json.Unmarshal(raw, &l.ev) == nil
+		l.ok = decodeEvent(raw, &l.ev) == nil
 		out = append(out, l)
 	}
 	return out
