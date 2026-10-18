@@ -142,7 +142,7 @@ func (g GH) Checks(number int) ([]Check, error) {
 	out, err := g.gh(nil, "pr", "checks", strconv.Itoa(number), "--json", "name,bucket,link")
 	var checks []Check
 	if jerr := json.Unmarshal(out, &checks); jerr != nil {
-		if err != nil && strings.Contains(err.Error(), "no checks reported") {
+		if ghSays(err, ghNoChecks) {
 			return nil, nil
 		}
 		if err != nil {
@@ -162,20 +162,34 @@ func (g GH) FailedLog(runID string) (string, error) {
 // ErrNoPR is what PRView reports for a branch with no pull request.
 var ErrNoPR = errors.New("host: no pull request for the branch")
 
-// PRView is the pull request of branch, or an error wrapping ErrNoPR.
+// prFields are the fields PRState reads.
+const prFields = "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision"
+
+// prListLimit bounds how many pull requests of one head PRView reads.
+const prListLimit = "30"
+
+// PRView is the pull request of branch, or an error wrapping ErrNoPR. The pull
+// request is found by its head with gh pr list, never by `gh pr view <branch>`:
+// gh reads a name made of digits as a pull request number. An open pull
+// request wins; else the newest.
 func (g GH) PRView(branch string) (PRState, error) {
-	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision")
+	out, err := g.gh(nil, "pr", "list", "--head", branch, "--state", "all", "--limit", prListLimit, "--json", prFields)
 	if err != nil {
-		if strings.Contains(err.Error(), "no pull requests found") {
-			return PRState{}, fmt.Errorf("%w: %s", ErrNoPR, branch)
-		}
 		return PRState{}, err
 	}
-	var pr PRState
-	if err := json.Unmarshal(out, &pr); err != nil {
-		return PRState{}, fmt.Errorf("host: reading gh pr view: %w", err)
+	var prs []PRState
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return PRState{}, fmt.Errorf("host: reading gh pr list: %w", err)
 	}
-	return pr, nil
+	for _, pr := range prs {
+		if pr.State == "OPEN" {
+			return pr, nil
+		}
+	}
+	if len(prs) == 0 {
+		return PRState{}, fmt.Errorf("%w: %s", ErrNoPR, branch)
+	}
+	return prs[0], nil
 }
 
 // CreatePR opens a pull request from the current branch of Dir into base,
@@ -189,7 +203,7 @@ func (g GH) CreatePR(base string) (string, error) {
 // check is an error, and the returned text is what gh printed.
 func (g GH) WatchChecks(number int) (string, error) {
 	out, err := g.ghWithin(watchTimeout, nil, "pr", "checks", strconv.Itoa(number), "--watch")
-	if err != nil && strings.Contains(err.Error(), "no checks reported") {
+	if ghSays(err, ghNoChecks) {
 		err = fmt.Errorf("%w: #%d", ErrNoChecks, number)
 	}
 	return string(trimNL(out)), err

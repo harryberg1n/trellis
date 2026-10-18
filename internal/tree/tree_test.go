@@ -82,8 +82,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 			}
 			return run.Result{Stdout: []byte(`{"mergeCommit":{"oid":"` + f.mergeSHA + `"}}`)}, nil
 		}
+	case "pr list":
 		if !f.prSeen {
-			return run.Result{ExitCode: 1}, errors.New("gh: no pull requests found for branch")
+			return run.Result{Stdout: []byte("[]")}, nil
 		}
 		state := "MERGEABLE"
 		if len(f.mergeable) > 0 {
@@ -107,7 +108,7 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		case "BEHIND":
 			state, status = "MERGEABLE", "BEHIND"
 		}
-		body := fmt.Sprintf(`{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}`, state, status, head, f.review)
+		body := fmt.Sprintf(`[{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}]`, state, status, head, f.review)
 		return run.Result{Stdout: []byte(body)}, nil
 	case "pr create":
 		f.prSeen = true
@@ -344,7 +345,7 @@ func TestMerge_RecordsMergedWithPRAndRemovesTree(t *testing.T) {
 	if got := f.events[1]; got.Tree != "feat" || got.Detail["pr"] != "7" {
 		t.Errorf("merged event = %+v, want tree feat with pr 7", got)
 	}
-	wantCalls := []string{"auth status", "pr view", "pr create", "pr view", "pr checks", "pr checks", "pr view", "pr merge", "pr view"}
+	wantCalls := []string{"auth status", "pr list", "pr create", "pr list", "pr checks", "pr checks", "pr list", "pr merge", "pr view"}
 	if got := f.ghCalls(); !reflect.DeepEqual(got, wantCalls) {
 		t.Errorf("gh calls = %v, want %v", got, wantCalls)
 	}
@@ -1342,5 +1343,37 @@ func TestRm_LocalRepoRefusesCommitsNotOnTheLocalDefault(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "1 commit not merged into main") {
 		t.Fatalf("err = %v, want a refusal naming 1 commit not merged into main", err)
+	}
+}
+
+func TestNew_RefusesAnAllDigitNameBecauseGhReadsItAsAPullRequestNumber(t *testing.T) {
+	f := newFixture(t)
+
+	err := New(f.env(f.primary), "1234", "")
+
+	if err == nil || err.Error() != "tree new: a tree name cannot be only digits" {
+		t.Fatalf("err = %v, want the digits refusal", err)
+	}
+	if exists(Path(f.primary, "1234")) {
+		t.Errorf("a tree was made for the refused name")
+	}
+	if err := New(f.env(f.primary), "feat-1234", ""); err != nil {
+		t.Errorf("a name with digits in it was refused: %v", err)
+	}
+}
+
+func TestMerge_LooksUpThePullRequestByHeadNotByName(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "a.txt", "1\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, s := range f.gh.Specs() {
+		if len(s.Args) >= 3 && s.Args[0] == "pr" && s.Args[1] == "view" && s.Args[2] == "feat" {
+			t.Errorf("gh %v addresses the pull request by branch name", s.Args)
+		}
 	}
 }

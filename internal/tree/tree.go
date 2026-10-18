@@ -128,6 +128,9 @@ func New(env Env, name, path string) error {
 	if name == "" {
 		return errors.New("tree new: a name is needed")
 	}
+	if strings.Trim(name, "0123456789") == "" {
+		return errors.New("tree new: a tree name cannot be only digits")
+	}
 	w, err := locate(env.Dir)
 	if err != nil {
 		return fmt.Errorf("tree new: %w", err)
