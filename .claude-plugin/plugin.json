@@ -1,5 +1,5 @@
 {
   "name": "trellis",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Records agent edits, runs and sessions, and holds the walls and the speed and cost report."
 }
