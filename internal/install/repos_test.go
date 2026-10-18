@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -298,5 +299,30 @@ func TestInstall_InALinkedWorktreeRecordsThePrimaryAndMarksTheTree(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(f.repo, "trellis.toml")); !os.IsNotExist(err) {
 		t.Errorf("trellis.toml written at the primary (%v)", err)
+	}
+}
+
+func TestInstall_InATreeThatHoldsTheMarkerKeepsItWhileThePrimaryIsOff(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.2", false)
+	o.Repo = tree
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+	before := readFile(t, filepath.Join(tree, "trellis.toml"))
+
+	actions, err := Install(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(actions, "keep trellis.toml") || slices.ContainsFunc(actions, func(a string) bool { return strings.HasPrefix(a, "write ") }) {
+		t.Errorf("actions = %q, want keep trellis.toml and no write", actions)
+	}
+	if got := readFile(t, filepath.Join(tree, "trellis.toml")); got != before {
+		t.Errorf("trellis.toml rewritten: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, "trellis.toml")); !os.IsNotExist(err) {
+		t.Errorf("trellis.toml appeared in the primary (%v)", err)
 	}
 }

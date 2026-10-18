@@ -1995,3 +1995,47 @@ func TestMerge_LocalAnIgnoredFileAtAnUntouchedPathIsNoCollision(t *testing.T) {
 		t.Errorf("subject = %q, want Merge tree feat", got)
 	}
 }
+
+func TestMerge_LocalAPathTheTreeDeletesAndThePrimaryHoldsUntrackedLands(t *testing.T) {
+	f := newLocalFixture(t)
+	commitFile(t, f.primary, "x.txt", "x\n")
+	path := f.openTree(t)
+	testiso.Git(t, path, "rm", "-q", "x.txt")
+	testiso.Git(t, path, "commit", "-qm", "drop x.txt")
+	commitFile(t, path, "mine.txt", "mine\n")
+	testiso.Git(t, f.primary, "rm", "-q", "x.txt")
+	testiso.Git(t, f.primary, "commit", "-qm", "drop x.txt in the primary")
+	testiso.Write(t, filepath.Join(f.primary, "x.txt"), "recreated, untracked\n")
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := testiso.Git(t, f.primary, "log", "-1", "--format=%s"); got != "Merge tree feat" {
+		t.Errorf("subject = %q, want Merge tree feat", got)
+	}
+	if !exists(filepath.Join(f.primary, "x.txt")) {
+		t.Error("the untracked x.txt is gone after the merge")
+	}
+}
+
+func TestMerge_LocalADirectoryAndFileClashIsACollision(t *testing.T) {
+	for _, tc := range []struct{ name, treeFile, primaryFile, want string }{
+		{"tree adds below an untracked file", "a/b", "a", "a"},
+		{"tree adds a file over an untracked directory", "d", "d/e", "d/e"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLocalFixture(t)
+			path := f.openTree(t)
+			commitFile(t, path, tc.treeFile, "tree\n")
+			testiso.Write(t, filepath.Join(f.primary, filepath.FromSlash(tc.primaryFile)), "untracked\n")
+
+			err := Merge(f.env(path), "")
+
+			want := "tree merge: " + tc.want + " is untracked in the primary and the tree changes it: remove it there or commit it, then merge again"
+			if fixable(err) == nil || err.Error() != want {
+				t.Fatalf("err = %v, want fixable %q", err, want)
+			}
+		})
+	}
+}
