@@ -1,7 +1,6 @@
 package install
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +23,8 @@ type Options struct {
 	Exe     string // the running binary, the source of the pinned copy
 	Version string // buildinfo.Version of that binary
 	Dry     bool   // report the actions without performing them
+
+	AllowDev bool // pin a build whose version is "dev"
 }
 
 // SettingsPath is the file trellis installs into: the project-local settings,
@@ -54,16 +55,13 @@ func wanted(bin string) []eventEntry {
 	return out
 }
 
-// ownedBy is the ownership test for a state root: any hook whose executable
-// is a pinned trellis binary under it.
-func ownedBy(root string) func(Entry) bool {
-	return func(e Entry) bool {
-		for _, h := range e.Hooks {
-			if _, ok := Owned(h.Command, root); ok {
-				return true
-			}
-		}
-		return false
+// ownedBy is the ownership test for a state root: a hook whose executable is a
+// pinned trellis binary under it. It is asked of single hooks, so a foreign
+// hook beside a trellis one in the same entry is never touched.
+func ownedBy(root string) func(Hook) bool {
+	return func(h Hook) bool {
+		_, ok := Owned(h.Command, root)
+		return ok
 	}
 }
 
@@ -81,7 +79,10 @@ func readSettings(repo string) ([]byte, error) {
 // and returns one line per action; with Dry the lines start "would " and
 // nothing is written.
 func Install(o Options) ([]string, error) {
-	if o.Version == "" || o.Version == ".." || strings.ContainsAny(o.Version, `/\`) {
+	if o.Version == "" || (o.Version == "dev" && !o.AllowDev) {
+		return nil, errors.New("refusing to pin an unversioned build; pass --allow-dev")
+	}
+	if o.Version == ".." || strings.ContainsAny(o.Version, `/\`) {
 		return nil, fmt.Errorf("version %q cannot name a directory", o.Version)
 	}
 	bin := BinPath(o.Root, o.Version, filepath.Ext(o.Exe))
@@ -93,15 +94,10 @@ func Install(o Options) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
 	}
-	src, err := os.ReadFile(o.Exe)
-	if err != nil {
-		return nil, err
-	}
-	have, _ := os.ReadFile(bin) // absent or unreadable: copy over it
-	same := bytes.Equal(have, src)
-
+	// An existing pinned file is kept whatever it holds: same version, same
+	// bytes expected, and on Windows a running hook may hold it open.
 	verb := "copy"
-	if same {
+	if _, err := os.Stat(bin); err == nil {
 		verb = "keep"
 	}
 	actions := append([]string{verb + " binary " + bin}, hookActions...)
@@ -111,8 +107,8 @@ func Install(o Options) ([]string, error) {
 		}
 		return actions, nil
 	}
-	if !same {
-		if err := pin(bin, src); err != nil {
+	if verb == "copy" {
+		if err := pin(bin, o.Exe); err != nil {
 			return nil, err
 		}
 	}
@@ -122,9 +118,13 @@ func Install(o Options) ([]string, error) {
 	return actions, nil
 }
 
-// pin writes the binary through a temp file so a half copy never sits at the
-// path a hook runs.
-func pin(bin string, content []byte) error {
+// pin copies the binary at src to bin through a temp file, so a half copy
+// never sits at the path a hook runs. The caller has seen bin absent.
+func pin(bin, src string) error {
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(bin)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -221,13 +221,26 @@ func checkHooks(found []located, o Options) []string {
 	return problems
 }
 
-// writable reports whether a file can be made and removed in the root,
-// creating the root when it is absent.
+// writable reports whether a file can be made and removed in the root. An
+// absent root is probed through its nearest existing parent: doctor creates
+// no directory of its own.
 func writable(root string) bool {
-	if os.MkdirAll(root, 0o755) != nil {
-		return false
+	dir := root
+	for {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return false
+			}
+			break
+		}
+		up := filepath.Dir(dir)
+		if !errors.Is(err, os.ErrNotExist) || up == dir {
+			return false
+		}
+		dir = up
 	}
-	f, err := os.CreateTemp(root, ".doctor-*")
+	f, err := os.CreateTemp(dir, ".doctor-*")
 	if err != nil {
 		return false
 	}

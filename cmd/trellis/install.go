@@ -50,11 +50,12 @@ func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", "", "the repository (default: the one holding the working directory)")
 	dry := fs.Bool("dry", false, "install only: print the actions without performing them")
+	allowDev := fs.Bool("allow-dev", false, "install only: pin a build whose version is \"dev\"")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if *dry && verb != "install" {
-		_, _ = fmt.Fprintf(stderr, "trellis %s: --dry is an install flag\n", verb)
+	if (*dry || *allowDev) && verb != "install" {
+		_, _ = fmt.Fprintf(stderr, "trellis %s: --dry and --allow-dev are install flags\n", verb)
 		return 2
 	}
 	opts, err := installOptions(*repo, env)
@@ -64,7 +65,7 @@ func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int
 	}
 	switch verb {
 	case "install":
-		opts.Dry = *dry
+		opts.Dry, opts.AllowDev = *dry, *allowDev
 		return installCmd(opts, stdout, stderr)
 	case "eject":
 		return ejectCmd(opts, stdout, stderr)

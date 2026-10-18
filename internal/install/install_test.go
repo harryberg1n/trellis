@@ -351,6 +351,70 @@ func TestDoctor_NotInstalledAndMissingBinary(t *testing.T) {
 	}
 }
 
+func TestInstall_RefusesAnUnversionedBuildUnlessAllowed(t *testing.T) {
+	f := newFixture(t)
+	const msg = "refusing to pin an unversioned build; pass --allow-dev"
+	for _, v := range []string{"dev", ""} {
+		if _, err := Install(f.opts(v, false)); err == nil || err.Error() != msg {
+			t.Errorf("version %q: error %v, want %q", v, err, msg)
+		}
+	}
+	o := f.opts("dev", false)
+	o.AllowDev = true
+	actions, err := Install(o)
+	if err != nil || actions[0] != "copy binary "+filepath.Join(f.root, "bin", "dev", "trellis") {
+		t.Errorf("--allow-dev: %q, %v", actions, err)
+	}
+}
+
+func TestInstall_KeepsAnExistingPinnedBinaryWhateverItHolds(t *testing.T) {
+	f := newFixture(t)
+	bin := filepath.Join(f.root, "bin", "v0.0.2", "trellis")
+	testsupport.Write(t, bin, "held open by a running hook")
+	actions, err := Install(f.opts("v0.0.2", false))
+	if err != nil || actions[0] != "keep binary "+bin {
+		t.Fatalf("%q, %v", actions, err)
+	}
+	if got := readFile(t, bin); got != "held open by a running hook" {
+		t.Errorf("pinned binary now holds %q", got)
+	}
+	left, _ := filepath.Glob(filepath.Join(filepath.Dir(bin), ".pin-*"))
+	if len(left) != 0 {
+		t.Errorf("temp files left: %v", left)
+	}
+}
+
+func TestInstall_StateRootWithASpaceStillRoundTrips(t *testing.T) {
+	f := newFixture(t)
+	f.root = filepath.Join(t.TempDir(), "my state")
+	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, f.settings()); !strings.Contains(got, `\"`+filepath.ToSlash(f.root)+`/bin/v0.0.2/trellis\" hook Stop`) {
+		t.Errorf("command not quoted around the spaced path:\n%s", got)
+	}
+	if got := Doctor(f.opts("v0.0.2", false)); len(got) != 0 {
+		t.Errorf("doctor: %q", got)
+	}
+	if _, err := Eject(f.opts("v0.0.2", false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, f.settings()); got != "{}\n" {
+		t.Errorf("after eject: %q", got)
+	}
+}
+
+func TestDoctor_NeverCreatesTheStateRoot(t *testing.T) {
+	f := newFixture(t)
+	got := Doctor(f.opts("v0.0.2", false))
+	if !contains(got, "trellis is not installed: "+f.settings()) || contains(got, "state root not writable: "+f.root) {
+		t.Errorf("doctor: %q", got)
+	}
+	if _, err := os.Stat(f.root); !os.IsNotExist(err) {
+		t.Errorf("doctor created the state root (%v)", err)
+	}
+}
+
 func contains(lines []string, want string) bool {
 	for _, l := range lines {
 		if l == want {

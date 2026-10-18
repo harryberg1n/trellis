@@ -6,14 +6,7 @@ import (
 	"testing"
 )
 
-func ownedT(e Entry) bool {
-	for _, h := range e.Hooks {
-		if strings.HasPrefix(h.Command, "T-") {
-			return true
-		}
-	}
-	return false
-}
+func ownedT(h Hook) bool { return strings.HasPrefix(h.Command, "T-") }
 
 func wantT(events ...string) []eventEntry {
 	out := make([]eventEntry, 0, len(events))
@@ -78,7 +71,7 @@ func TestRemoveEntries_RestoresTheOriginalBytes(t *testing.T) {
 
 func TestAddEntries_CompactDocWithoutHooks(t *testing.T) {
 	const in = `{"a":1}`
-	const want = `{"a":1,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"T-stop","timeout":10}]}]}}`
+	const want = `{"a":1,"hooks":{ "Stop":[ {"hooks":[{"type":"command","command":"T-stop","timeout":10}]}]}}`
 	got, _, err := addEntries([]byte(in), wantT("Stop"), ownedT)
 	if err != nil {
 		t.Fatal(err)
