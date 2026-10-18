@@ -164,6 +164,8 @@ func TestReportIssue_RefusesToOpenWhenTheListingFails(t *testing.T) {
 // appendTranscript logs a session usage event naming path for session on tree.
 func appendTranscript(t *testing.T, env reportEnv, session, tree, path string) {
 	t.Helper()
-	appendEvents(t, env, kernel.Event{Kind: kernel.EvSessionUsage, Tree: tree, Session: session,
-		At: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), Detail: map[string]string{"transcript": path}})
+	appendEvents(t, env, kernel.Event{
+		Kind: kernel.EvSessionUsage, Tree: tree, Session: session,
+		At: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), Detail: map[string]string{"transcript": path},
+	})
 }
