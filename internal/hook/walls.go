@@ -60,7 +60,7 @@ func preToolUse(deps Deps, event string, p parsed, stdout, stderr io.Writer) int
 		lines := make([]string, 0, len(denies))
 		for _, a := range denies {
 			kind := kernel.EvWallDenied
-			if rowKind(deps.Rows, a.RowID) == kernel.Policy {
+			if row, ok := kernel.Find(deps.Rows, a.RowID); ok && row.Kind == kernel.Policy {
 				kind = kernel.EvPolicyDenied
 			}
 			note(deps, event, p, kind, map[string]string{"row": a.RowID, "line": a.Line, "bytes": strconv.Itoa(len(a.Line))})
@@ -88,15 +88,6 @@ func contextJSON(lines []string) string {
 		return "{}"
 	}
 	return string(b)
-}
-
-func rowKind(rows []kernel.Row, id string) kernel.Kind {
-	for _, r := range rows {
-		if r.ID == id {
-			return r.Kind
-		}
-	}
-	return kernel.Wall
 }
 
 // waivedAll consumes the one-shot tokens of every denied row, or none: it

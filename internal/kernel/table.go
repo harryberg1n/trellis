@@ -136,3 +136,14 @@ func decisionOK(d string) bool {
 	_, err := time.Parse("2006-01-02", date)
 	return err == nil
 }
+
+// Find is the row with the given id. It reports false for an id no row has;
+// each caller says what an unknown id means to it.
+func Find(rows []Row, id string) (Row, bool) {
+	for _, r := range rows {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return Row{}, false
+}

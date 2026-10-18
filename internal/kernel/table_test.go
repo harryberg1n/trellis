@@ -132,3 +132,13 @@ func TestTable_NamesNoOtherProduct(t *testing.T) {
 		}
 	}
 }
+
+func TestFind(t *testing.T) {
+	rows := []Row{{ID: "a", Kind: Wall}, {ID: "b", Kind: Policy}}
+	if r, ok := Find(rows, "b"); !ok || r.Kind != Policy {
+		t.Errorf("Find(b) = %+v, %v; want the policy row", r, ok)
+	}
+	if r, ok := Find(rows, "c"); ok || r.ID != "" {
+		t.Errorf("Find(c) = %+v, %v; want nothing", r, ok)
+	}
+}

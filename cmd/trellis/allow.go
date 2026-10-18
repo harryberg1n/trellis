@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -25,7 +24,7 @@ func allowVerb(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	id := args[0]
-	if !slices.ContainsFunc(kernel.Table, func(r kernel.Row) bool { return r.ID == id }) {
+	if _, ok := kernel.Find(kernel.Table, id); !ok {
 		_, _ = fmt.Fprintf(stderr, "trellis: unknown row %q\n", id)
 		return 1
 	}
