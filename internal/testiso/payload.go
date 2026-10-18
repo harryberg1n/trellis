@@ -22,8 +22,13 @@ func JSONString(s string) string {
 // PayloadOption changes the payload HookPayload builds.
 type PayloadOption func(map[string]any)
 
-// WithSession puts a session id in the payload. Without one the call reads as
-// a person's, not an agent's.
+// AsPerson makes the payload a person's: a git hook of their own writes no
+// session_id and no hook_event_name, which the harness always sets.
+func AsPerson() PayloadOption {
+	return func(m map[string]any) { delete(m, "hook_event_name") }
+}
+
+// WithSession puts a session id in the payload.
 func WithSession(id string) PayloadOption {
 	return func(m map[string]any) { m["session_id"] = id }
 }

@@ -71,7 +71,7 @@ type parsed struct {
 // The context carries Tool (the tool name) and Args: cwd, repo (the working
 // tree root), file_path and path (the changed file, absolute and relative to
 // the repo with forward slashes), command (Bash and PowerShell) and person
-// ("1" for a PreToolUse payload with no session_id).
+// ("1" for a PreToolUse payload with neither session_id nor hook_event_name).
 func Parse(event string, raw []byte) (kernel.Event, kernel.Context, error) {
 	p, err := parse(event, raw, nil)
 	return p.ev, p.ctx, err
@@ -89,10 +89,12 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 		return out, err
 	}
 	out.ev.Session = p.SessionID
-	// A PreToolUse with no session_id is a person at a git hook, not an agent:
-	// the walls warn them where they would deny an agent.
-	person := p.SessionID == "" && name == kernel.HookPreToolUse
-	if p.SessionID == "" && !person {
+	// A PreToolUse with neither session_id nor hook_event_name is a person at a
+	// git hook, not an agent: the walls warn them where they would deny an
+	// agent. The harness always sets hook_event_name, so a payload that has it
+	// is an agent's whatever else it lacks.
+	person := p.SessionID == "" && p.HookEventName == "" && name == kernel.HookPreToolUse
+	if p.SessionID == "" && name != kernel.HookPreToolUse {
 		return out, fmt.Errorf("hook: %s payload has no session_id", name)
 	}
 	if p.Cwd == "" {
@@ -112,6 +114,9 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 		}
 	case kernel.HookStop:
 		kind = kernel.EvTurnAnchored
+		if p.TranscriptPath != "" {
+			detail = map[string]string{kernel.DetailTranscript: p.TranscriptPath}
+		}
 	case kernel.HookSessionEnd:
 		kind = kernel.EvSessionUsage
 		detail = map[string]string{}

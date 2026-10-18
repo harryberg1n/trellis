@@ -11,6 +11,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/objects"
 	runpkg "github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -174,7 +175,7 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 		}
 	}
 	create := gh.Specs()[3]
-	wantTitle := "report " + filepath.Base(env.Repo) + " 2026-W41"
+	wantTitle := "report 2bcb29a3 2026-W41"
 	if !hasPair(create.Args, "--title", wantTitle) {
 		t.Errorf("create argv = %v, want --title %q", create.Args, wantTitle)
 	}
@@ -194,7 +195,7 @@ func TestReportIssue_TargetsTrellisRepoOnly(t *testing.T) {
 
 func TestReportIssue_EditsThisWeeksIssue(t *testing.T) {
 	env, gh, _ := reportFixture(t)
-	title := "report " + filepath.Base(env.Repo) + " 2026-W41"
+	title := "report 2bcb29a3 2026-W41"
 	gh.issues = fmt.Sprintf(`[{"number":9,"title":%q,"body":"old","createdAt":"2026-10-06T00:00:00Z"}]`, title)
 	var out, errb bytes.Buffer
 
@@ -296,5 +297,121 @@ func TestReport_NoRemoteSkipsGitHubReads(t *testing.T) {
 	}
 	if want := "trees merged: 3"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+}
+
+// appendEvents adds events to the log of the fixture's repository.
+func appendEvents(t *testing.T, env reportEnv, evs ...kernel.Event) {
+	t.Helper()
+	st, err := storeIn(env.Root, mustRepo(t, env.Repo), clock.Fake(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Append(evs...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReport_ChargesUsageToTheTreeCurrentAtEachStop(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	reply := func(id, at string) string {
+		return `{"type":"assistant","timestamp":"` + at + `","requestId":"` + id + `","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}` + "\n"
+	}
+	long := filepath.Join(t.TempDir(), "long.jsonl")
+	testiso.Write(t, long, reply("a", "2026-10-02T09:00:05Z")+reply("b", "2026-10-02T09:10:05Z"))
+	at := func(m int) time.Time { return time.Date(2026, 10, 2, 9, m, 0, 0, time.UTC) }
+	stop := func(tree string, m int) kernel.Event {
+		return kernel.Event{Kind: kernel.EvTurnAnchored, Tree: tree, Session: "long", At: at(m), Detail: map[string]string{"transcript": long}}
+	}
+	appendEvents(t, env, stop("A", 5), stop("B", 15))
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	// s1's session.usage (tree A, 0.0125) plus the long session split in two:
+	// A and B each have usage.
+	for _, want := range []string{"trees with usage: 2  total $0.03750"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("report lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "transcripts missing") {
+		t.Errorf("report names missing transcripts, but every one was read:\n%s", out.String())
+	}
+}
+
+func TestReport_CountsSessionsWithNoReadableTranscript(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	gone := filepath.Join(t.TempDir(), "gone.jsonl")
+	at := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	appendEvents(t, env,
+		kernel.Event{Kind: kernel.EvTurnAnchored, Tree: "A", Session: "killed", At: at, Detail: map[string]string{"transcript": gone}},
+		kernel.Event{Kind: kernel.EvSessionUsage, Tree: "B", Session: "nopath", At: at},
+	)
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	if want := "  transcripts missing: 2\n"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestReportIssue_TitleCarriesTheRepoIDNotItsName(t *testing.T) {
+	env, gh, _ := reportFixtureWithRemote(t, "https://example.invalid/private-client-x.git")
+	var out, errb bytes.Buffer
+
+	if code := reportCmd([]string{"--issue"}, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	create := gh.Specs()[len(gh.Specs())-1]
+	// sha256 of the remote URL, first 8 hex digits.
+	if want := "report 3d561701 2026-W41"; !hasPair(create.Args, "--title", want) {
+		t.Errorf("create argv = %v, want --title %q", create.Args, want)
+	}
+	for _, s := range gh.Specs() {
+		for _, a := range s.Args {
+			if strings.Contains(a, "private-client-x") {
+				t.Errorf("gh argv %v carries the repo name", s.Args)
+			}
+		}
+	}
+}
+
+func mustRepo(t *testing.T, dir string) objects.Repo {
+	t.Helper()
+	r, err := objects.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestReport_ReadsTheHistoryInOneGitCall(t *testing.T) {
+	env, gh, _ := reportFixture(t)
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	var logs, shows int
+	for _, s := range gh.Inner.(*runpkg.Recorder).Specs() {
+		for _, a := range s.Args {
+			switch a {
+			case "log":
+				logs++
+			case "show":
+				shows++
+			}
+		}
+	}
+	if logs != 1 || shows != 0 {
+		t.Errorf("history took %d git log and %d git show calls, want 1 and 0", logs, shows)
 	}
 }

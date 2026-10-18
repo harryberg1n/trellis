@@ -50,7 +50,7 @@ func bash(t testing.TB, dir, command string, session bool) []byte {
 // sessionIf is the payload option of an agent's call, or none for a person's.
 func sessionIf(session bool) []testiso.PayloadOption {
 	if !session {
-		return nil
+		return []testiso.PayloadOption{testiso.AsPerson()}
 	}
 	return []testiso.PayloadOption{testiso.WithSession("s-1")}
 }
