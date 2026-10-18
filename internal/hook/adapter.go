@@ -69,7 +69,8 @@ type parsed struct {
 //
 // The context carries Tool (the tool name) and Args: cwd, repo (the working
 // tree root), file_path and path (the changed file, absolute and relative to
-// the repo with forward slashes) and command.
+// the repo with forward slashes), command (Bash and PowerShell) and person
+// ("1" for a PreToolUse payload with no session_id).
 func Parse(event string, raw []byte) (kernel.Event, kernel.Context, error) {
 	p, err := parse(event, raw, nil)
 	return p.ev, p.ctx, err
@@ -87,7 +88,10 @@ func parse(event string, raw []byte, known *Repo) (parsed, error) {
 		return out, err
 	}
 	out.ev.Session = p.SessionID
-	if p.SessionID == "" {
+	// A PreToolUse with no session_id is a person at a git hook, not an agent:
+	// the walls warn them where they would deny an agent.
+	person := p.SessionID == "" && name == "PreToolUse"
+	if p.SessionID == "" && !person {
 		return out, fmt.Errorf("hook: %s payload has no session_id", name)
 	}
 	if p.Cwd == "" {
@@ -140,7 +144,10 @@ func parse(event string, raw []byte, known *Repo) (parsed, error) {
 	case kind != "":
 		return out, rerr
 	}
-	if p.ToolName == "Bash" && p.input("command") != "" {
+	if person {
+		args["person"] = "1"
+	}
+	if (p.ToolName == "Bash" || p.ToolName == "PowerShell") && p.input("command") != "" {
 		args["command"] = p.input("command")
 	}
 	out.ctx = kernel.Context{Tool: p.ToolName, Args: args}

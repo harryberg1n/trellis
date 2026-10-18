@@ -1,0 +1,408 @@
+package walls
+
+// The intent parsing in this file is copied from aphrollo-tools
+// internal/cli/git_shim_discard.go at 12b3724e (discardIntent and the
+// per-verb functions, splitDashDash, nonFlagOperands). Incidents: #650, a
+// `git checkout -- <path>` that threw away a day of uncommitted work, and #857,
+// the same through a Bash tool call that never met the git shim. What changed:
+// the cost is measured with one `git status` (aphrollo ran a diff and an
+// ls-files, and a rev-list for a branch) through objects.Git and run.Light,
+// and the refusal is the trellis deny line.
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/harryberg1n/trellis/internal/objects"
+)
+
+// discardUncommitted is the discard-uncommitted wall. A form that can throw
+// away work no commit holds is measured with one light process, for that
+// command only, and denied when the measure is not zero. A command that is
+// not one of the forms starts nothing.
+func discardUncommitted(a *analysis) string {
+	for _, c := range a.gitCalls() {
+		form, paths, ok := discardIntent(append([]string{c.Verb}, c.Args...))
+		if !ok {
+			continue
+		}
+		if cause := measureDiscard(a, c, form, paths); cause != "" {
+			return cause
+		}
+	}
+	return ""
+}
+
+// cost is what an invocation would destroy.
+type cost struct {
+	Unstaged, Staged, Untracked, Commits int
+}
+
+func (c cost) zero() bool {
+	return c.Unstaged == 0 && c.Staged == 0 && c.Untracked == 0 && c.Commits == 0
+}
+
+func (c cost) String() string {
+	var parts []string
+	if c.Unstaged > 0 {
+		parts = append(parts, plural(c.Unstaged, "unstaged file"))
+	}
+	if c.Staged > 0 {
+		parts = append(parts, plural(c.Staged, "staged file"))
+	}
+	if c.Untracked > 0 {
+		parts = append(parts, plural(c.Untracked, "untracked file"))
+	}
+	if c.Commits > 0 {
+		parts = append(parts, plural(c.Commits, "commit")+" unreachable from HEAD or any remote")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// measureDiscard is the deny cause for a classified discard, or "" when it
+// would destroy nothing (or the repository is not one we can read).
+func measureDiscard(a *analysis, c gitCall, form string, paths []string) string {
+	if a.r == nil {
+		return ""
+	}
+	if _, ok := repoAt(c.Dir); !ok && form != "worktree remove --force" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(form, "stash "):
+		return form + " discards a stash entry for good"
+	case strings.HasPrefix(form, "branch -D "):
+		return measureBranch(a, c, form)
+	}
+	dir, where := c.Dir, ""
+	if form == "worktree remove --force" {
+		if len(paths) == 0 {
+			return ""
+		}
+		dir = resolve(c.Dir, paths[0])
+		if dir == "" {
+			return ""
+		}
+		if _, err := os.Stat(dir); err != nil {
+			return ""
+		}
+		where, paths = " in "+dir, nil
+	}
+	if dir == "" {
+		return ""
+	}
+	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
+	out, err := objects.Git(a.r, dir, nil, args...)
+	if err != nil {
+		return fmt.Sprintf("%s: could not measure what it would discard (%s)", form, firstLine(err.Error()))
+	}
+	got := parseStatus(out)
+	var want cost
+	switch {
+	case form == "reset --hard", form == "reset --merge", form == "checkout -f":
+		want = cost{Unstaged: got.Unstaged, Staged: got.Staged}
+	case form == "checkout -- <paths>", form == "restore <paths>":
+		want = cost{Unstaged: got.Unstaged}
+	case strings.HasPrefix(form, "clean "):
+		want = cost{Untracked: got.Untracked}
+	default: // worktree remove --force
+		want = got
+	}
+	if want.zero() {
+		return ""
+	}
+	return fmt.Sprintf("%s discards %s%s", form, want, where)
+}
+
+// measureBranch counts the commits `branch -D` would make unreachable from
+// HEAD and every remote-tracking ref. A branch pushed anywhere reads zero: -D
+// removes the local ref only, and the commits are recoverable from the remote.
+// A branch that does not exist is git's own error to report.
+func measureBranch(a *analysis, c gitCall, form string) string {
+	names := strings.Fields(strings.TrimPrefix(form, "branch -D "))
+	args := []string{"rev-list", "--count"}
+	for _, n := range names {
+		args = append(args, "refs/heads/"+n)
+	}
+	args = append(args, "--not", "HEAD", "--remotes")
+	out, err := objects.Git(a.r, c.Dir, nil, args...)
+	if err != nil {
+		return ""
+	}
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &n); err != nil || n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s discards %s", form, cost{Commits: n})
+}
+
+// parseStatus counts the files `git status --porcelain=v1 -z` lists: a staged
+// change in X, an unstaged one in Y, an untracked file as "??". A rename or
+// copy is followed by one more record, the path it came from.
+func parseStatus(out []byte) cost {
+	var c cost
+	recs := strings.Split(string(out), "\x00")
+	for i := 0; i < len(recs); i++ {
+		rec := recs[i]
+		if len(rec) < 4 || rec[2] != ' ' {
+			continue
+		}
+		x, y := rec[0], rec[1]
+		switch {
+		case x == '?' && y == '?':
+			c.Untracked++
+		case x == '!' && y == '!':
+		default:
+			if x != ' ' {
+				c.Staged++
+			}
+			if y != ' ' {
+				c.Unstaged++
+			}
+		}
+		if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+			i++
+		}
+	}
+	return c
+}
+
+func pathArgs(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	return append([]string{"--"}, paths...)
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
+}
+
+// discardIntent classifies rest (the verb and its arguments, git's global
+// options already stripped) as one of the discarding forms, or reports false
+// for everything else, including a bare `git reset` and a branch-moving
+// `git checkout <branch>`.
+func discardIntent(rest []string) (form string, paths []string, ok bool) {
+	if len(rest) == 0 {
+		return "", nil, false
+	}
+	switch rest[0] {
+	case "reset":
+		return resetIntent(rest[1:])
+	case "checkout":
+		return checkoutIntent(rest[1:])
+	case "restore":
+		return restoreIntent(rest[1:])
+	case "clean":
+		return cleanIntent(rest[1:])
+	case "stash":
+		return stashIntent(rest[1:])
+	case "branch":
+		return branchIntent(rest[1:])
+	case "worktree":
+		return worktreeIntent(rest[1:])
+	}
+	return "", nil, false
+}
+
+func contains(args []string, tok string) bool {
+	for _, a := range args {
+		if a == tok {
+			return true
+		}
+	}
+	return false
+}
+
+func resetIntent(args []string) (string, []string, bool) {
+	if contains(args, "--hard") {
+		return "reset --hard", nil, true
+	}
+	if contains(args, "--merge") {
+		return "reset --merge", nil, true
+	}
+	return "", nil, false
+}
+
+// checkoutIntent: `--` followed by pathspecs, or a bare `.`, discards the named
+// paths; -f/--force alone discards the whole tree by moving the branch over it.
+func checkoutIntent(args []string) (string, []string, bool) {
+	for i, a := range args {
+		if a == "--" {
+			return "checkout -- <paths>", append([]string{}, args[i+1:]...), true
+		}
+	}
+	if contains(args, ".") {
+		return "checkout -- <paths>", []string{"."}, true
+	}
+	if contains(args, "-f") || contains(args, "--force") {
+		return "checkout -f", nil, true
+	}
+	return "", nil, false
+}
+
+// restoreIntent: `--staged` alone touches only the index, so it is no discard;
+// `--staged --worktree` (or the bundled `-SW`) touches the working tree too.
+func restoreIntent(args []string) (string, []string, bool) {
+	opts, ddPaths := splitDashDash(args)
+	staged, worktree := false, false
+	for _, a := range opts {
+		switch {
+		case a == "--staged":
+			staged = true
+		case a == "--worktree":
+			worktree = true
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 1:
+			for _, ch := range a[1:] {
+				switch ch {
+				case 'S':
+					staged = true
+				case 'W':
+					worktree = true
+				}
+			}
+		}
+	}
+	if staged && !worktree {
+		return "", nil, false
+	}
+	return "restore <paths>", append(nonFlagOperands(opts), ddPaths...), true
+}
+
+// cleanIntent reads git clean's combinable short flags character by
+// character: f (force) must be present and n (dry run) must not.
+func cleanIntent(args []string) (string, []string, bool) {
+	opts, ddPaths := splitDashDash(args)
+	var flags, paths []string
+	hasForce, hasDryRun := false, false
+	for _, a := range opts {
+		switch {
+		case a == "--force":
+			hasForce = true
+			flags = append(flags, a)
+		case a == "--dry-run":
+			hasDryRun = true
+			flags = append(flags, a)
+		case strings.HasPrefix(a, "--"):
+			flags = append(flags, a)
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			flags = append(flags, a)
+			for _, ch := range a[1:] {
+				switch ch {
+				case 'f':
+					hasForce = true
+				case 'n':
+					hasDryRun = true
+				}
+			}
+		default:
+			paths = append(paths, a)
+		}
+	}
+	paths = append(paths, ddPaths...)
+	if !hasForce || hasDryRun {
+		return "", nil, false
+	}
+	return "clean " + strings.Join(flags, " "), paths, true
+}
+
+// stashIntent: only drop and clear discard; push is reversible with pop.
+func stashIntent(args []string) (string, []string, bool) {
+	if len(args) == 0 {
+		return "", nil, false
+	}
+	switch args[0] {
+	case "drop", "clear":
+		return "stash " + args[0], nil, true
+	}
+	return "", nil, false
+}
+
+// branchIntent: any spelling of a forced delete (-D, --delete --force, -d -f,
+// -fD) is `branch -D <names>`; a plain -d git refuses itself when unmerged.
+func branchIntent(args []string) (string, []string, bool) {
+	deleting, forced := false, false
+	var names []string
+	for _, a := range args {
+		switch {
+		case a == "-D":
+			deleting, forced = true, true
+		case a == "-d" || a == "--delete":
+			deleting = true
+		case a == "-f" || a == "--force":
+			forced = true
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 1:
+			if d, f, ok := branchDeleteBundle(a[1:]); ok {
+				deleting = deleting || d
+				forced = forced || f
+			}
+		case !strings.HasPrefix(a, "-"):
+			names = append(names, a)
+		}
+	}
+	if !deleting || !forced || len(names) == 0 {
+		return "", nil, false
+	}
+	return "branch -D " + strings.Join(names, " "), nil, true
+}
+
+func branchDeleteBundle(chars string) (deleting, forced, ok bool) {
+	for _, ch := range chars {
+		switch ch {
+		case 'd':
+			deleting = true
+		case 'D':
+			deleting, forced = true, true
+		case 'f':
+			forced = true
+		default:
+			return false, false, false
+		}
+	}
+	return deleting, forced, true
+}
+
+// worktreeIntent: only `remove --force` is a discard (an unforced remove
+// refuses a dirty worktree itself); the path is paths[0].
+func worktreeIntent(args []string) (string, []string, bool) {
+	if len(args) == 0 || args[0] != "remove" {
+		return "", nil, false
+	}
+	forced := false
+	var path string
+	for _, a := range args[1:] {
+		switch a {
+		case "-f", "--force":
+			forced = true
+		default:
+			if !strings.HasPrefix(a, "-") {
+				path = a
+			}
+		}
+	}
+	if !forced || path == "" {
+		return "", nil, false
+	}
+	return "worktree remove --force", []string{path}, true
+}
+
+func splitDashDash(rest []string) (opts, paths []string) {
+	for i, a := range rest {
+		if a == "--" {
+			return rest[:i], append([]string{}, rest[i+1:]...)
+		}
+	}
+	return rest, nil
+}
+
+func nonFlagOperands(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+		}
+	}
+	return out
+}

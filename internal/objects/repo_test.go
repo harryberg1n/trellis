@@ -68,3 +68,38 @@ func TestFindRoot_NeedsAHeadFile(t *testing.T) {
 		t.Errorf("FindRoot = %q, %v; want the enclosing repo %q (a .git without HEAD is not one)", got, err, repo)
 	}
 }
+
+func TestDefaultBranch(t *testing.T) {
+	repo := testiso.Repo(t)
+	common, _, err := GitDirs(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultBranch(common); got != "main" {
+		t.Errorf("DefaultBranch with no origin/HEAD = %q, want the fallback main", got)
+	}
+	testsupport.Write(t, filepath.Join(common, "refs", "remotes", "origin", "HEAD"), "ref: refs/remotes/origin/trunk\n")
+	if got := DefaultBranch(common); got != "trunk" {
+		t.Errorf("DefaultBranch = %q, want trunk", got)
+	}
+	testsupport.Write(t, filepath.Join(common, "refs", "remotes", "origin", "HEAD"), "ref: refs/remotes/origin/release/2\n")
+	if got := DefaultBranch(common); got != "release/2" {
+		t.Errorf("DefaultBranch = %q, want release/2", got)
+	}
+	testsupport.Write(t, filepath.Join(common, "refs", "remotes", "origin", "HEAD"), "garbage\n")
+	if got := DefaultBranch(common); got != "main" {
+		t.Errorf("DefaultBranch on a malformed origin/HEAD = %q, want main", got)
+	}
+}
+
+func TestIsPrimary(t *testing.T) {
+	repo := testiso.Repo(t)
+	if got, err := IsPrimary(repo); err != nil || !got {
+		t.Errorf("IsPrimary(repo) = %v, %v; want true", got, err)
+	}
+	lane := filepath.Join(filepath.Dir(repo), "lane")
+	testsupport.Git(t, repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+	if got, err := IsPrimary(lane); err != nil || got {
+		t.Errorf("IsPrimary(linked worktree) = %v, %v; want false", got, err)
+	}
+}
