@@ -10,3 +10,7 @@ const (
 	fileMode fs.FileMode = 0o600
 	exeMode  fs.FileMode = 0o700
 )
+
+// repoDirMode is the mode of a directory install makes inside the user's
+// repository (.claude): the user's own, as git would make it.
+const repoDirMode fs.FileMode = 0o755

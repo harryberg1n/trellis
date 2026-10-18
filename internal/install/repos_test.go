@@ -1,13 +1,16 @@
 package install
 
 import (
+	"errors"
 	"fmt"
+	"github.com/harryberg1n/trellis/internal/clock"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -245,5 +248,63 @@ func TestSweepReferences_ReadsLinkedWorktreesOfAPrimaryThatHasNoHooks(t *testing
 	trees, err := LinkedWorktrees(f.repo)
 	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(trees, want) {
 		t.Errorf("LinkedWorktrees = %v, %v; want %v", trees, err, want)
+	}
+}
+
+func TestLinkedWorktrees_ResolvesARelativeGitdirAgainstItsAdminDirectory(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	admin := filepath.Join(f.repo, ".git", "worktrees", "feat-tree")
+	rel, err := filepath.Rel(admin, filepath.Join(tree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	testiso.Write(t, filepath.Join(admin, "gitdir"), filepath.ToSlash(rel)+"\n")
+
+	got, err := LinkedWorktrees(f.repo)
+
+	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("LinkedWorktrees = %v, %v; want %v", got, err, want)
+	}
+}
+
+func TestSweepReferences_AWorktreeThatIsGoneStopsTheSweep(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	if err := os.RemoveAll(tree); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := SweepReferences(f.root, f.repo)
+
+	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") {
+		t.Errorf("err = %v, want one line naming the missing worktree", err)
+	}
+}
+
+func TestRecordRepo_TimesOutOnTheFakeClockWhileAnotherInstallHoldsTheLock(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := store.Open(filepath.Join(root, "records"), clock.Real())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := holder.Hold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	fc := clock.Fake(time.Unix(1000, 0))
+	repo := testiso.Repo(t)
+	done := make(chan error, 1)
+	go func() { done <- RecordRepo(root, repo, WithClock(fc)) }()
+
+	fc.BlockUntil(1) // waiting for the lock
+	fc.Advance(recordLockTimeout)
+
+	if err := <-done; !errors.Is(err, store.ErrLockTimeout) {
+		t.Errorf("err = %v, want store.ErrLockTimeout", err)
 	}
 }

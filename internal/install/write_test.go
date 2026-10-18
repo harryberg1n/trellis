@@ -81,3 +81,23 @@ func TestWriteSettings_PublishesThroughATempFileInTheSameDirectory(t *testing.T)
 		t.Errorf("%d files left in .claude, want only settings.local.json", len(entries))
 	}
 }
+
+func TestWriteSettings_ADanglingLinkIntoAMissingDirectoryIsOneLineAndMakesNothing(t *testing.T) {
+	f := newFixture(t)
+	gone := filepath.Join(t.TempDir(), "no-such-dir", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(f.settings()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gone, f.settings()); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+
+	err := writeSettings(f.repo, []byte("{}\n"))
+
+	if err == nil || strings.Contains(err.Error(), "\n") || !strings.Contains(err.Error(), filepath.Dir(gone)) {
+		t.Fatalf("err = %v, want one line naming %s", err, filepath.Dir(gone))
+	}
+	if _, serr := os.Stat(filepath.Dir(gone)); serr == nil {
+		t.Errorf("the link's target directory was created")
+	}
+}

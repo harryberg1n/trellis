@@ -241,7 +241,7 @@ func writeSettings(repo string, doc []byte) error { return writeSettingsWith(rep
 func writeSettingsWith(repo string, doc []byte, opts ...store.AtomicOption) error {
 	path := SettingsPath(repo)
 	claude := filepath.Dir(path)
-	if err := os.MkdirAll(claude, dirMode); err != nil {
+	if err := os.MkdirAll(claude, repoDirMode); err != nil {
 		return err
 	}
 	dir, err := filepath.EvalSymlinks(claude)
@@ -257,8 +257,10 @@ func writeSettingsWith(repo string, doc []byte, opts ...store.AtomicOption) erro
 		mode = fi.Mode().Perm()
 	}
 	dir = filepath.Dir(target)
-	if err := os.MkdirAll(dir, dirMode); err != nil {
-		return err
+	// A symlink that points into a directory that is not there is not made good
+	// by creating it: the link is the user's, and so is its target.
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("%s points into %s, which cannot be used: %v", path, dir, errors.Unwrap(err))
 	}
 	opts = append([]store.AtomicOption{store.WithMode(mode), store.WithTempPattern(".settings-*")}, opts...)
 	return store.WriteAtomic(dir, filepath.Base(target), doc, opts...)

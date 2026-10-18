@@ -63,17 +63,17 @@ func writeLines(root, name string, lines []string) error {
 func Repos(root string) ([]string, error) { return readLines(root, reposFile) }
 
 // RecordRepo adds repo to the record, once.
-func RecordRepo(root, repo string) error {
+func RecordRepo(root, repo string, opts ...RecordOption) error {
 	canon, err := canonicalRepo(repo)
 	if err != nil {
 		return err
 	}
-	return addLine(root, reposFile, canon)
+	return addLine(root, reposFile, canon, opts...)
 }
 
 // addLine adds line to the record file once, holding the records lock across
 // the read and the write.
-func addLine(root, name, line string) error {
+func addLine(root, name, line string, opts ...RecordOption) error {
 	return lockRecords(root, func() error {
 		lines, err := readLines(root, name)
 		if err != nil {
@@ -83,7 +83,7 @@ func addLine(root, name, line string) error {
 			return nil
 		}
 		return writeLines(root, name, append(lines, line))
-	})
+	}, opts...)
 }
 
 // recordInstall records the repository an install just wrote hooks into, and
@@ -109,7 +109,7 @@ func recordInstall(root, repo string) (note string, err error) {
 	}
 	if len(refs) == 0 {
 		// Referenced only: the sweep reads the primary's worktrees, so this
-		// tree'"'"'s pin is kept; update never re-installs the primary.
+		// tree's pin is kept; update never re-installs the primary.
 		if err := RecordReferenced(root, primary); err != nil {
 			return "", err
 		}
@@ -143,8 +143,8 @@ func CreatedPins(root string) ([]string, error) { return readLines(root, pinsFil
 // RecordCreatedPin notes that update wrote the pinned binary of version. It is
 // called after the pin is written, so a crash between the two leaves a pin no
 // one will sweep.
-func RecordCreatedPin(root, version string) error {
-	return addLine(root, pinsFile, version)
+func RecordCreatedPin(root, version string, opts ...RecordOption) error {
+	return addLine(root, pinsFile, version, opts...)
 }
 
 // ReferencedVersions is the versions the trellis hooks in repo's settings point
@@ -222,11 +222,19 @@ func LinkedWorktrees(repo string) ([]string, error) {
 	}
 	var out []string
 	for _, e := range entries {
-		b, err := os.ReadFile(filepath.Join(r.Common, "worktrees", e.Name(), "gitdir"))
+		admin := filepath.Join(r.Common, "worktrees", e.Name())
+		b, err := os.ReadFile(filepath.Join(admin, "gitdir"))
 		if err != nil {
 			continue // a half-made or half-removed worktree has nothing to read
 		}
 		dotGit := filepath.FromSlash(strings.TrimSpace(string(b)))
+		if !filepath.IsAbs(dotGit) {
+			// git 2.48 worktree.useRelativePaths: relative to the admin directory
+			dotGit = filepath.Join(admin, dotGit)
+		}
+		if _, err := os.Stat(dotGit); err != nil {
+			return nil, fmt.Errorf("linked worktree %s is not found (deleted or unmounted?): git worktree prune forgets it", filepath.Dir(dotGit))
+		}
 		out = append(out, store.Canonical(filepath.Dir(dotGit)))
 	}
 	return out, nil

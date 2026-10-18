@@ -22,7 +22,9 @@ func TestInstall_CreatesOwnerOnlyFilesAndDirectories(t *testing.T) {
 		f.settings():                          0o600,
 		filepath.Join(f.root, "repos.txt"):    0o600,
 		filepath.Join(f.root, "pins.txt"):     0o600,
-		filepath.Dir(f.settings()):            0o700,
+		filepath.Dir(f.settings()):            0o755,
+		f.root:                                0o700,
+		filepath.Join(f.root, "records"):      0o700,
 	} {
 		fi, err := os.Stat(path)
 		if err != nil {
