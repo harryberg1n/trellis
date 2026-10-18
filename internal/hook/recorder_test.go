@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -391,5 +392,17 @@ func TestRecorder_SyncFailureBecomesInternalError(t *testing.T) {
 	}
 	if ev.Kind != "internal.error" || !strings.Contains(ev.Detail["error"], "syncing after turn.anchored") || !strings.Contains(ev.Detail["error"], "disk full") {
 		t.Errorf("fallback event %+v, want an internal.error naming the failed sync", ev)
+	}
+}
+
+func TestRecorder_ObjectToolInputIsSilent(t *testing.T) {
+	e := newEnv(t)
+	body := `{"session_id":"s","cwd":` + strconv.Quote(e.repo) + `,"hook_event_name":"%s","tool_name":"mcp__db__query",` +
+		`"tool_input":{"command":{"sql":"select 1","args":[1,2]},"file_path":["a","b"]},"tool_response":{"rows":[]}}`
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		e.do(t, event, []byte(strings.Replace(body, "%s", event, 1)))
+	}
+	if evs := e.events(t); len(evs) != 0 {
+		t.Errorf("events %v, want none: not our tool, and not an error either", kinds(evs))
 	}
 }

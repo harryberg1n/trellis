@@ -132,17 +132,17 @@ func parse(event string, raw []byte) (parsed, error) {
 	} else if kind != "" {
 		return out, rerr
 	}
-	if p.ToolName == "Bash" && p.ToolInput.Command != "" {
-		args["command"] = p.ToolInput.Command
+	if p.ToolName == "Bash" && p.input("command") != "" {
+		args["command"] = p.input("command")
 	}
 	out.ctx = kernel.Context{Tool: p.ToolName, Args: args}
 
 	if !isFileTool(p.ToolName) {
 		return out, nil
 	}
-	file := p.ToolInput.FilePath
+	file := p.input("file_path")
 	if file == "" {
-		file = p.ToolInput.NotebookPath
+		file = p.input("notebook_path")
 	}
 	if file == "" {
 		if kind != "" {
