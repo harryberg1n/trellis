@@ -10,6 +10,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -20,7 +21,7 @@ import (
 func installFixture(t *testing.T, foreign bool) (env installEnv, repo, state, config string) {
 	t.Helper()
 	repo = testiso.Repo(t)
-	dir := t.TempDir()
+	dir := store.Canonical(t.TempDir())
 	state = filepath.Join(dir, "state")
 	config = filepath.Join(dir, "claude")
 	t.Setenv("TRELLIS_STATE", state)

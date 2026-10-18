@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -29,7 +30,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	dir := t.TempDir()
+	dir := store.Canonical(t.TempDir())
 	exe := filepath.Join(dir, "src", "trellis")
 	testiso.Write(t, exe, "binary-bytes")
 	return fixture{repo: testiso.Repo(t), root: filepath.Join(dir, "state"), exe: exe, config: filepath.Join(dir, "claude")}
@@ -389,7 +390,7 @@ func TestInstall_KeepsAnExistingPinnedBinaryWhateverItHolds(t *testing.T) {
 
 func TestInstall_StateRootWithASpaceStillRoundTrips(t *testing.T) {
 	f := newFixture(t)
-	f.root = filepath.Join(t.TempDir(), "my state")
+	f.root = filepath.Join(store.Canonical(t.TempDir()), "my state")
 	if _, err := Install(f.opts("v0.0.2", false)); err != nil {
 		t.Fatal(err)
 	}

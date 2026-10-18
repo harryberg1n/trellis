@@ -49,7 +49,7 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	dir := t.TempDir()
+	dir := store.Canonical(t.TempDir())
 	w := &world{t: t, dir: dir, root: filepath.Join(dir, "state"), config: filepath.Join(dir, "claude"), assets: filepath.Join(dir, "assets"), latest: "v0.0.4", out: &bytes.Buffer{}}
 	src := filepath.Join(dir, "src", "trellis")
 	testiso.Write(t, src, "v0.0.3-binary")
