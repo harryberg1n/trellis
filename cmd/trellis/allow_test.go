@@ -40,6 +40,7 @@ func TestAllow_RefusesRowsWithNoOverride(t *testing.T) {
 		{"secrets", "has no override"},
 		{"undercover", "has no override"},
 		{"own-git-state", "has no override"},
+		{"allow-people", "has no override"},
 		{"no-such-row", "unknown row"},
 	} {
 		out.Reset()

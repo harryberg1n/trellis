@@ -204,3 +204,32 @@ func TestGitCalls_InsideShellConstructs(t *testing.T) {
 		}
 	}
 }
+
+func TestAllowPeople_DeniesAnAgentRunningTrellisAllow(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{`trellis allow primary-write`, "allow is for a person: ask them to run trellis allow primary-write"},
+		{`"$HOME/.local/state/trellis/bin/v0.0.6/trellis" allow x`, "allow is for a person: ask them to run trellis allow x"},
+		{`(trellis allow x)`, "allow is for a person: ask them to run trellis allow x"},
+		{`bash -lc 'trellis allow x'`, "allow is for a person: ask them to run trellis allow x"},
+		{`cd sub && trellis allow main-commit && git push`, "allow is for a person: ask them to run trellis allow main-commit"},
+		{`trellis allow`, "allow is for a person: ask them to run trellis allow <row>"},
+		{`trellis report`, ""},
+		{`trellis tree merge`, ""},
+		{`echo allow`, ""},
+		{`git commit -m "trellis allow x"`, ""},
+	}
+	for _, c := range cases {
+		a := &analysis{tool: "Bash", cwd: t.TempDir(), command: c.cmd}
+		if got := allowPeople(a); got != c.want {
+			t.Errorf("%q: allowPeople = %q, want %q", c.cmd, got, c.want)
+		}
+	}
+	got := DenyLine(AllowPeople, "allow is for a person: ask them to run trellis allow x")
+	want := "trellis: allow-people: allow is for a person: ask them to run trellis allow x. Override: none."
+	if got != want {
+		t.Errorf("DenyLine = %q, want %q", got, want)
+	}
+}

@@ -29,6 +29,11 @@ var Table = []Row{
 		Budget: time.Millisecond, Class: Light,
 	},
 	{
+		ID: "allow-people", Kind: Wall, Stage: StageSession, State: Admitted, Level: Block,
+		Incident: "owner decision 2026-10-18: an agent waived its own deny", Decision: "2026-10-18 owner",
+		Budget: 50 * time.Millisecond, Class: Light,
+	},
+	{
 		ID: "secrets", Kind: Wall, Stage: StageCommit, State: Admitted, Level: Block,
 		Incident: "owner decision; gitleaks finding 2026-09", Decision: "2026-09-01 owner",
 		Budget: 10 * time.Second, Class: Light,

@@ -103,7 +103,7 @@ func TestTable_ShipsTheTreeSixRows(t *testing.T) {
 	}
 	want := []string{
 		"primary-write", "main-commit", "hook-bypass", "discard-uncommitted", "own-git-state",
-		"secrets", "undercover", "walls-warn-people", "secrets-everyone",
+		"allow-people", "secrets", "undercover", "walls-warn-people", "secrets-everyone",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("row ids = %q, want %q", got, want)
