@@ -1,7 +1,10 @@
 package kernel
 
+// Verdict is what a row decides about one event: let it pass, deny it, or let
+// it pass with a warning line for the agent.
 type Verdict int
 
+// The verdicts. Deny comes only from Block rows.
 const (
 	VerdictAllow Verdict = iota
 	VerdictDeny

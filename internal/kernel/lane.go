@@ -3,6 +3,7 @@ package kernel
 // LaneState is the lane machine: none -> open -> merged | abandoned.
 type LaneState int
 
+// The lane states; a lane moves forward only.
 const (
 	LaneNone LaneState = iota
 	LaneOpen

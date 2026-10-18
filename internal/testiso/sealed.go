@@ -21,8 +21,8 @@ func CeilingList(dirs ...string) string {
 			continue
 		}
 		list = append(list, d)
-		if real, err := filepath.EvalSymlinks(d); err == nil && real != d {
-			list = append(list, real)
+		if resolved, err := filepath.EvalSymlinks(d); err == nil && resolved != d {
+			list = append(list, resolved)
 		}
 	}
 	return strings.Join(list, string(os.PathListSeparator))

@@ -25,6 +25,7 @@ func Fake(start time.Time) *FakeClock {
 	return f
 }
 
+// Now returns the fake time, which moves only when the test advances it.
 func (f *FakeClock) Now() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
