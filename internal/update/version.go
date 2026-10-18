@@ -40,9 +40,10 @@ func compareTags(a, b string) int {
 const keepNewest = 3
 
 // sweepPlan is the pinned versions to remove, oldest first: every release tag
-// but the newest keepNewest, unless keep names it. A directory that is not a
+// but the newest keepNewest, unless keep names it, and only those update
+// created. A directory that is not a
 // release tag is never planned for removal.
-func sweepPlan(pins []string, keep map[string]bool) []string {
+func sweepPlan(pins []string, keep, created map[string]bool) []string {
 	var tags []string
 	for _, p := range pins {
 		if _, ok := parseTag(p); ok {
@@ -53,7 +54,7 @@ func sweepPlan(pins []string, keep map[string]bool) []string {
 	tags = slices.Compact(tags)
 	var out []string
 	for i := len(tags) - 1; i >= 0; i-- {
-		if i >= keepNewest && !keep[tags[i]] {
+		if i >= keepNewest && !keep[tags[i]] && created[tags[i]] {
 			out = append(out, tags[i])
 		}
 	}
