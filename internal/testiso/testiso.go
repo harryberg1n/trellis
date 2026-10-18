@@ -230,14 +230,15 @@ func Isolate(root string) (home string, err error) {
 	// The environment changes only once everything it names exists: a root that
 	// cannot hold them leaves the process as it was.
 	for _, kv := range os.Environ() {
-		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+		if isGitVar(kv) {
+			name, _, _ := strings.Cut(kv, "=")
 			_ = os.Unsetenv(name) // a name taken from the environment is always valid
 		}
 	}
 	for name, value := range env {
 		_ = os.Setenv(name, value) // fails only on an empty or malformed name, and these are literals
 	}
-	DisableMaintenanceAndHooks(filepath.Join(root, "nohooks"), func(k, v string) { _ = os.Setenv(k, v) })
+	disableMaintenanceAndHooks(filepath.Join(root, "nohooks"), func(k, v string) { _ = os.Setenv(k, v) })
 	_ = os.Setenv("PATH", withoutQueueShims(os.Getenv("PATH")))
 	sandboxRoot = root
 	return home, nil
@@ -303,4 +304,22 @@ func pinToolchainHomes() {
 	}
 	home, _ := os.UserHomeDir()
 	_ = os.Setenv("RUSTUP_HOME", cmp.Or(os.Getenv("RUSTUP_HOME"), filepath.Join(home, ".rustup")))
+}
+
+// isGitVar reports whether the "name=value" entry kv is a GIT_* variable.
+func isGitVar(kv string) bool {
+	name, _, _ := strings.Cut(kv, "=")
+	return strings.HasPrefix(name, "GIT_")
+}
+
+// dropGit is env without its GIT_* variables: the ones that point git at a
+// repository or a config of the caller's. It is the one such filter.
+func dropGit(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if !isGitVar(kv) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

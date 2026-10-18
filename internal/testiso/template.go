@@ -38,19 +38,21 @@ func BuildRepo(dir string, files map[string]string) error {
 		}
 		return nil
 	}
-	for _, args := range [][]string{
+	steps := [][]string{
 		{"init", "-q", "-b", "main"},
 		{"config", "user.email", "t@t"},
 		{"config", "user.name", "t"},
 		{"config", "commit.gpgsign", "false"},
 		{"config", "core.autocrlf", "false"},
-		// buildEnv strips the GIT_* variables that switch auto maintenance off
-		// process-wide, so the template says it itself: a detached maintenance
-		// run after the commit would create and remove lock files while
-		// CopyRepo walks the tree.
-		{"config", "maintenance.auto", "false"},
-		{"config", "gc.auto", "0"},
-	} {
+	}
+	// dropGit strips the GIT_* variables that switch auto maintenance off
+	// process-wide, so the template says it itself: a detached maintenance run
+	// after the commit would create and remove lock files while CopyRepo walks
+	// the tree.
+	for _, kv := range maintenanceOff {
+		steps = append(steps, []string{"config", kv[0], kv[1]})
+	}
+	for _, args := range steps {
 		if err := git(args...); err != nil {
 			return err
 		}
@@ -77,14 +79,7 @@ func BuildRepo(dir string, files map[string]string) error {
 // with the variables that point git at a repository or a config removed, so
 // the build is the same whichever test first asks for the template.
 func buildEnv() []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		name, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(name, "GIT_") {
-			continue
-		}
-		env = append(env, kv)
-	}
+	env := dropGit(os.Environ())
 	return append(env, queuedMarker, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
 }
 
