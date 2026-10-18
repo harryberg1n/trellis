@@ -1,0 +1,153 @@
+package hook
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"time"
+
+	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/engine"
+	"github.com/harryberg1n/trellis/internal/kernel"
+	"github.com/harryberg1n/trellis/internal/objects"
+	"github.com/harryberg1n/trellis/internal/run"
+	"github.com/harryberg1n/trellis/internal/store"
+)
+
+// Deps is what a hook needs from the outside.
+type Deps struct {
+	Store  *store.Store
+	Runner run.Runner
+	Clock  clock.Clock
+	Rows   []kernel.Row
+	// Err says why Store is nil: the command could not open it. Run records it
+	// as an internal.error.
+	Err error
+	// Fallback is a directory used as a store of last resort. An internal.error
+	// that the main store cannot take is parked in Fallback/events.pending, to
+	// be folded in once the real store works again. "" means no fallback.
+	Fallback string
+}
+
+// Run reads one payload from stdin and records it. It returns the exit code,
+// and the code is always 0: a recorder that fails must not block the agent.
+// It writes nothing to stdout or stderr, which stay with the walls (lane 6).
+// Any failure, a panic included, is appended as an internal.error event, or
+// parked in the fallback store when the main one cannot take it.
+func Run(event string, stdin io.Reader, stdout, stderr io.Writer, deps Deps) (code int) {
+	var p parsed
+	defer func() {
+		if r := recover(); r != nil {
+			fail(deps, event, p, fmt.Errorf("hook: panic: %v", r))
+		}
+		code = 0
+	}()
+	raw, err := io.ReadAll(io.LimitReader(stdin, maxPayload))
+	if err != nil {
+		fail(deps, event, p, fmt.Errorf("hook: reading stdin: %w", err))
+		return 0
+	}
+	if p, err = parse(event, raw); err != nil {
+		fail(deps, event, p, err)
+		return 0
+	}
+	if p.ev.Kind == "" {
+		return 0
+	}
+	if err := record(deps, &p); err != nil {
+		fail(deps, event, p, err)
+	}
+	return 0
+}
+
+// record performs the event's effect and appends the event.
+func record(deps Deps, p *parsed) error {
+	ev := p.ev
+	ev.Detail = maps.Clone(ev.Detail)
+	if ev.Detail == nil {
+		ev.Detail = map[string]string{}
+	}
+	switch {
+	case ev.Kind == kernel.EvEdit && p.file != "":
+		blob, err := objects.WriteBlob(p.repo.GitDir, p.file)
+		if err != nil {
+			return fmt.Errorf("hook: blob for %s: %w", ev.Detail["path"], err)
+		}
+		ev.Detail["blob"] = blob
+	case ev.Kind == kernel.EvTurnAnchored:
+		if deps.Runner == nil {
+			return errors.New("hook: no runner to anchor the turn with")
+		}
+		// Status is the truth for which files the turn changed, so no edit-time
+		// blobs are passed in: their objects are already stored and WriteBlob
+		// finds them, while a blob for a file the turn later reverted or that
+		// is ignored would put a stale entry in the tree.
+		tree, commit, err := objects.AnchorTurn(deps.Runner, p.repo.Root, ev.Lane, "", nil)
+		if err != nil {
+			return fmt.Errorf("hook: anchoring the turn: %w", err)
+		}
+		ev.Detail["tree"], ev.Detail["commit"], ev.Detail["ref"] = tree, commit, objects.RefFor(ev.Lane)
+	}
+	if len(ev.Detail) == 0 {
+		ev.Detail = nil
+	}
+	if deps.Store == nil {
+		return storeMissing(deps)
+	}
+	ev.At = now(deps)
+	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx); err != nil {
+		return fmt.Errorf("hook: recording %s: %w", ev.Kind, err)
+	}
+	return nil
+}
+
+func storeMissing(deps Deps) error {
+	if deps.Err != nil {
+		return fmt.Errorf("hook: no store: %w", deps.Err)
+	}
+	return errors.New("hook: no store")
+}
+
+func now(deps Deps) time.Time {
+	if deps.Clock == nil {
+		return clock.Real().Now()
+	}
+	return deps.Clock.Now()
+}
+
+// fail records err as an internal.error. It tries the main store first, so the
+// error lands beside the events it concerns; if that fails too, the event is
+// parked in the fallback store. A failure of the fallback is dropped: there is
+// nowhere left to write, and the agent must go on.
+func fail(deps Deps, event string, p parsed, err error) {
+	ev := kernel.Event{
+		Kind:    kernel.EvInternalError,
+		Lane:    p.ev.Lane,
+		Session: p.ev.Session,
+		At:      now(deps),
+		Detail:  map[string]string{"error": err.Error(), "event": event},
+	}
+	if p.ev.Kind != "" {
+		ev.Detail["recording"] = p.ev.Kind
+	}
+	if deps.Store != nil {
+		_, aerr := deps.Store.Append(ev)
+		if aerr == nil || errors.Is(aerr, store.ErrParked) {
+			return
+		}
+		ev.Detail["store_error"] = aerr.Error()
+	} else if deps.Err != nil {
+		ev.Detail["store_error"] = deps.Err.Error()
+	}
+	if deps.Fallback == "" {
+		return
+	}
+	clk := deps.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
+	if s, oerr := store.Open(deps.Fallback, clk); oerr == nil {
+		_ = s.Park(ev)
+	}
+}

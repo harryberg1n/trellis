@@ -1,0 +1,1 @@
+{"session_id":"@SESSION@","transcript_path":"@TRANSCRIPT@","cwd":"@CWD@","permission_mode":"plan","effort":{"level":"high"},"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"@FILE@","content":"@CONTENT@"},"tool_response":{"type":"create","filePath":"@FILE@","userModified":false},"tool_use_id":"toolu_01BBBBBBBBBBBBBBBBBBBBBB"}

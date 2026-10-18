@@ -1,0 +1,1 @@
+{"session_id":"@SESSION@","cwd":"@CWD@","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"@FILE@","content":"@CONTENT@"}}
