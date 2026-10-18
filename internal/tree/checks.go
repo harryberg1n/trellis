@@ -87,9 +87,13 @@ func watchAndReady(env Env, gh host.GH, repo objects.Repo, branch string, pr int
 	}
 }
 
-// anyPending reports whether a check of pull request pr is still pending.
+// anyPending reports whether a check of pull request pr is still pending. A
+// checks read that fails counts as pending: keep watching, do not decide.
 func anyPending(gh host.GH, pr int) bool {
-	checks, _ := gh.Checks(pr)
+	checks, err := gh.Checks(pr)
+	if err != nil {
+		return true
+	}
 	for _, c := range checks {
 		if strings.EqualFold(c.Bucket, "pending") {
 			return true

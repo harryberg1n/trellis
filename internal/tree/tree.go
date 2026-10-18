@@ -279,6 +279,8 @@ func Merge(env Env, check string, opts ...MergeOption) error {
 	sha, err := gh.MergeCommit(pr)
 	if err != nil {
 		env.warn("merge commit of #%d not read: %s", pr, firstLine(err))
+	} else if sha == "" {
+		env.warn("merge commit not reported yet; the report links this tree by subject")
 	}
 	env.record(mergedEvent(name, pr, sha))
 	env.say("merged #%d", pr)

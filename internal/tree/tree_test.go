@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/testiso"
@@ -56,6 +57,7 @@ type fixture struct {
 	checkList string            // the JSON `pr checks --json` prints; "" is one passing check
 	checkSeq  []string          // successive JSON reads of the checks; the last repeats; used before checkList
 	workflows string            // what the workflow count prints; "" is one workflow
+	checksErr bool              // pr checks cannot be read
 	mergeSHA  string            // the merge commit pr view reports once merged; "" is none
 	logs      map[string]string // the failed log of a run id
 }
@@ -75,6 +77,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 	switch strings.Join(spec.Args[:2], " ") {
 	case "pr view":
 		if slices.Contains(spec.Args, "mergeCommit") {
+			if f.mergeSHA == "" {
+				return run.Result{Stdout: []byte(`{"mergeCommit":null}`)}, nil
+			}
 			return run.Result{Stdout: []byte(`{"mergeCommit":{"oid":"` + f.mergeSHA + `"}}`)}, nil
 		}
 		if !f.prSeen {
@@ -109,6 +114,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		return run.Result{Stdout: []byte("https://github.com/o/r/pull/7\n")}, nil
 	case "pr checks":
 		if slices.Contains(spec.Args, "--json") {
+			if f.checksErr {
+				return run.Result{ExitCode: 1}, errors.New("gh: network")
+			}
 			out := f.checkList
 			switch {
 			case len(f.checkSeq) > 0:
@@ -1165,6 +1173,84 @@ func TestMerge_LocalSquashConflictLeavesThePrimaryClean(t *testing.T) {
 	}
 	if !exists(path) || slices.Contains(f.kinds(), "tree.merged") {
 		t.Errorf("tree exists %v, kinds %v; want the tree kept and no merge recorded", exists(path), f.kinds())
+	}
+	for _, name := range []string{"SQUASH_MSG", "MERGE_MSG", "AUTO_MERGE"} {
+		if p := testiso.Git(t, f.primary, "rev-parse", "--git-path", name); exists(filepath.Join(f.primary, p)) {
+			t.Errorf("%s left in the primary's git dir", name)
+		}
+	}
+}
+
+func TestMerge_LocalSquashUndoTreatsPathsLiterally(t *testing.T) {
+	f := newLocalFixture(t)
+	commitFile(t, f.primary, "i.tsx", "clean\n")
+	commitFile(t, f.primary, "README.md", "base\n")
+	path := f.openTree(t)
+	commitFile(t, path, "[id].tsx", "glob\n")
+	commitFile(t, path, "README.md", "mine\n")
+	commitFile(t, f.primary, "README.md", "theirs\n")
+
+	err := Merge(f.env(path), "")
+
+	if fixable(err) == nil {
+		t.Fatalf("err = %v, want a fixable conflict", err)
+	}
+	if got := testiso.Git(t, f.primary, "ls-files", "i.tsx"); got != "i.tsx" {
+		t.Errorf("tracked = %q, want i.tsx still tracked", got)
+	}
+	if b, rerr := os.ReadFile(filepath.Join(f.primary, "i.tsx")); rerr != nil || string(b) != "clean\n" {
+		t.Errorf("i.tsx = %q, %v; want unchanged", b, rerr)
+	}
+	if exists(filepath.Join(f.primary, "[id].tsx")) {
+		t.Errorf("[id].tsx left in the primary")
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Errorf("primary status = %q, want clean", got)
+	}
+}
+
+func TestMerge_LocalSquashUndoHandlesNonASCIINames(t *testing.T) {
+	f := newLocalFixture(t)
+	commitFile(t, f.primary, "café.txt", "base\n")
+	path := f.openTree(t)
+	commitFile(t, path, "café.txt", "mine\n")
+	commitFile(t, f.primary, "café.txt", "theirs\n")
+
+	err := Merge(f.env(path), "")
+
+	if fixable(err) == nil {
+		t.Fatalf("err = %v, want a fixable conflict", err)
+	}
+	if got := testiso.Git(t, f.primary, "status", "--porcelain", "--untracked-files=no"); got != "" {
+		t.Errorf("primary status = %q, want clean", got)
+	}
+	if b, rerr := os.ReadFile(filepath.Join(f.primary, "café.txt")); rerr != nil || string(b) != "theirs\n" {
+		t.Errorf("café.txt = %q, %v; want the primary's content", b, rerr)
+	}
+}
+
+func TestMerge_WarnsWhenTheMergeCommitIsNotReportedYet(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := f.errb.String(), "trellis: merge commit not reported yet; the report links this tree by subject\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if got := f.events[len(f.events)-1]; got.Kind != "tree.merged" || !reflect.DeepEqual(got.Detail, map[string]string{"pr": "7"}) {
+		t.Errorf("merged event = %+v, want detail pr only", got)
+	}
+}
+
+func TestMerge_ReadFailureOfChecksKeepsWatching(t *testing.T) {
+	f := newFixture(t)
+	f.checksErr = true
+
+	if !anyPending(host.GH{Runner: f.gh, Dir: f.primary}, 7) {
+		t.Errorf("anyPending = false on a read failure, want true")
 	}
 }
 

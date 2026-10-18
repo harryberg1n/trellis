@@ -1,7 +1,11 @@
 package tree
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -117,10 +121,20 @@ func squashLocal(env Env, w where, subject, body string) error {
 // the primary was verified clean (untracked files aside) before the merge, so
 // every tracked path that differs is the squash's, and no work of the
 // user's is discarded. A path HEAD has is restored from HEAD; one it lacks
-// was added by the squash and is removed.
+// was added by the squash and is removed. The paths are read NUL-separated, so
+// a name git would quote is exact, and handed to git literally, so a name with
+// a glob character matches only itself. The squash's leftovers (SQUASH_MSG,
+// MERGE_MSG, AUTO_MERGE) go too, so the next commit does not open prefilled.
 func undoSquash(env Env, dir string) error {
+	out, err := env.runGit(dir, "diff", "-z", "--no-renames", "--name-only", "HEAD")
+	if err != nil {
+		return err
+	}
 	var have, added []string
-	for _, p := range lines(mustGit(env, dir, "diff", "--no-renames", "--name-only", "HEAD")) {
+	for _, p := range strings.Split(out, "\x00") {
+		if p == "" {
+			continue
+		}
 		if _, err := env.runGit(dir, "cat-file", "-e", "HEAD:"+p); err == nil {
 			have = append(have, p)
 		} else {
@@ -128,14 +142,29 @@ func undoSquash(env Env, dir string) error {
 		}
 	}
 	if len(have) > 0 {
-		args := append([]string{"restore", "--source=HEAD", "--staged", "--worktree", "--"}, have...)
+		args := append([]string{"--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--"}, have...)
 		if _, err := env.runGit(dir, args...); err != nil {
 			return err
 		}
 	}
 	if len(added) > 0 {
-		args := append([]string{"rm", "-f", "-q", "--"}, added...)
+		args := append([]string{"--literal-pathspecs", "rm", "-f", "-q", "--"}, added...)
 		if _, err := env.runGit(dir, args...); err != nil {
+			return err
+		}
+	}
+	if _, err := env.runGit(dir, "reset", "-q"); err != nil {
+		return err
+	}
+	for _, name := range []string{"SQUASH_MSG", "MERGE_MSG", "AUTO_MERGE"} {
+		p, err := env.runGit(dir, "rev-parse", "--git-path", name)
+		if err != nil {
+			return err
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(dir, p)
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
