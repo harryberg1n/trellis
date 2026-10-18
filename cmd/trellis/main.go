@@ -16,6 +16,7 @@ verbs:
   version   print the version and commit
   hook      record one agent hook payload read from stdin: trellis hook <event>
   report    print speed, cost and labels; --issue files them on harryberg1n/trellis
+  allow     waive the next deny of a wall once: trellis allow <row-id>
   help      print this text
 `
 
@@ -47,6 +48,8 @@ func runIn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return reportCmd(args[1:], stdout, stderr, env)
+	case "allow":
+		return allowVerb(args[1:], stdout, stderr)
 	case "help":
 		_, _ = io.WriteString(stdout, usage)
 		return 0
