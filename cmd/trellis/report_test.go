@@ -224,3 +224,20 @@ func hasPair(args []string, k, v string) bool {
 	}
 	return false
 }
+
+func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	// The hook reads the repo's own config file only. A remote that only the
+	// user's global config names must not move the report to another store.
+	testsupport.Git(t, env.Repo, "config", "--global", "remote.origin.url", "https://example.invalid/global.git")
+	var out, errb bytes.Buffer
+
+	code := reportCmd(nil, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "lanes with usage: 1  total $0.01250"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q (an empty log?):\n%s", want, out.String())
+	}
+}

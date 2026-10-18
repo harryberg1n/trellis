@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/objects"
 	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -410,7 +411,7 @@ func TestRecorder_ObjectToolInputIsSilent(t *testing.T) {
 
 func TestRecorder_UsesTheRepoTheCallerLocated(t *testing.T) {
 	e := newEnv(t)
-	loc, err := Locate(e.repo)
+	loc, err := objects.Open(e.repo)
 	if err != nil {
 		t.Fatal(err)
 	}

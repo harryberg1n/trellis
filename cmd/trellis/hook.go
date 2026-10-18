@@ -8,6 +8,7 @@ import (
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/hook"
+	"github.com/harryberg1n/trellis/internal/objects"
 	runner "github.com/harryberg1n/trellis/internal/run"
 	"github.com/harryberg1n/trellis/internal/walls"
 )
@@ -45,7 +46,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 			deps.Fallback = ""
 		}
 	}
-	repo, err := hook.Locate(hook.PayloadCwd(raw))
+	repo, err := objects.Open(hook.PayloadCwd(raw))
 	if err == nil {
 		deps.Repo = &repo
 		deps.Store, err = storeOf(repo, clk)

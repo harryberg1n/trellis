@@ -62,12 +62,13 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	root, err := objects.FindRoot(env.Repo)
+	repo, err := objects.Open(env.Repo)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
 		return 1
 	}
-	facts, name, err := gatherFacts(root, env, stderr)
+	root := repo.Root
+	facts, name, err := gatherFacts(repo, env, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
 		return 1
@@ -112,18 +113,14 @@ func fileReport(gh host.GH, title, body string) (string, error) {
 
 // gatherFacts reads the default branch history, the escape issues, the event
 // log and the transcripts the log names. name is the repository's name.
-func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, string, error) {
+func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Facts, string, error) {
 	now := env.Clock.Now()
 	facts := measure.Facts{Now: now}
 
-	remote := configRemote(env.Runner, root)
-	name := repoName(remote, root)
+	root := repo.Root
+	name := repoName(repo.Remote, root)
 
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return facts, name, err
-	}
-	st, err := store.Open(store.RepoDir(env.Root, store.RepoID(remote, absRoot)), env.Clock)
+	st, err := storeIn(env.Root, repo, env.Clock)
 	if err != nil {
 		return facts, name, fmt.Errorf("opening the event log: %w", err)
 	}
@@ -132,7 +129,7 @@ func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, s
 		return facts, name, fmt.Errorf("reading the event log: %w", err)
 	}
 
-	facts.Merges, err = readHistory(env.Runner, root, now, facts.Events)
+	facts.Merges, err = readHistory(env.Runner, repo, now, facts.Events)
 	if err != nil {
 		return facts, name, err
 	}
@@ -170,14 +167,6 @@ func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, s
 	return facts, name, nil
 }
 
-func configRemote(r runpkg.Runner, root string) string {
-	out, err := objects.Git(r, root, nil, "config", "--get", "remote.origin.url")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // repoName is the last element of the remote URL without ".git", else the
 // directory name.
 func repoName(remote, root string) string {
@@ -189,21 +178,6 @@ func repoName(remote, root string) string {
 		return u
 	}
 	return filepath.Base(root)
-}
-
-// defaultBranch is origin's HEAD branch, else main, else master, else HEAD.
-func defaultBranch(r runpkg.Runner, root string) string {
-	if out, err := objects.Git(r, root, nil, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		if b := strings.TrimSpace(string(out)); b != "" {
-			return b
-		}
-	}
-	for _, b := range []string{"main", "master"} {
-		if _, err := objects.Git(r, root, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
-			return b
-		}
-	}
-	return "HEAD"
 }
 
 const (
@@ -218,8 +192,8 @@ var (
 
 // readHistory is `git log --first-parent` on the default branch within the
 // window, each commit with the line ranges it touched.
-func readHistory(r runpkg.Runner, root string, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
-	branch := defaultBranch(r, root)
+func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []kernel.Event) ([]measure.Merge, error) {
+	root, branch := repo.Root, repo.Default
 	since := now.Add(-historyWindow).UTC().Format(time.RFC3339)
 	out, err := objects.Git(r, root, nil, "log", "--first-parent", "--since="+since,
 		"--format=%H"+fieldSep+"%cI"+fieldSep+"%s"+fieldSep+"%b"+recordSep, branch)

@@ -101,3 +101,44 @@ func IsPrimary(repo string) (bool, error) {
 	}
 	return filepath.Clean(common) == filepath.Clean(gitDir), nil
 }
+
+// Repo is everything the callers ask of a repository, read from files.
+type Repo struct {
+	Root    string // the working tree
+	Common  string // the git dir that holds objects, refs and config
+	GitDir  string // its own git dir (the worktree's, in a linked worktree)
+	Branch  string // the branch HEAD names, or "detached-<sha>"
+	Primary bool   // the main working tree, not a linked worktree
+	Remote  string // the URL of remote origin in the repo config, "" if none
+	Default string // the default branch, as DefaultBranch reads it
+}
+
+// Open reads the repository around dir without starting a process. It is the
+// one place a directory becomes a repository description.
+func Open(dir string) (Repo, error) {
+	root, err := FindRoot(dir)
+	if err != nil {
+		return Repo{}, err
+	}
+	common, gitDir, err := GitDirs(root)
+	if err != nil {
+		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
+	}
+	branch, err := Branch(gitDir)
+	if err != nil {
+		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
+	}
+	remote, _, err := ConfigValue(gitDir, `remote "origin"`, "url")
+	if err != nil {
+		return Repo{}, fmt.Errorf("remote of %s: %w", root, err)
+	}
+	return Repo{
+		Root:    root,
+		Common:  common,
+		GitDir:  gitDir,
+		Branch:  branch,
+		Primary: filepath.Clean(common) == filepath.Clean(gitDir),
+		Remote:  remote,
+		Default: DefaultBranch(common),
+	}, nil
+}

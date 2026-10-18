@@ -193,41 +193,18 @@ func kindOf(rows []kernel.Row, id string) kernel.Kind {
 	return kernel.Check
 }
 
-// facts are what the walls ask of a repository.
-type facts struct {
-	Root    string
-	Branch  string
-	Primary bool
-	Default string
-}
-
 // onDefault reports whether this is the primary checkout with the default
 // branch checked out.
-func (f facts) onDefault() bool { return f.Primary && f.Branch == f.Default }
+func onDefault(r objects.Repo) bool { return r.Primary && r.Branch == r.Default }
 
 // repoAt reads the repository around dir without starting a process. ok is
 // false when dir is relative, unknown, or in no repository.
-func repoAt(dir string) (facts, bool) {
+func repoAt(dir string) (objects.Repo, bool) {
 	if dir == "" {
-		return facts{}, false
+		return objects.Repo{}, false
 	}
-	root, err := objects.FindRoot(dir)
-	if err != nil {
-		return facts{}, false
-	}
-	common, gitDir, err := objects.GitDirs(root)
-	if err != nil {
-		return facts{}, false
-	}
-	branch, err := objects.Branch(gitDir)
-	if err != nil {
-		return facts{}, false
-	}
-	primary, err := objects.IsPrimary(root)
-	if err != nil {
-		return facts{}, false
-	}
-	return facts{Root: root, Branch: branch, Primary: primary, Default: objects.DefaultBranch(common)}, true
+	r, err := objects.Open(dir)
+	return r, err == nil
 }
 
 // plural is "1 unstaged file" or "2 unstaged files".

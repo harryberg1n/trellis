@@ -55,7 +55,7 @@ func isFileTool(tool string) bool {
 type parsed struct {
 	ev   kernel.Event
 	ctx  kernel.Context
-	repo Repo
+	repo objects.Repo
 	file string // absolute path of the file an Edit or Write changed
 }
 
@@ -77,7 +77,7 @@ func Parse(event string, raw []byte) (kernel.Event, kernel.Context, error) {
 }
 
 // parse is Parse with the repo the caller already located, or nil to locate it.
-func parse(event string, raw []byte, known *Repo) (parsed, error) {
+func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	var out parsed
 	name, ok := canonical(event)
 	if !ok {
@@ -125,18 +125,18 @@ func parse(event string, raw []byte, known *Repo) (parsed, error) {
 	out.ev.Detail = detail
 
 	args := map[string]string{"cwd": p.Cwd}
-	var repo Repo
+	var repo objects.Repo
 	var rerr error
 	if known != nil {
 		repo = *known
 	} else {
-		repo, rerr = Locate(p.Cwd)
+		repo, rerr = objects.Open(p.Cwd)
 	}
 	switch {
 	case rerr == nil:
 		out.repo = repo
 		args["repo"] = repo.Root
-		out.ev.Lane = repo.Lane
+		out.ev.Lane = repo.Branch
 	case errors.Is(rerr, objects.ErrNotARepo):
 		// Not a repository: nothing here is ours to record. Silent, not an error.
 		out.ev.Kind, out.ev.Detail = "", nil

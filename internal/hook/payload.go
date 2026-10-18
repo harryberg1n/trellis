@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/harryberg1n/trellis/internal/objects"
 )
 
 // payload is the part of a harness payload the recorder reads. Every hook
@@ -65,36 +63,6 @@ func decode(raw []byte) (payload, error) {
 		return p, fmt.Errorf("hook: decoding payload: %w", err)
 	}
 	return p, nil
-}
-
-// Repo is the git repository a payload's cwd lies in.
-type Repo struct {
-	Root   string // the working tree
-	GitDir string // its own git dir (the worktree's, in a linked worktree)
-	Lane   string // the branch HEAD names, or "detached"
-	Remote string // the URL of remote origin, "" if it has none
-}
-
-// Locate finds the repository around cwd. The reading is objects' (FindRoot,
-// GitDirs, Branch, ConfigValue); nothing is spawned.
-func Locate(cwd string) (Repo, error) {
-	root, err := objects.FindRoot(cwd)
-	if err != nil {
-		return Repo{}, err
-	}
-	_, gitDir, err := objects.GitDirs(root)
-	if err != nil {
-		return Repo{}, fmt.Errorf("git dirs of %s: %w", root, err)
-	}
-	lane, err := objects.Branch(gitDir)
-	if err != nil {
-		return Repo{}, fmt.Errorf("branch of %s: %w", root, err)
-	}
-	remote, _, err := objects.ConfigValue(gitDir, `remote "origin"`, "url")
-	if err != nil {
-		return Repo{}, fmt.Errorf("remote of %s: %w", root, err)
-	}
-	return Repo{Root: root, GitDir: gitDir, Lane: lane, Remote: remote}, nil
 }
 
 // PayloadCwd is the cwd a payload names, "" if it names none or is not JSON.
