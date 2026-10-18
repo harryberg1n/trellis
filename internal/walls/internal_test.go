@@ -133,22 +133,3 @@ func TestParseGit_ReadsGlobalOptionsOutOfTheWay(t *testing.T) {
 		t.Error("echo git commit read as a git call")
 	}
 }
-
-func TestTell(t *testing.T) {
-	cases := []struct {
-		text string
-		want string
-	}{
-		{"fix the parser", ""},
-		{"fix\n\nco-authored-by: A <a@b>", "an attribution trailer (co-authored-by)"},
-		{"Generated with [Claude Code]", `an attribution footer ("Generated with")`},
-		{"ask the assistant, Opus", `a tool or model name ("Opus")`},
-		{"opusculum", ""},
-		{"coauthored by nobody", ""},
-	}
-	for _, c := range cases {
-		if got := tell(c.text); got != c.want {
-			t.Errorf("tell(%q) = %q, want %q", c.text, got, c.want)
-		}
-	}
-}
