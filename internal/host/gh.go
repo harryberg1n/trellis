@@ -115,10 +115,43 @@ func trimNL(b []byte) []byte {
 // watchTimeout bounds `gh pr checks --watch`, which waits for CI.
 const watchTimeout = 45 * time.Minute
 
-// PRState is a pull request as `gh pr view --json number,state` reports it.
+// PRState is a pull request as `gh pr view --json` reports it.
 type PRState struct {
-	Number int    `json:"number"`
-	State  string `json:"state"` // OPEN, CLOSED or MERGED
+	Number           int    `json:"number"`
+	State            string `json:"state"`            // OPEN, CLOSED or MERGED
+	Mergeable        string `json:"mergeable"`        // MERGEABLE, CONFLICTING or UNKNOWN
+	MergeStateStatus string `json:"mergeStateStatus"` // CLEAN, DIRTY, BEHIND, BLOCKED ...
+	HeadSHA          string `json:"headRefOid"`
+}
+
+// Check is one check of a pull request as `gh pr check --json` reports it.
+type Check struct {
+	Name   string `json:"name"`
+	Bucket string `json:"bucket"` // pass, fail, pending, skipping or cancel
+	Link   string `json:"link"`
+}
+
+// ErrNoChecks is what WatchChecks reports for a pull request with no checks.
+var ErrNoChecks = errors.New("host: no checks reported")
+
+// Checks lists the checks of pull request number. gh exits non-zero when one
+// failed or is pending, and still prints the list, so the list wins.
+func (g GH) Checks(number int) ([]Check, error) {
+	out, err := g.gh(nil, "pr", "checks", strconv.Itoa(number), "--json", "name,bucket,link")
+	var checks []Check
+	if jerr := json.Unmarshal(out, &checks); jerr != nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("host: reading gh pr checks: %w", jerr)
+	}
+	return checks, nil
+}
+
+// FailedLog is the log of the failed steps of workflow run id.
+func (g GH) FailedLog(runID string) (string, error) {
+	out, err := g.gh(nil, "run", "view", runID, "--log-failed")
+	return string(out), err
 }
 
 // ErrNoPR is what PRView reports for a branch with no pull request.
@@ -126,7 +159,7 @@ var ErrNoPR = errors.New("host: no pull request for the branch")
 
 // PRView is the pull request of branch, or an error wrapping ErrNoPR.
 func (g GH) PRView(branch string) (PRState, error) {
-	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state")
+	out, err := g.gh(nil, "pr", "view", branch, "--json", "number,state,mergeable,mergeStateStatus,headRefOid")
 	if err != nil {
 		if strings.Contains(err.Error(), "no pull requests found") {
 			return PRState{}, fmt.Errorf("%w: %s", ErrNoPR, branch)
@@ -151,7 +184,16 @@ func (g GH) CreatePR(base string) (string, error) {
 // check is an error, and the returned text is what gh printed.
 func (g GH) WatchChecks(number int) (string, error) {
 	out, err := g.ghWithin(watchTimeout, nil, "pr", "checks", strconv.Itoa(number), "--watch")
+	if err != nil && strings.Contains(err.Error(), "no checks reported") {
+		err = fmt.Errorf("%w: #%d", ErrNoChecks, number)
+	}
 	return string(trimNL(out)), err
+}
+
+// Ready is nil when gh is installed and logged in.
+func (g GH) Ready() error {
+	_, err := g.gh(nil, "auth", "status")
+	return err
 }
 
 // MergePR rebase-merges pull request number and deletes its branch.

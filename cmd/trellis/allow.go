@@ -19,6 +19,10 @@ import (
 // repo id: a repo with no origin remote is keyed by its worktree path, so a
 // token minted in the primary checkout is not seen from a tree.
 func allowVerb(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		_, _ = io.WriteString(stderr, "usage: trellis allow <row-id>\n")
+		return 0
+	}
 	if len(args) != 1 {
 		_, _ = io.WriteString(stderr, "usage: trellis allow <row-id>\n")
 		return 1
