@@ -31,9 +31,30 @@ func TestMainCommit_MergingTheOwnUpstreamIntoThePrimaryPasses(t *testing.T) {
 		"git -C " + p + " merge @{u}",
 		"git -C " + p + " merge --ff-only @{upstream}",
 		"git -C " + p + " merge",
+		// Live deny on honest work, fanpyp box, 2026-10-19 (v0.0.11): the
+		// redirection was read as a second operand of the merge.
+		"cd " + p + " && git fetch -q && git merge -q --ff-only origin/main 2>&1|tail -1; git grep foo",
+		"git -C " + p + " merge --ff-only origin/main > merge.log 2>&1",
+		"git -C " + p + " merge origin/main >>log < /dev/null",
 	} {
 		if d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny); len(d) != 0 {
 			t.Errorf("%q: denies %+v, want none", cmd, d)
+		}
+	}
+}
+
+func TestMainCommit_ARedirectedMergeOfAnotherRefIsStillSeen(t *testing.T) {
+	w := newWorld(t)
+	withUpstream(t, w)
+	r := quiet(t)
+	p := filepath.ToSlash(w.primary)
+	for _, cmd := range []string{
+		"git -C " + p + " merge unmerged 2>&1 | tail -1",
+		"git -C " + p + " merge unmerged > out.txt",
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "main-commit" {
+			t.Errorf("%q: denies %+v, want main-commit", cmd, d)
 		}
 	}
 }
