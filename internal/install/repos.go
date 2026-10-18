@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/harryberg1n/trellis/internal/objects"
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
@@ -15,9 +16,10 @@ import (
 // canonical root per line, under the state root. `trellis update` reads it.
 const reposFile = "repos.txt"
 
-// reposMarker is the first line of a record that an install wrote. A record
-// without it may be missing repositories installed before the record existed.
-const reposMarker = "# trellis repos v1"
+// pinsFile is the record of the pinned versions `trellis update` created, one
+// tag per line, under the state root. update sweeps only those: a pin made by
+// an install, in a repo the record may not know, is never removed.
+const pinsFile = "pins.txt"
 
 func canonicalRepo(repo string) (string, error) {
 	abs, err := filepath.Abs(repo)
@@ -27,84 +29,79 @@ func canonicalRepo(repo string) (string, error) {
 	return store.Canonical(abs), nil
 }
 
-// readRepos is the recorded roots and whether the marker line is there.
-func readRepos(root string) (repos []string, marked bool, err error) {
-	b, err := os.ReadFile(filepath.Join(root, reposFile))
+// readLines is the non-empty lines of the file at root/name; none when absent.
+func readLines(root, name string) ([]string, error) {
+	b, err := os.ReadFile(filepath.Join(root, name))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	for i, line := range slices.Collect(strings.SplitSeq(string(b), "\n")) {
-		line = strings.TrimRight(line, "\r")
-		switch {
-		case i == 0 && line == reposMarker:
-			marked = true
-		case line == "" || strings.HasPrefix(line, "#"):
-		default:
-			repos = append(repos, line)
+	var out []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if line = strings.TrimRight(line, "\r"); line != "" {
+			out = append(out, line)
 		}
 	}
-	return repos, marked, nil
+	return out, nil
 }
 
-// Repos is the recorded repository roots, in the order they were recorded.
-// No record is no repositories.
-func Repos(root string) ([]string, error) {
-	repos, _, err := readRepos(root)
-	return repos, err
-}
-
-// ReposComplete reports whether an install wrote the record. Only then does a
-// repository's absence from it mean that no hooks of ours are there.
-func ReposComplete(root string) (bool, error) {
-	_, marked, err := readRepos(root)
-	return marked, err
-}
-
-func writeRepos(root string, repos []string, marked bool) error {
+func writeLines(root, name string, lines []string) error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return err
 	}
 	var b strings.Builder
-	if marked {
-		b.WriteString(reposMarker + "\n")
+	for _, l := range lines {
+		b.WriteString(l + "\n")
 	}
-	for _, r := range repos {
-		b.WriteString(r + "\n")
-	}
-	return store.WriteAtomic(root, reposFile, []byte(b.String()), store.WithMode(0o644))
+	return store.WriteAtomic(root, name, []byte(b.String()), store.WithMode(0o644))
 }
 
-// RecordRepo adds repo to the record, once, and marks the record as written by
-// an install.
-func RecordRepo(root, repo string) error {
+// Repos is the recorded repository roots, in the order they were recorded.
+// No record is no repositories.
+func Repos(root string) ([]string, error) { return readLines(root, reposFile) }
+
+// recordedRoot is the root a repo is recorded under. A linked worktree is
+// recorded as its primary checkout: the hooks in a tree are the repository's,
+// and a tree that `trellis tree rm` later removes must not leave a record that
+// is not found.
+func recordedRoot(repo string) (string, error) {
 	canon, err := canonicalRepo(repo)
 	if err != nil {
-		return err
+		return "", err
 	}
-	repos, marked, err := readRepos(root)
+	r, err := objects.Open(canon)
+	if err != nil || r.Primary || filepath.Base(r.Common) != ".git" {
+		return canon, nil
+	}
+	return filepath.Dir(r.Common), nil
+}
+
+// RecordRepo adds repo to the record, once. A linked worktree is recorded as
+// its primary checkout.
+func RecordRepo(root, repo string) error {
+	canon, err := recordedRoot(repo)
 	if err != nil {
 		return err
 	}
-	if marked && slices.Contains(repos, canon) {
+	repos, err := Repos(root)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(repos, canon) {
 		return nil
 	}
-	if !slices.Contains(repos, canon) {
-		repos = append(repos, canon)
-	}
-	return writeRepos(root, repos, true)
+	return writeLines(root, reposFile, append(repos, canon))
 }
 
-// ForgetRepo removes repo from the record; one not there is not an error. The
-// marker stays as it was.
+// ForgetRepo removes repo from the record; one not there is not an error.
 func ForgetRepo(root, repo string) error {
 	canon, err := canonicalRepo(repo)
 	if err != nil {
 		return err
 	}
-	repos, marked, err := readRepos(root)
+	repos, err := Repos(root)
 	if err != nil {
 		return err
 	}
@@ -112,7 +109,24 @@ func ForgetRepo(root, repo string) error {
 	if len(kept) == len(repos) {
 		return nil
 	}
-	return writeRepos(root, kept, marked)
+	return writeLines(root, reposFile, kept)
+}
+
+// CreatedPins is the versions `trellis update` pinned itself.
+func CreatedPins(root string) ([]string, error) { return readLines(root, pinsFile) }
+
+// RecordCreatedPin notes that update wrote the pinned binary of version. It is
+// called after the pin is written, so a crash between the two leaves a pin no
+// one will sweep.
+func RecordCreatedPin(root, version string) error {
+	pins, err := CreatedPins(root)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(pins, version) {
+		return nil
+	}
+	return writeLines(root, pinsFile, append(pins, version))
 }
 
 // ReferencedVersions is the versions the trellis hooks in repo's settings point

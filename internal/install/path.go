@@ -3,6 +3,8 @@ package install
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/harryberg1n/trellis/internal/store"
 )
 
 // binName is the pinned binary's name without its suffix.
@@ -38,7 +40,7 @@ func Owned(command, root string) (version string, ok bool) {
 	}
 	name := strings.TrimSuffix(filepath.Base(bin), filepath.Ext(bin))
 	dir := filepath.Dir(bin)
-	if name != binName || filepath.Dir(dir) != filepath.Join(root, "bin") {
+	if name != binName || !sameDir(filepath.Dir(dir), filepath.Join(root, "bin")) {
 		return "", false
 	}
 	return filepath.Base(dir), true
@@ -55,4 +57,11 @@ func executable(command string) (string, bool) {
 		return "", false
 	}
 	return filepath.Clean(filepath.FromSlash(path)), true
+}
+
+// sameDir reports whether two paths name one directory: equal as written, or
+// equal once symlinks and 8.3 short names are resolved. A settings file written
+// under one spelling of the state root is still ours under another.
+func sameDir(a, b string) bool {
+	return a == b || store.Canonical(a) == store.Canonical(b)
 }
