@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -22,11 +23,14 @@ const exitDeny = 2
 //
 // A deny prints its line to stderr and exits 2, and is recorded as wall.denied
 // (policy.denied for a Policy row) with the row, the line and its size in
-// bytes. A deny the row's one-shot `trellis allow` token waives is let through
-// and recorded as wall.overridden. A warn exits 0 and reaches the agent as
-// additionalContext in the hook's JSON on stdout: unlike permissionDecision
-// "allow", it does not skip the permission prompt. An allow prints nothing.
-// Recording failures become internal.error events; they never lift a deny.
+// bytes. When every deny of the call has a valid one-shot `trellis allow`
+// token, all the tokens are consumed together and the call is let through,
+// with one wall.overridden per row; if any deny lacks a token none is consumed.
+// A warn, and an allow that carries a line (a wall that cannot act), exit 0 and
+// reach the agent as additionalContext in the hook's JSON on stdout: unlike
+// permissionDecision "allow", that does not skip the permission prompt. A warn
+// or an allow records nothing. Recording failures become internal.error
+// events; they never lift a deny.
 func preToolUse(deps Deps, event string, p parsed, stdout, stderr io.Writer) int {
 	runner := deps.Runner
 	if runner == nil {
@@ -36,33 +40,54 @@ func preToolUse(deps Deps, event string, p parsed, stdout, stderr io.Writer) int
 		}
 		runner = run.Exec{Clock: clk}
 	}
-	var denies, warns []string
+	var denies []kernel.Action
+	var context []string
 	for _, a := range walls.Decide(deps.Rows, p.ev, p.ctx, runner) {
-		switch a.Verdict {
-		case kernel.VerdictWarn:
-			warns = append(warns, a.Line)
-		case kernel.VerdictDeny:
-			if walls.Overridable(a.RowID) && waived(deps, event, p, a.RowID) {
-				note(deps, event, p, kernel.EvWallOverridden, map[string]string{"row": a.RowID})
-				continue
-			}
+		switch {
+		case a.Verdict == kernel.VerdictDeny:
+			denies = append(denies, a)
+		case a.Verdict == kernel.VerdictWarn || a.Verdict == kernel.VerdictAllow && a.Line != "":
+			context = append(context, a.Line)
+		}
+	}
+	if len(denies) > 0 && waivedAll(deps, event, p, denies) {
+		for _, a := range denies {
+			note(deps, event, p, kernel.EvWallOverridden, map[string]string{"row": a.RowID})
+		}
+		denies = nil
+	}
+	if len(denies) > 0 {
+		lines := make([]string, 0, len(denies))
+		for _, a := range denies {
 			kind := kernel.EvWallDenied
 			if rowKind(deps.Rows, a.RowID) == kernel.Policy {
 				kind = kernel.EvPolicyDenied
 			}
 			note(deps, event, p, kind, map[string]string{"row": a.RowID, "line": a.Line, "bytes": strconv.Itoa(len(a.Line))})
-			denies = append(denies, a.Line)
+			lines = append(lines, a.Line)
 		}
-	}
-	if len(denies) > 0 {
-		_, _ = io.WriteString(stderr, strings.Join(denies, "\n")+"\n")
+		_, _ = io.WriteString(stderr, strings.Join(lines, "\n")+"\n")
 		return exitDeny
 	}
-	if len(warns) > 0 {
-		_, _ = fmt.Fprintf(stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":%s}}`+"\n",
-			strconv.Quote(strings.Join(warns, "\n")))
+	if len(context) > 0 {
+		_, _ = io.WriteString(stdout, contextJSON(context)+"\n")
 	}
 	return 0
+}
+
+// contextJSON is the PreToolUse output that adds lines to the agent's context.
+func contextJSON(lines []string) string {
+	type output struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
+	b, err := json.Marshal(struct {
+		HookSpecificOutput output `json:"hookSpecificOutput"`
+	}{output{HookEventName: "PreToolUse", AdditionalContext: strings.Join(lines, "\n")}})
+	if err != nil { // strings always marshal
+		return "{}"
+	}
+	return string(b)
 }
 
 func rowKind(rows []kernel.Row, id string) kernel.Kind {
@@ -74,14 +99,22 @@ func rowKind(rows []kernel.Row, id string) kernel.Kind {
 	return kernel.Wall
 }
 
-// waived consumes the row's one-shot token, if there is one.
-func waived(deps Deps, event string, p parsed, id string) bool {
+// waivedAll consumes the one-shot tokens of every denied row, or none: it
+// reports false unless every deny is overridable and has a valid token.
+func waivedAll(deps Deps, event string, p parsed, denies []kernel.Action) bool {
 	if deps.Store == nil {
 		return false
 	}
-	ok, err := deps.Store.TakeAllow(id)
+	ids := make([]string, 0, len(denies))
+	for _, a := range denies {
+		if !walls.Overridable(a.RowID) {
+			return false
+		}
+		ids = append(ids, a.RowID)
+	}
+	ok, err := deps.Store.TakeAllows(ids...)
 	if err != nil {
-		fail(deps, event, p, fmt.Errorf("hook: reading the %s override: %w", id, err))
+		fail(deps, event, p, fmt.Errorf("hook: reading the overrides: %w", err))
 		return false
 	}
 	return ok
