@@ -3,6 +3,7 @@ package run
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -16,35 +17,69 @@ var ErrOwnGitState = errors.New("trellis: refusing to write git state outside re
 // trellisRefs is the one ref namespace a trellis child may write.
 const trellisRefs = "refs/trellis/"
 
+// readVerbs are the git subcommands trellis's own children run that only read
+// (hash-object and mktree add objects, never a ref or an index).
+var readVerbs = map[string]bool{
+	"status": true, "ls-tree": true, "mktree": true, "commit-tree": true, "hash-object": true, "cat-file": true,
+	"rev-parse": true, "rev-list": true, "log": true, "diff": true, "show": true, "for-each-ref": true,
+	"merge-base": true,
+}
+
+// branchWrites are the git branch options that create, move, copy, delete or
+// configure a branch.
+var branchWrites = []string{"-d", "-D", "-m", "-M", "-c", "-C", "-f", "--force", "--delete", "--move", "--copy",
+	"-u", "--set-upstream-to", "--unset-upstream", "--edit-description", "--track", "--no-track", "-t"}
+
 // ownGitState is nil, or an error wrapping ErrOwnGitState when spec is a git
-// child that would write a ref outside refs/trellis/ or a lane's index.
+// child that is not on the allowlist of what trellis's own children need.
 //
-// The refused argv are git update-ref and git symbolic-ref (set or delete)
-// naming a ref outside refs/trellis/, and git update-index and git write-tree.
+// Allowed: the read verbs in readVerbs; config --get*; worktree list; branch
+// --list and --show-current; symbolic-ref that only reads; update-ref under
+// refs/trellis/ only (stdin scripts included); git with no subcommand
+// (--version). Everything else (branch -f, tag, reset, checkout, add,
+// read-tree, worktree add, fetch, commit, update-index, write-tree, ...) is
+// refused before it starts.
+//
 // "The index of a lane" is the index git opens for the checkout at Dir, or at
 // the -C directory: <git dir>/index, the primary checkout's and a linked
 // worktree's alike. A Spec has no environment and Light removes GIT_INDEX_FILE
-// from a git child's, so no trellis child can use a private index: every
-// update-index and write-tree it starts reads or writes a lane's. An argv it
-// builds a tree with (mktree, commit-tree, hash-object) touches no index.
+// from a git child's, so no trellis child can use a private index: any verb
+// that writes an index writes a lane's, and none is on the list.
 func ownGitState(spec Spec) error {
 	if !isGit(spec.Name) {
 		return nil
 	}
 	verb, args := gitVerb(spec.Args)
 	var bad string
-	switch verb {
-	case "update-ref":
+	switch {
+	case verb == "" || readVerbs[verb]:
+	case verb == "update-ref":
 		bad = firstOutsideRef(updateRefTargets(args, spec.Stdin))
-	case "symbolic-ref":
+	case verb == "symbolic-ref":
 		bad = firstOutsideRef(symbolicRefTarget(args))
-	case "update-index", "write-tree":
-		bad = "the index of the checkout"
+	case verb == "config":
+		if !hasPrefixArg(args, "--get") {
+			bad = "(not --get)"
+		}
+	case verb == "worktree":
+		if len(args) == 0 || args[0] != "list" {
+			bad = "(only list)"
+		}
+	case verb == "branch":
+		if !(slices.Contains(args, "--list") || slices.Contains(args, "--show-current")) || slices.ContainsFunc(args, func(a string) bool { return slices.Contains(branchWrites, a) }) {
+			bad = "(only --list and --show-current)"
+		}
+	default:
+		bad = "(not a subcommand trellis children run)"
 	}
 	if bad == "" {
 		return nil
 	}
 	return fmt.Errorf("%w: git %s %s", ErrOwnGitState, verb, bad)
+}
+
+func hasPrefixArg(args []string, prefix string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, prefix) })
 }
 
 // gitVerb is the subcommand of a git argv and the arguments after it, with

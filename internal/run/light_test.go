@@ -112,7 +112,7 @@ func TestLight_RunsAndCapturesOutput(t *testing.T) {
 
 func TestLight_NonZeroExitIsAnError(t *testing.T) {
 	fc := clock.Fake(time.Unix(1000, 0))
-	res, err := Light(fc, Spec{Name: "git", Args: []string{"no-such-subcommand"}, Timeout: time.Minute})
+	res, err := Light(fc, Spec{Name: "git", Args: []string{"rev-parse", "--verify", "no-such-ref"}, Timeout: time.Minute})
 	if err == nil || res.ExitCode == 0 {
 		t.Fatalf("err %v exit %d, want an error and a non-zero exit", err, res.ExitCode)
 	}
