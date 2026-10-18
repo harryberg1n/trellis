@@ -11,12 +11,14 @@ package mask
 import (
 	"bytes"
 	"unicode/utf8"
+
+	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
 // rowFor is the lexer row of the tool that runs the command: PowerShell for
 // the PowerShell tool, bash for anything else.
 func rowFor(tool string) Language {
-	if tool == "PowerShell" {
+	if tool == kernel.ToolPowerShell {
 		return PowerShell()
 	}
 	return Bash()

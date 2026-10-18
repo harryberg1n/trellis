@@ -76,13 +76,13 @@ type analysis struct {
 
 func analyze(ctx kernel.Context, r run.Runner) *analysis {
 	return &analysis{
-		tool: ctx.Tool, cwd: ctx.Args["cwd"], command: ctx.Args["command"], file: ctx.Args["file_path"], r: r,
+		tool: ctx.Tool, cwd: ctx.Args[kernel.ArgCwd], command: ctx.Args[kernel.ArgCommand], file: ctx.Args[kernel.ArgFilePath], r: r,
 	}
 }
 
 // isShell reports whether the tool runs a command line.
 func (a *analysis) isShell() bool {
-	return (a.tool == "Bash" || a.tool == "PowerShell") && a.command != ""
+	return kernel.IsShellTool(a.tool) && a.command != ""
 }
 
 // gitCalls is every git invocation the command runs.
@@ -159,7 +159,7 @@ func Decide(rows []kernel.Row, ev kernel.Event, ctx kernel.Context, r run.Runner
 	actions := kernel.DecideWith(rows, ev, ctx, func(row kernel.Row, _ kernel.Event, _ kernel.Context) (kernel.Action, bool) {
 		return match(row, a)
 	})
-	if ctx.Args["person"] != "1" || !present(rows, WallsWarnPeople) {
+	if ctx.Args[kernel.ArgPerson] != "1" || !present(rows, WallsWarnPeople) {
 		return actions
 	}
 	for i, act := range actions {

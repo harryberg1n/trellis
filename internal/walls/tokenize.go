@@ -3,13 +3,15 @@ package walls
 import (
 	"strings"
 
+	"github.com/harryberg1n/trellis/internal/kernel"
+
 	"github.com/harryberg1n/trellis/internal/mask"
 )
 
 // isPowerShell reports whether the tool reads its command line as PowerShell:
 // a backslash is a path separator there, the escape is the backtick, a quote of
 // either kind is doubled to be literal, and a here-string spans lines.
-func isPowerShell(tool string) bool { return tool == "PowerShell" }
+func isPowerShell(tool string) bool { return tool == kernel.ToolPowerShell }
 
 // parse splits cmd into the simple commands the shell would run, and returns
 // the command with its strings and comments blanked.

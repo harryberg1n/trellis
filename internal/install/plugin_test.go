@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
 func TestPluginManifest_HooksMirrorTheInstall(t *testing.T) {
@@ -76,5 +79,20 @@ func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("release.yml lacks the VERSION check %q", want)
 		}
+	}
+}
+
+func TestInstall_WiresExactlyTheEventsTheKernelNames(t *testing.T) {
+	want := []string{"PreToolUse", "PostToolUse", "Stop", "SessionStart", "SessionEnd", "UserPromptSubmit"}
+	if got := kernel.InstalledHookEvents(); !slices.Equal(got, want) {
+		t.Errorf("kernel.InstalledHookEvents = %v, want %v", got, want)
+	}
+	entries := wanted("/s/bin/v/trellis")
+	got := make([]string, 0, len(entries))
+	for _, w := range entries {
+		got = append(got, w.Event)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("install wires %v, want %v", got, want)
 	}
 }

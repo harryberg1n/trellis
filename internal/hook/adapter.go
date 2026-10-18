@@ -18,27 +18,27 @@ import (
 func canonical(event string) (string, bool) {
 	switch strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(event)) {
 	case "pretooluse":
-		return "PreToolUse", true
+		return kernel.HookPreToolUse, true
 	case "posttooluse":
-		return "PostToolUse", true
+		return kernel.HookPostToolUse, true
 	case "stop":
-		return "Stop", true
+		return kernel.HookStop, true
 	case "sessionstart":
-		return "SessionStart", true
+		return kernel.HookSessionStart, true
 	case "sessionend":
-		return "SessionEnd", true
+		return kernel.HookSessionEnd, true
 	case "userpromptsubmit":
-		return "UserPromptSubmit", true
+		return kernel.HookUserPromptSubmit, true
 	case "posttoolusefailure":
-		return "PostToolUseFailure", true
+		return kernel.HookPostToolUseFailure, true
 	case "subagentstart":
-		return "SubagentStart", true
+		return kernel.HookSubagentStart, true
 	case "subagentstop":
-		return "SubagentStop", true
+		return kernel.HookSubagentStop, true
 	case "notification":
-		return "Notification", true
+		return kernel.HookNotification, true
 	case "precompact":
-		return "PreCompact", true
+		return kernel.HookPreCompact, true
 	}
 	return "", false
 }
@@ -46,7 +46,7 @@ func canonical(event string) (string, bool) {
 // isFileTool reports whether tool's tool_input names the file it changes.
 func isFileTool(tool string) bool {
 	switch tool {
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+	case kernel.ToolEdit, kernel.ToolWrite, kernel.ToolMultiEdit, kernel.ToolNotebookEdit:
 		return true
 	}
 	return false
@@ -91,7 +91,7 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	out.ev.Session = p.SessionID
 	// A PreToolUse with no session_id is a person at a git hook, not an agent:
 	// the walls warn them where they would deny an agent.
-	person := p.SessionID == "" && name == "PreToolUse"
+	person := p.SessionID == "" && name == kernel.HookPreToolUse
 	if p.SessionID == "" && !person {
 		return out, fmt.Errorf("hook: %s payload has no session_id", name)
 	}
@@ -102,30 +102,30 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	kind := ""
 	var detail map[string]string
 	switch name {
-	case "PostToolUse":
+	case kernel.HookPostToolUse:
 		switch {
 		case isFileTool(p.ToolName):
 			kind = kernel.EvEdit
-		case p.ToolName == "Bash":
+		case p.ToolName == kernel.ToolBash:
 			kind = kernel.EvEdit
 			detail = map[string]string{"bash": "1"}
 		}
-	case "Stop":
+	case kernel.HookStop:
 		kind = kernel.EvTurnAnchored
-	case "SessionEnd":
+	case kernel.HookSessionEnd:
 		kind = kernel.EvSessionUsage
 		detail = map[string]string{}
 		if p.TranscriptPath != "" {
-			detail["transcript"] = p.TranscriptPath
+			detail[kernel.DetailTranscript] = p.TranscriptPath
 		}
 		if p.Reason != "" {
-			detail["reason"] = p.Reason
+			detail[kernel.DetailReason] = p.Reason
 		}
 	}
 	out.ev.Kind = kind
 	out.ev.Detail = detail
 
-	args := map[string]string{"cwd": p.Cwd}
+	args := map[string]string{kernel.ArgCwd: p.Cwd}
 	var repo objects.Repo
 	var rerr error
 	if known != nil {
@@ -136,7 +136,7 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 	switch {
 	case rerr == nil:
 		out.repo = repo
-		args["repo"] = repo.Root
+		args[kernel.ArgRepo] = repo.Root
 		out.ev.Lane = repo.Branch
 	case errors.Is(rerr, objects.ErrNotARepo):
 		// Not a repository: nothing here is ours to record. Silent, not an error.
@@ -146,10 +146,10 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 		return out, rerr
 	}
 	if person {
-		args["person"] = "1"
+		args[kernel.ArgPerson] = "1"
 	}
-	if (p.ToolName == "Bash" || p.ToolName == "PowerShell") && p.input("command") != "" {
-		args["command"] = p.input("command")
+	if kernel.IsShellTool(p.ToolName) && p.input("command") != "" {
+		args[kernel.ArgCommand] = p.input("command")
 	}
 	out.ctx = kernel.Context{Tool: p.ToolName, Args: args}
 
@@ -170,7 +170,7 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 		file = filepath.Join(p.Cwd, file)
 	}
 	file = filepath.Clean(file)
-	args["file_path"] = file
+	args[kernel.ArgFilePath] = file
 	out.file = file
 	rel, err := relIn(out.repo.Root, file)
 	switch {
@@ -179,9 +179,9 @@ func parse(event string, raw []byte, known *objects.Repo) (parsed, error) {
 		// A file outside the repo is not this repo's edit: record nothing.
 		out.ev.Kind, out.ev.Detail = "", nil
 	case err == nil:
-		args["path"] = rel
+		args[kernel.ArgPath] = rel
 		if kind != "" {
-			out.ev.Detail = map[string]string{"path": rel}
+			out.ev.Detail = map[string]string{kernel.DetailPath: rel}
 		}
 	}
 	return out, nil

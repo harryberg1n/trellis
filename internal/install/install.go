@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/harryberg1n/trellis/internal/kernel"
+
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
@@ -39,13 +41,13 @@ func SettingsPath(repo string) string {
 // wanted is the entry for each event, in the order they are installed.
 func wanted(bin string) []eventEntry {
 	type spec struct{ event, matcher string }
-	specs := []spec{
-		{"PreToolUse", toolMatcher},
-		{"PostToolUse", toolMatcher},
-		{"Stop", ""},
-		{"SessionStart", ""},
-		{"SessionEnd", ""},
-		{"UserPromptSubmit", ""},
+	specs := make([]spec, 0, len(kernel.InstalledHookEvents()))
+	for _, event := range kernel.InstalledHookEvents() {
+		matcher := ""
+		if event == kernel.HookPreToolUse || event == kernel.HookPostToolUse {
+			matcher = toolMatcher
+		}
+		specs = append(specs, spec{event, matcher})
 	}
 	out := make([]eventEntry, 0, len(specs))
 	for _, s := range specs {

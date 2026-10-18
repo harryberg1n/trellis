@@ -52,7 +52,7 @@ func preToolUse(deps Deps, event string, p parsed, stdout, stderr io.Writer) int
 	}
 	if len(denies) > 0 && waivedAll(deps, event, p, denies) {
 		for _, a := range denies {
-			note(deps, event, p, kernel.EvWallOverridden, map[string]string{"row": a.RowID})
+			note(deps, event, p, kernel.EvWallOverridden, map[string]string{kernel.DetailRow: a.RowID})
 		}
 		denies = nil
 	}
@@ -63,7 +63,7 @@ func preToolUse(deps Deps, event string, p parsed, stdout, stderr io.Writer) int
 			if row, ok := kernel.Find(deps.Rows, a.RowID); ok && row.Kind == kernel.Policy {
 				kind = kernel.EvPolicyDenied
 			}
-			note(deps, event, p, kind, map[string]string{"row": a.RowID, "line": a.Line, "bytes": strconv.Itoa(len(a.Line))})
+			note(deps, event, p, kind, map[string]string{kernel.DetailRow: a.RowID, kernel.DetailLine: a.Line, kernel.DetailBytes: strconv.Itoa(len(a.Line))})
 			lines = append(lines, a.Line)
 		}
 		_, _ = io.WriteString(stderr, strings.Join(lines, "\n")+"\n")
@@ -83,7 +83,7 @@ func contextJSON(lines []string) string {
 	}
 	b, err := json.Marshal(struct {
 		HookSpecificOutput output `json:"hookSpecificOutput"`
-	}{output{HookEventName: "PreToolUse", AdditionalContext: strings.Join(lines, "\n")}})
+	}{output{HookEventName: kernel.HookPreToolUse, AdditionalContext: strings.Join(lines, "\n")}})
 	if err != nil { // strings always marshal
 		return "{}"
 	}

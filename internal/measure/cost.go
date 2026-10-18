@@ -237,17 +237,17 @@ func RowCosts(f Facts) []RowCost {
 		if d.Kind != kernel.EvWallDenied {
 			continue
 		}
-		id := d.Detail["row"]
+		id := d.Detail[kernel.DetailRow]
 		rc := rows[id]
 		if rc == nil {
 			rc = &RowCost{Row: id}
 			rows[id] = rc
 		}
 		rc.Denies++
-		if n, err := strconv.ParseInt(d.Detail["bytes"], 10, 64); err == nil {
+		if n, err := strconv.ParseInt(d.Detail[kernel.DetailBytes], 10, 64); err == nil {
 			bytesBy[id] += n
 		} else {
-			bytesBy[id] += int64(len(d.Detail["line"]))
+			bytesBy[id] += int64(len(d.Detail[kernel.DetailLine]))
 		}
 		green, resolved := nextGreen(f.Events, d)
 		if !resolved {
@@ -301,7 +301,7 @@ func nextGreen(evs []kernel.Event, deny kernel.Event) (time.Time, bool) {
 	var best time.Time
 	found := false
 	for _, ev := range evs {
-		if ev.Kind == kernel.EvCIResult && ev.Lane == deny.Lane && ev.Detail["result"] == "green" && ev.At.After(deny.At) && (!found || ev.At.Before(best)) {
+		if ev.Kind == kernel.EvCIResult && ev.Lane == deny.Lane && ev.Detail[kernel.DetailResult] == "green" && ev.At.After(deny.At) && (!found || ev.At.Before(best)) {
 			best, found = ev.At, true
 		}
 	}
