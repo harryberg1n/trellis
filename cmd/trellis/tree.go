@@ -27,7 +27,7 @@ verbs:
                           branch, no gh; --rebase makes it a --no-ff merge)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
 
-exit codes of merge and sync: 0 done; 2 when you can fix it and run it again (red or cancelled
+exit codes of merge and sync: 0 done; 130 interrupted; 2 when you can fix it and run it again (red or cancelled
 checks, a conflict, a branch that is behind or blocked, a head that moved); 1 anything else.
 `
 

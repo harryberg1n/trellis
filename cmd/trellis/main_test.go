@@ -212,3 +212,54 @@ func TestReadme_NamesEveryVerbOfTheUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestHonoursInterrupt_OnlyTheVerbsThatReadTheContextCatchSignals(t *testing.T) {
+	for verb, want := range map[string]bool{
+		"tree": true, "update": true, "report": true,
+		"hook": false, "allow": false, "install": false, "doctor": false, "eject": false, "version": false, "help": false,
+	} {
+		if got := honoursInterrupt([]string{verb}); got != want {
+			t.Errorf("honoursInterrupt(%s) = %v, want %v", verb, got, want)
+		}
+	}
+	if honoursInterrupt(nil) {
+		t.Error("no verb installed a signal handler")
+	}
+}
+
+// ctxSpy remembers the context of every child it is asked to run.
+type ctxSpy struct{ got []context.Context }
+
+func (s *ctxSpy) Light(spec runner.Spec) (runner.Result, error) {
+	s.got = append(s.got, spec.Ctx)
+	return runner.Result{}, nil
+}
+
+func TestWithReportContext_GivesTheReportsChildrenTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spy := &ctxSpy{}
+
+	env := withReportContext(reportEnv{Runner: spy}, ctx)
+	_, _ = env.Runner.Light(runner.Spec{Name: "gh"})
+
+	if len(spy.got) != 1 || spy.got[0] != ctx {
+		t.Errorf("the report's child got context %v, want the verb's", spy.got)
+	}
+}
+
+func TestUsage_NamesTheFlagsOfInstallDoctorEjectAndExit130(t *testing.T) {
+	for _, want := range []string{
+		"trellis install [--repo R] [--dry] [--allow-dev]",
+		"trellis doctor [--repo R]",
+		"trellis eject [--repo R]",
+		"130 interrupted",
+	} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("usage lacks %q", want)
+		}
+	}
+	if !strings.Contains(treeUsage, "130 interrupted") {
+		t.Error("tree usage lacks the interrupted exit code")
+	}
+}
