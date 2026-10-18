@@ -16,7 +16,9 @@ func TestParseGitArgs(t *testing.T) {
 			GitArgv{Dirs: []string{"d"}, Config: []string{"k=v"}, Verb: "commit", Rest: []string{"-m", "x"}},
 		},
 		{[]string{"--config-env", "foo=BAR", "reset", "--hard"}, GitArgv{Verb: "reset", Rest: []string{"--hard"}}},
-		{[]string{"--super-prefix", "sub/", "--git-dir=x", "log"}, GitArgv{Verb: "log", Rest: []string{}}},
+		{[]string{"--super-prefix", "sub/", "--git-dir=x", "log"}, GitArgv{GitDir: "x", Verb: "log", Rest: []string{}}},
+		{[]string{"--git-dir", "a/.git", "--work-tree=w", "commit"}, GitArgv{GitDir: "a/.git", WorkTree: "w", Verb: "commit", Rest: []string{}}},
+		{[]string{"--work-tree", "w", "--git-dir=g", "--git-dir=h", "log"}, GitArgv{GitDir: "h", WorkTree: "w", Verb: "log", Rest: []string{}}},
 		{[]string{"-C"}, GitArgv{}},
 		{nil, GitArgv{}},
 	}

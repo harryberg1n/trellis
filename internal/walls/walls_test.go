@@ -622,3 +622,27 @@ func TestPrimaryWrite_ExemptsIgnoredPathsAndTheGitDir(t *testing.T) {
 		t.Errorf("shell write to a tracked-to-be path: denies %+v, want one", d)
 	}
 }
+
+func TestMainCommit_FollowsGitDirAndWorkTreeToTheRepoTheyName(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	gitDir := filepath.ToSlash(filepath.Join(w.primary, ".git"))
+	primary := filepath.ToSlash(w.primary)
+	for _, cmd := range []string{
+		`git --git-dir=` + gitDir + ` commit -m x`,
+		`git --git-dir ` + gitDir + ` --work-tree ` + primary + ` commit -m x`,
+		`git --git-dir="` + gitDir + `" push origin main`,
+		`GIT_DIR=` + gitDir + ` git commit -m x`,
+		`cd ` + primary + ` && git commit -m x`,
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "main-commit" {
+			t.Errorf("%q from a tree: denies %+v, want main-commit", cmd, d)
+		}
+	}
+	// A git dir of the tree itself, named in full, is the tree: no deny.
+	treeGit := filepath.ToSlash(filepath.Join(w.tree, ".git"))
+	if d := verdicts(decide(t, bash(t, w.tree, `git --git-dir=`+treeGit+` commit --dry-run -m x`, true), r), kernel.VerdictDeny); len(d) != 0 {
+		t.Errorf("a tree's own --git-dir: denies %+v, want none", d)
+	}
+}

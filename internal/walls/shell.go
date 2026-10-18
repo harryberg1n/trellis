@@ -298,6 +298,9 @@ func resolve(cwd, p string) string {
 		return ""
 	}
 	rooted := strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)
+	if drive, ok := msysDrive(p); ok {
+		return filepath.Clean(drive)
+	}
 	p = filepath.FromSlash(p)
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)
@@ -597,6 +600,22 @@ func parseGit(seg []word, dir string) (gitCall, bool) {
 	call := gitCall{Dir: dir, Globals: g.Config, Verb: g.Verb, Args: g.Rest}
 	for _, d := range g.Dirs {
 		call.Dir = resolve(call.Dir, d)
+	}
+	// The repository whose branch the call moves is the one the git dir names,
+	// whatever directory it runs in: GIT_DIR=<primary>/.git from a tree commits
+	// on the primary's branch.
+	gitDir := g.GitDir
+	for _, w := range seg[:i] {
+		if v, ok := strings.CutPrefix(w.text, "GIT_DIR="); ok && gitDir == "" {
+			gitDir = v
+		}
+	}
+	if gitDir != "" {
+		gd := resolve(call.Dir, gitDir)
+		if filepath.Base(gd) == ".git" {
+			gd = filepath.Dir(gd)
+		}
+		call.Dir = gd
 	}
 	return call, true
 }
