@@ -52,10 +52,14 @@ func repoArgs(repo string) []string {
 	return []string{"--repo", repo}
 }
 
-// ListIssues lists the issues of repo, open and closed, that match search.
+// ListIssues lists the issues of repo, open and closed, that match search, or
+// all of them (up to the limit) when search is empty.
 func (g GH) ListIssues(repo, search string) ([]Issue, error) {
 	args := append([]string{"issue", "list"}, repoArgs(repo)...)
-	args = append(args, "--search", search, "--state", "all", "--limit", "500", "--json", "number,title,body,createdAt")
+	if search != "" {
+		args = append(args, "--search", search)
+	}
+	args = append(args, "--state", "all", "--limit", "500", "--json", "number,title,body,createdAt")
 	out, err := g.gh(nil, args...)
 	if err != nil {
 		return nil, err

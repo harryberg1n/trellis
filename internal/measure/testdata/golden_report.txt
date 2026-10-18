@@ -4,11 +4,12 @@ trees merged: 4 (defect 1, clean 2, pending 1)
 speed: tree opened to merged, minutes, per ISO week of the merge
   2026-W40  n=3  p50=300.0  p90=1800.0
   2026-W42  n=1  p50=120.0  p90=120.0
-  mean 600.0 minutes, 90% interval [165.0, 1380.0] (bootstrap, seed 1, 2000 resamples)
+  mean 600.0 minutes, n=4, no interval
 
 cost: agent dollars at list price
   trees with usage: 1  total $0.01405
-  per tree: mean $0.01405, 90% interval [$0.01405, $0.01405]
+  transcript lines skipped: 1
+  per tree: mean $0.01405, n=1, no interval
   net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)
   w.main  denies=2  injected_tokens=103  turns=3  unresolved=1  unresolved_turns=1
   w.secrets  denies=1  injected_tokens=10  turns=0  unresolved=1  unresolved_turns=0

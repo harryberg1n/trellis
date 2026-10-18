@@ -218,3 +218,16 @@ func TestGH_MergedPRsArgvAndDecoding(t *testing.T) {
 		t.Errorf("decoded %+v", got)
 	}
 }
+
+func TestGH_ListIssuesWithoutASearchPassesNone(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: testsupport.Stdout(`[]`)}
+
+	if _, err := (GH{Runner: r, Dir: "d"}).ListIssues("o/r", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"issue", "list", "--repo", "o/r", "--state", "all", "--limit", "500", "--json", "number,title,body,createdAt"}
+	if got := r.Specs()[0].Args; !reflect.DeepEqual(got, want) {
+		t.Errorf("argv = %v, want %v", got, want)
+	}
+}

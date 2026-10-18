@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -71,11 +72,11 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
 		return 1
 	}
-	body := measure.Report(facts)
 	if !*issue {
-		_, _ = stdout.Write(body)
+		_, _ = stdout.Write(measure.Report(facts))
 		return 0
 	}
+	body := measure.Published(facts) // filed on a public repository: model ids are sizes
 	title := fmt.Sprintf("report %s %s", id[:8], measure.Week(facts.Now))
 	gh := host.GH{Runner: env.Runner, Dir: root}
 	msg, err := fileReport(gh, title, string(body))
@@ -88,9 +89,14 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 }
 
 // fileReport creates the week's issue, or edits it when one with the title
-// exists.
+// exists. It finds the issue by listing every issue, open and closed, and
+// matching the title exactly: a search index lags an issue just created, and
+// a listing that fails stops the verb before anything is opened.
+//
+// Adapted from aphrollo-tools internal/report/deliver.go:60-62 at 12b3724e.
+// Incident: a search that missed a just-filed issue opened a duplicate.
 func fileReport(gh host.GH, title, body string) (string, error) {
-	found, err := gh.ListIssues(reportRepo, title+" in:title")
+	found, err := gh.ListIssues(reportRepo, "")
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +141,7 @@ func gatherFacts(repo objects.Repo, env reportEnv, stderr io.Writer) (measure.Fa
 	}
 
 	if repo.Remote == "" {
-		_, _ = fmt.Fprintln(stderr, "trellis report: no remote: issues and pull requests not read")
+		noteNotRead(&facts, stderr, "no remote: issues and pull requests not read", "issues and pull requests: no remote")
 	} else {
 		readGitHub(&facts, env, root, stderr)
 	}
@@ -182,9 +188,24 @@ func readUsage(facts *measure.Facts, stderr io.Writer) {
 			raw, err := os.ReadFile(p)
 			if err != nil {
 				_, _ = fmt.Fprintf(stderr, "trellis report: a transcript was not read: %v\n", err)
+			} else {
+				read++
+			}
+			// The subagents' replies join the session's, so one requestId is
+			// one reply wherever it was written.
+			for _, sub := range subagentTranscripts(p) {
+				more, err := os.ReadFile(sub)
+				if err != nil {
+					_, _ = fmt.Fprintf(stderr, "trellis report: a subagent transcript was not read: %v\n", err)
+					facts.SkippedFiles++
+					continue
+				}
+				raw = append(append(raw, '\n'), more...)
+				read++
+			}
+			if len(raw) == 0 {
 				continue
 			}
-			read++
 			facts.Usage = append(facts.Usage, measure.Usage{Tree: s.last, Session: s.id, Transcript: raw, Marks: s.marks})
 		}
 		if read == 0 {
@@ -198,7 +219,7 @@ func readUsage(facts *measure.Facts, stderr io.Writer) {
 func readGitHub(facts *measure.Facts, env reportEnv, root string, stderr io.Writer) {
 	issues, err := host.GH{Runner: env.Runner, Dir: root}.ListIssues("", "escape:")
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "trellis report: escape issues not read: %v\n", err)
+		noteNotRead(facts, stderr, fmt.Sprintf("escape issues not read: %v", err), "escape issues")
 	}
 	for _, is := range issues {
 		facts.Issues = append(facts.Issues, measure.Issue{Number: is.Number, Title: is.Title, Body: is.Body, At: is.CreatedAt})
@@ -206,7 +227,7 @@ func readGitHub(facts *measure.Facts, env reportEnv, root string, stderr io.Writ
 
 	prs, err := host.GH{Runner: env.Runner, Dir: root}.ListMergedPRs("")
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "trellis report: merged pull requests not read: %v\n", err)
+		noteNotRead(facts, stderr, fmt.Sprintf("merged pull requests not read: %v", err), "merged pull requests")
 	}
 	for _, p := range prs {
 		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch})
@@ -285,4 +306,37 @@ func readHistory(r runpkg.Runner, repo objects.Repo, now time.Time, events []ker
 		merges = append(merges, m)
 	}
 	return merges, nil
+}
+
+// noteNotRead says on stderr, and in the report body, a fact the report could
+// not gather: the body is what a filed issue carries, so it must say what it
+// lacks.
+//
+// Adapted from aphrollo-tools internal/report/speed.go:69-74,278-290 at
+// 12b3724e. Incident: a partial report read as a complete one.
+func noteNotRead(facts *measure.Facts, stderr io.Writer, onStderr, inBody string) {
+	_, _ = fmt.Fprintf(stderr, "trellis report: %s\n", onStderr)
+	facts.NotRead = append(facts.NotRead, inBody)
+}
+
+// subagentTranscripts are the transcripts of the subagents a session ran: the
+// files <session>/subagents/*.jsonl beside the session file the hook recorded.
+// A session with none has no such directory.
+//
+// Adapted from aphrollo-tools internal/report/usage_scan.go:164-192 at
+// 12b3724e. Incident: a tree built by a coordinator with builders was charged
+// the coordinator's tokens only.
+func subagentTranscripts(session string) []string {
+	dir := filepath.Join(strings.TrimSuffix(session, ".jsonl"), "subagents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries { // sorted by name: the same bytes every run
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
 }
