@@ -22,8 +22,8 @@ verbs:
                           (a repository with no remote: a --no-ff merge into the default branch, no gh)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work without --force
 
-exit codes of merge: 0 merged; 2 when you can fix it and run it again (red checks, a conflict,
-a branch that is behind, a head that moved); 1 anything else.
+exit codes of merge and sync: 0 done; 2 when you can fix it and run it again (red or cancelled
+checks, a conflict, a branch that is behind or blocked, a head that moved); 1 anything else.
 `
 
 // treeUsageLine is the usage line of a tree verb.

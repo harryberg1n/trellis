@@ -53,7 +53,7 @@ func TestGH_PRViewDecodesAndNamesAMissingPR(t *testing.T) {
 	if err != nil || got != (PRState{Number: 7, State: "OPEN"}) {
 		t.Fatalf("PRView = %+v, %v; want #7 OPEN", got, err)
 	}
-	if want := []string{"pr", "view", "feat", "--json", "number,state,mergeable,mergeStateStatus,headRefOid"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
+	if want := []string{"pr", "view", "feat", "--json", "number,state,mergeable,mergeStateStatus,headRefOid,reviewDecision"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
 		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, want)
 	}
 

@@ -47,6 +47,7 @@ type fixture struct {
 	gh        *testsupport.FakeRunner
 	prSeen    bool              // a pull request exists for the branch
 	mergeable []string          // what successive pr views say; the last repeats; empty is MERGEABLE
+	review    string            // the reviewDecision of the PR
 	head      string            // the PR head sha; "" is the local HEAD of the tree
 	watchFail string            // the text of a failed watch; "" is green
 	noChecks  bool              // the PR has no checks
@@ -86,10 +87,14 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		switch state {
 		case "CONFLICTING":
 			status = "DIRTY"
+		case "BLOCKED":
+			state, status = "MERGEABLE", "BLOCKED"
+		case "UNSTABLE":
+			state, status = "MERGEABLE", "UNSTABLE"
 		case "BEHIND":
 			state, status = "MERGEABLE", "BEHIND"
 		}
-		body := fmt.Sprintf(`{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q}`, state, status, head)
+		body := fmt.Sprintf(`{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}`, state, status, head, f.review)
 		return run.Result{Stdout: []byte(body)}, nil
 	case "pr create":
 		f.prSeen = true
@@ -345,7 +350,7 @@ func TestMerge_ExplainsRedCIWithFailingLines(t *testing.T) {
 	if fx == nil {
 		t.Fatalf("err = %v, want a Fixable red CI", err)
 	}
-	want := "tree merge: 1 check failed\n" +
+	want := "tree merge: 1 check did not pass\n" +
 		"test  https://github.com/o/r/actions/runs/99/job/5\n" +
 		"  --- FAIL: TestA (0.00s)\n" +
 		"  FAIL\tgithub.com/o/r/pkg\t0.01s\n" +
@@ -469,8 +474,8 @@ func TestSync_ConflictListsFilesAndNextStep(t *testing.T) {
 
 	err := Sync(f.env(path))
 
-	if err == nil {
-		t.Fatal("sync of a conflicting tree succeeded")
+	if fixable(err) == nil {
+		t.Fatalf("err = %v, want a Fixable conflict (exit 2)", err)
 	}
 	msg := err.Error()
 	for _, want := range []string{"CONFLICT (content): Merge conflict in README.md", "conflicted: README.md"} {
@@ -625,6 +630,171 @@ func TestRm_FindsTreeMadeWithCustomPath(t *testing.T) {
 	}
 	if got := testiso.Git(t, f.primary, "branch", "--list", "hand/made"); got != "" {
 		t.Errorf("branch = %q, want it deleted", got)
+	}
+}
+
+func TestMerge_RefusesDirtyTree(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	testiso.Write(t, filepath.Join(path, "scratch.txt"), "x")
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || fixable(err) != nil || err.Error() != "tree merge: feat has 1 untracked file; commit or discard it first" {
+		t.Errorf("err = %v, want the one-line dirty refusal (exit 1)", err)
+	}
+	if len(f.gh.Specs()) != 0 {
+		t.Errorf("gh calls = %v, want none", f.ghCalls())
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "-r", "origin/feat"); got != "" {
+		t.Errorf("pushed (%q) from a dirty tree", got)
+	}
+}
+
+func TestMerge_LocalRefusesDirtyTree(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	testiso.Write(t, filepath.Join(path, "scratch.txt"), "x")
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || err.Error() != "tree merge: feat has 1 untracked file; commit or discard it first" {
+		t.Errorf("err = %v, want the one-line dirty refusal", err)
+	}
+	if !exists(path) {
+		t.Errorf("tree removed")
+	}
+}
+
+// failing is a Runner that fails the git children whose arguments start with
+// the given words and runs the rest on Inner.
+type failing struct {
+	Inner run.Runner
+	Verb  []string
+}
+
+func (f failing) Light(spec run.Spec) (run.Result, error) {
+	if spec.Name == "git" && len(spec.Args) >= len(f.Verb) && slices.Equal(spec.Args[:len(f.Verb)], f.Verb) {
+		return run.Result{ExitCode: 128}, errors.New("git: forced failure")
+	}
+	return f.Inner.Light(spec)
+}
+
+func TestMerge_LocalConflictWithUnreadableFileListStillAborts(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "README.md", "mine\n")
+	commitFile(t, f.primary, "README.md", "theirs\n")
+	env := f.env(path)
+	env.Runner = failing{Inner: f.gh, Verb: []string{"diff", "--name-only"}}
+
+	err := Merge(env, "")
+
+	want := "tree merge: conflicts with main (files unknown)\nrun trellis tree sync in the tree, resolve, merge again"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+	if exists(filepath.Join(f.primary, ".git", "MERGE_HEAD")) {
+		t.Errorf("MERGE_HEAD exists: the primary was left merging")
+	}
+}
+
+func TestMerge_LocalAbortFailureIsItsOwnLine(t *testing.T) {
+	f := newLocalFixture(t)
+	path := f.openTree(t)
+	commitFile(t, path, "README.md", "mine\n")
+	commitFile(t, f.primary, "README.md", "theirs\n")
+	env := f.env(path)
+	env.Runner = failing{Inner: f.gh, Verb: []string{"merge", "--abort"}}
+
+	err := Merge(env, "")
+
+	if err == nil || fixable(err) != nil || !strings.HasPrefix(err.Error(), "tree merge: could not abort the merge in "+f.primary+": ") {
+		t.Errorf("err = %v, want the abort failure on its own", err)
+	}
+}
+
+func TestMerge_StillUnknownMergeableAsksToRunAgain(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeable = []string{"UNKNOWN"}
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: mergeability not computed yet by GitHub: run again"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") || slices.Contains(f.ghCalls(), "pr checks") {
+		t.Errorf("gh calls = %v, want no wait or merge", f.ghCalls())
+	}
+}
+
+func TestMerge_CancelledChecksAreListed(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.watchFail = "x"
+	f.checkList = `[{"name":"lint","bucket":"cancel","link":"https://github.com/o/r/actions/runs/98/job/4"}]`
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: 1 check did not pass\ncancelled: lint"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+}
+
+func TestMerge_UnreadableChecksSayWhyWithExitOne(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.watchFail = "x"
+	f.checkList = `[{"name":"lint","bucket":"pass","link":"L"}]`
+
+	err := Merge(f.env(path), "")
+
+	if err == nil || fixable(err) != nil || !strings.HasPrefix(err.Error(), "tree merge: checks could not be read: ") || strings.Contains(err.Error(), "\n") {
+		t.Errorf("err = %q, want one line starting with checks could not be read (exit 1)", err)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") {
+		t.Errorf("merged though the checks could not be read")
+	}
+}
+
+func TestMerge_BlockedByBranchProtectionStopsBeforeMerging(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeable = []string{"MERGEABLE", "BLOCKED"}
+	f.review = "REVIEW_REQUIRED"
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: blocked by branch protection: review required"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") {
+		t.Errorf("merged a blocked PR")
+	}
+}
+
+func TestMerge_UnstableAfterAGreenWatchIsRed(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.mergeable = []string{"MERGEABLE", "UNSTABLE"}
+	f.checkList = `[{"name":"lint","bucket":"cancel","link":"L"}]`
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: 1 check did not pass\ncancelled: lint"
+	if fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want fixable %q", err, want)
+	}
+}
+
+func TestFailingLines_StripsAByteOrderMark(t *testing.T) {
+	got := failingLines("\ufeff2026-10-18T10:00:00.0000000Z --- FAIL: TestA\n")
+	if !reflect.DeepEqual(got, []string{"--- FAIL: TestA"}) {
+		t.Errorf("got %q, want the line without the BOM, job, step and timestamp", got)
 	}
 }
 
