@@ -42,6 +42,24 @@ func TestGH_ListIssuesArgvAndDecoding(t *testing.T) {
 	}
 }
 
+func TestGH_ListMergedPRsArgvAndDecoding(t *testing.T) {
+	r := &fakeRunner{out: `[{"number":5,"headRefName":"feat-x","mergedAt":"2026-10-03T08:00:00Z"}]`}
+
+	got, err := GH{Runner: r, Dir: "d"}.ListMergedPRs("")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []PR{{Number: 5, Branch: "feat-x", MergedAt: time.Date(2026, 10, 3, 8, 0, 0, 0, time.UTC)}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("prs = %+v, want %+v", got, want)
+	}
+	wantArgs := []string{"pr", "list", "--state", "merged", "--limit", "500", "--json", "number,headRefName,mergedAt"}
+	if !reflect.DeepEqual(r.specs[0].Args, wantArgs) {
+		t.Errorf("argv = %v, want %v", r.specs[0].Args, wantArgs)
+	}
+}
+
 func TestGH_CreateAndEditTargetTheRepoAndKeepTheBodyOffTheArgv(t *testing.T) {
 	r := &fakeRunner{out: "https://github.com/o/r/issues/5\n"}
 	g := GH{Runner: r}

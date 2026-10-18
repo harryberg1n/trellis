@@ -145,6 +145,14 @@ func gatherFacts(root string, env reportEnv, stderr io.Writer) (measure.Facts, s
 		facts.Issues = append(facts.Issues, measure.Issue{Number: is.Number, Title: is.Title, Body: is.Body, At: is.CreatedAt})
 	}
 
+	prs, err := host.GH{Runner: env.Runner, Dir: root}.ListMergedPRs("")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "trellis report: merged pull requests not read: %v\n", err)
+	}
+	for _, p := range prs {
+		facts.PRs = append(facts.PRs, measure.PR{Number: p.Number, Branch: p.Branch, MergedAt: p.MergedAt})
+	}
+
 	seen := map[string]bool{}
 	for _, ev := range facts.Events {
 		p := ev.Detail["transcript"]

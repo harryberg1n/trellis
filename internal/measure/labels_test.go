@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
 var t0 = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -118,6 +120,43 @@ func TestLabels_LaneWithoutNameIsKeyedByPR(t *testing.T) {
 	want := map[string]Label{"pr-9": Clean}
 	if got := Labels(f); !reflect.DeepEqual(got, want) {
 		t.Errorf("labels = %v, want %v", got, want)
+	}
+}
+
+func TestLabels_SquashMergeLinksToTheLaneOfItsPRBranch(t *testing.T) {
+	f := Facts{Now: day(30),
+		Merges: []Merge{
+			{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)},
+			{Sha: "eeeeeee5555", Subject: "Revert \"add b\"", Body: "This reverts commit bbbbbbb2222.", At: day(1)},
+		},
+		PRs: []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+	}
+	want := map[string]Label{"feat-x": Defect}
+	if got := Labels(f); !reflect.DeepEqual(got, want) {
+		t.Errorf("labels = %v, want %v", got, want)
+	}
+}
+
+func TestLabels_LaneOnTheMergeWinsOverThePRBranch(t *testing.T) {
+	f := Facts{Now: day(30),
+		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, Lane: "named", At: day(0)}},
+		PRs:    []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+	}
+	want := map[string]Label{"named": Clean}
+	if got := Labels(f); !reflect.DeepEqual(got, want) {
+		t.Errorf("labels = %v, want %v", got, want)
+	}
+}
+
+func TestLeadTimes_SquashMergeUsesThePRBranchLane(t *testing.T) {
+	f := Facts{
+		Merges: []Merge{{Sha: "bbbbbbb2222", Subject: "add b (#5)", PR: 5, At: day(0)}},
+		PRs:    []PR{{Number: 5, Branch: "feat-x", MergedAt: day(0)}},
+		Events: []kernel.Event{{Kind: kernel.EvLaneOpened, Lane: "feat-x", At: day(0).Add(-90 * time.Minute)}},
+	}
+	want := map[string]time.Duration{"feat-x": 90 * time.Minute}
+	if got := LeadTimes(f); !reflect.DeepEqual(got, want) {
+		t.Errorf("lead times = %v, want %v", got, want)
 	}
 }
 

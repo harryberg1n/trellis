@@ -59,6 +59,28 @@ func (g GH) ListIssues(repo, search string) ([]Issue, error) {
 	return issues, nil
 }
 
+// PR is a merged pull request as `gh pr list --json` reports it.
+type PR struct {
+	Number   int       `json:"number"`
+	Branch   string    `json:"headRefName"`
+	MergedAt time.Time `json:"mergedAt"`
+}
+
+// ListMergedPRs lists the merged pull requests of repo.
+func (g GH) ListMergedPRs(repo string) ([]PR, error) {
+	args := append([]string{"pr", "list"}, repoArgs(repo)...)
+	args = append(args, "--state", "merged", "--limit", "500", "--json", "number,headRefName,mergedAt")
+	out, err := g.gh(nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	var prs []PR
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return nil, fmt.Errorf("host: reading gh pr list: %w", err)
+	}
+	return prs, nil
+}
+
 // CreateIssue files an issue and returns the URL gh prints. The body goes in
 // on stdin, not in the argument list.
 func (g GH) CreateIssue(repo, title, body string) (string, error) {
