@@ -70,9 +70,9 @@ func writeBlobContent(gitDir string, content []byte) (string, error) {
 	if err := zw.Close(); err != nil {
 		return "", err
 	}
-	// The object file is read-only, git's own loose-object mode, and its temp
+	// The object file is read-only, git's own loose-object mode (best effort), and its temp
 	// file carries git's tmp_obj_ prefix so git's cleanup knows it.
-	err = store.WriteAtomic(dir, filepath.Base(final), packed.Bytes(), store.WithMode(0o444), store.WithTempPattern("tmp_obj_*"))
+	err = store.WriteAtomic(dir, filepath.Base(final), packed.Bytes(), store.WithSoftMode(0o444), store.WithTempPattern("tmp_obj_*"))
 	if err != nil {
 		// A concurrent writer may have won the rename; the object is then there.
 		if _, serr := os.Stat(final); serr == nil {

@@ -12,6 +12,7 @@ type atomicConfig struct {
 	sync    func(*os.File) error
 	rename  func(oldpath, newpath string) error
 	mode    fs.FileMode
+	soft    bool // a chmod failure is ignored
 	pattern string
 }
 
@@ -28,9 +29,16 @@ func WithRename(f func(oldpath, newpath string) error) AtomicOption {
 	return func(c *atomicConfig) { c.rename = f }
 }
 
-// WithMode sets the published file's permissions; the default is the owner-only
+// WithMode sets the published file's permissions, failing the write if they
+// cannot be set; the default is the owner-only
 // mode os.CreateTemp gives.
 func WithMode(m fs.FileMode) AtomicOption { return func(c *atomicConfig) { c.mode = m } }
+
+// WithSoftMode is WithMode for a file whose mode is a courtesy: a chmod that
+// fails is ignored and the file is published with the temp file's mode.
+func WithSoftMode(m fs.FileMode) AtomicOption {
+	return func(c *atomicConfig) { c.mode, c.soft = m, true }
+}
 
 // WithTempPattern names the temp file by an os.CreateTemp pattern; the default
 // is the target's name, a dot, a random string and ".tmp".
@@ -58,7 +66,9 @@ func WriteAtomic(dir, name string, data []byte, opts ...AtomicOption) error {
 		err = cerr
 	}
 	if err == nil && c.mode != 0 {
-		err = os.Chmod(tmp, c.mode)
+		if cerr := os.Chmod(tmp, c.mode); cerr != nil && !c.soft {
+			err = cerr
+		}
 	}
 	if err == nil {
 		err = c.rename(tmp, filepath.Join(dir, name))
