@@ -19,6 +19,14 @@ var (
 	footerTell = regexp.MustCompile(`(?im)^[ \t]*(\x{1F916}[ \t]*)?generated with[ \t]+\[?(claude|copilot|chatgpt|gemini|cursor)|https?://claude\.(ai|com)/code`)
 	// nameTell is a bare tool or model name used as a word.
 	nameTell = regexp.MustCompile(`(?i)\b(claude|chatgpt|copilot|gemini|codex)\b|\b(sonnet|opus|haiku)[ \t]+[0-9]`)
+	// vendorAddress is a tool vendor's mail address: any address at
+	// anthropic.com, and the noreply addresses the other tools commit with.
+	// Source: aphrollo-tools 12b3724e internal/undercover/tells.go
+	// (vendorAddressExpr, the vendor-address entry). Incident: a commit made
+	// by a tool carried its vendor's address as author, committer or in a line,
+	// past a list that matched only the words. A literal table: a name alone
+	// ("Claude Monet <cm@example.com>") is not a tell.
+	vendorAddress = regexp.MustCompile(`(?i)(?:(?:^|[<\s])[\w.+-]+@(?:[\w-]+\.)*anthropic\.com\b|\bnoreply@openai\.com\b|\bcursoragent@cursor\.com\b|\b\d+\+copilot@users\.noreply\.github\.com\b)`)
 )
 
 // tell is the reason text must not be committed, or "".
@@ -31,6 +39,9 @@ func tell(text string) string {
 	}
 	if m := footerTell.FindString(text); m != "" {
 		return fmt.Sprintf("an attribution footer (%q)", strings.TrimSpace(m))
+	}
+	if m := vendorAddress.FindString(text); m != "" {
+		return fmt.Sprintf("a vendor address (%q)", vendorLabel(m))
 	}
 	for _, loc := range nameTell.FindAllStringIndex(text, -1) {
 		if !identifierLike(text, loc[0], loc[1]) {
@@ -62,3 +73,16 @@ func identifierLike(text string, s, e int) bool {
 func isAlnum(b byte) bool {
 	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
+
+// identityTell is the reason an author or committer identity must not be used,
+// or "": only a vendor's address makes it one, never a name.
+func identityTell(ident string) string {
+	if m := vendorAddress.FindString(ident); m != "" {
+		return fmt.Sprintf("a vendor address (%q)", vendorLabel(m))
+	}
+	return ""
+}
+
+// vendorLabel is the address a vendorAddress match found, without the space or
+// bracket the pattern takes in front of it.
+func vendorLabel(m string) string { return strings.TrimLeft(m, " \t\r\n<") }

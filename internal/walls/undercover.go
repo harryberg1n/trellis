@@ -19,10 +19,10 @@ func undercover(a *analysis) string {
 	if !a.isShell() || !strings.Contains(foldName(a.command), "git") && !strings.Contains(foldName(a.command), "gh") {
 		return ""
 	}
-	var cause string
+	var cause, identity string
 	stdin := false
 	walk(a.tool, a.command, a.cwd, true, func(seg []word, dir string) {
-		if cause != "" {
+		if cause != "" || identity != "" {
 			return
 		}
 		texts, fromStdin := messages(seg, dir)
@@ -33,15 +33,19 @@ func undercover(a *analysis) string {
 				return
 			}
 		}
+		identity = identityCause(seg, dir)
 	})
-	if cause == "" && stdin {
+	if cause == "" && identity == "" && stdin {
 		_, bodies := splitHeredocs(a.command)
 		cause = tell(bodies)
 	}
-	if cause == "" {
-		return ""
+	switch {
+	case cause != "":
+		return "the text of this commit or pull request carries " + cause
+	case identity != "":
+		return "the author or committer identity of this commit carries " + identity
 	}
-	return "the text of this commit or pull request carries " + cause
+	return ""
 }
 
 // messages is the message text a git commit or gh pr create/edit segment
@@ -115,4 +119,44 @@ func readMessage(dir, name string) string {
 	buf := make([]byte, maxMessageFile)
 	n, _ := f.Read(buf)
 	return string(buf[:n])
+}
+
+// identityKeys are the -c settings that name who a commit is by.
+var identityKeys = map[string]bool{"user.name": true, "user.email": true}
+
+// identityCause is the vendor address a git call sets as the identity of its
+// commit, or "": `--author=<ident>`, `--author <ident>`, and `-c user.name=` or
+// `-c user.email=` among the globals of the call. Source: aphrollo-tools
+// 12b3724e internal/undercover/commit.go (CommitTell, which judges the author
+// and committer of a commit), read here before the commit exists.
+func identityCause(seg []word, dir string) string {
+	c, ok := parseGit(seg, dir)
+	if !ok {
+		return ""
+	}
+	for _, kv := range c.Globals {
+		key, value, _ := strings.Cut(kv, "=")
+		if identityKeys[strings.ToLower(strings.TrimSpace(key))] {
+			if why := identityTell(value); why != "" {
+				return why
+			}
+		}
+	}
+	for i := 0; i < len(c.Args); i++ {
+		a := c.Args[i]
+		if a == "--" {
+			break
+		}
+		value, attached := strings.CutPrefix(a, "--author=")
+		if a == "--author" && i+1 < len(c.Args) {
+			value, attached = c.Args[i+1], true
+			i++
+		}
+		if attached {
+			if why := identityTell(value); why != "" {
+				return why
+			}
+		}
+	}
+	return ""
 }

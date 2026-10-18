@@ -48,3 +48,33 @@ func TestTell_AttributionShapesOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestTell_VendorAddressesOnALine(t *testing.T) {
+	deny := map[string]string{
+		"reviewed via noreply@anthropic.com":                 "a vendor address (\"noreply@anthropic.com\")",
+		"Signed-off-by: Jane <jane@anthropic.com>":           "a vendor address (\"jane@anthropic.com\")",
+		"from cursoragent@cursor.com":                        "a vendor address (\"cursoragent@cursor.com\")",
+		"Reply-To: noreply@openai.com":                       "a vendor address (\"noreply@openai.com\")",
+		"175728472+Copilot@users.noreply.github.com signed":  "a vendor address (\"175728472+Copilot@users.noreply.github.com\")",
+		"fix\n\nCo-authored-by: Bot <bot@sub.anthropic.com>": "an attribution trailer (Co-authored-by)",
+	}
+	for text, want := range deny {
+		if got := tell(text); got != want {
+			t.Errorf("tell(%q) = %q, want %q", text, got, want)
+		}
+	}
+	for _, text := range []string{
+		"merge commits come from noreply@github.com",
+		"send it to noreply@example.com",
+		"12345+jane@users.noreply.github.com signed it",
+		"Anthropic Fan <fan@anthropic.community.example>",
+		"Cursor Smith <cursor.smith@example.com>",
+	} {
+		if got := tell(text); got != "" {
+			t.Errorf("tell(%q) = %q, want it allowed", text, got)
+		}
+	}
+	if got := identityTell("Claude Monet <claude.monet@example.com>"); got != "" {
+		t.Errorf("identityTell(a name alone) = %q, want none", got)
+	}
+}

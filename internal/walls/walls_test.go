@@ -704,3 +704,40 @@ func TestUndercover_PRTitleSubjectAndMergeMessageAreRead(t *testing.T) {
 		}
 	}
 }
+
+// A vendor's address is attribution wherever it appears: on a line of the
+// message, as --author, or as the identity a -c sets. A name alone is not.
+func TestUndercover_VendorAddressesInLinesAndIdentities(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	for _, cmd := range []string{
+		"git commit -m " + dq("fix\n\nreviewed via noreply@anthropic.com"),
+		"git commit -m " + dq("fix\n\nSigned-off-by: Jane <jane@anthropic.com>"),
+		"git commit -m " + dq("fix\n\nfrom cursoragent@cursor.com"),
+		"git commit -m " + dq("fix\n\nReply-To: noreply@openai.com"),
+		"git commit -m " + dq("fix\n\n175728472+Copilot@users.noreply.github.com"),
+		"git commit -m x --author=" + dq("Claude <noreply@anthropic.com>"),
+		"git commit -m x --author " + dq("Cursor Agent <cursoragent@cursor.com>"),
+		"git commit -m x --author=" + dq("Copilot <175728472+copilot@users.noreply.github.com>"),
+		"git -c user.email=noreply@anthropic.com commit -m x",
+		"git -c user.name=Bot -c user.email=noreply@openai.com commit -m x",
+		"git -c user.email=cursoragent@cursor.com commit --amend --no-edit",
+	} {
+		d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny)
+		if len(d) != 1 || d[0].RowID != "undercover" {
+			t.Errorf("%q: denies %+v, want one from undercover", cmd, d)
+		}
+	}
+	for _, cmd := range []string{
+		"git commit -m " + dq("merge commits come from noreply@github.com"),
+		"git commit -m x --author=" + dq("Claude Monet <claude.monet@example.com>"),
+		"git commit -m x --author " + dq("Jane Doe <jane@example.com>"),
+		"git -c user.name=Claude -c user.email=claude.shannon@bell-labs.com commit -m x",
+		"git -c user.email=12345+jane@users.noreply.github.com commit -m x",
+		"git -c core.pager=cat log -1",
+	} {
+		if d := verdicts(decide(t, bash(t, w.tree, cmd, true), r), kernel.VerdictDeny); len(d) != 0 {
+			t.Errorf("%q: denies %+v, want none", cmd, d)
+		}
+	}
+}
