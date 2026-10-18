@@ -96,8 +96,18 @@ func record(deps Deps, p *parsed) error {
 		return storeMissing(deps)
 	}
 	ev.At = now(deps)
-	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx); err != nil {
+	// Edits are lazy: no fsync on the edit path. The turn boundary is where the
+	// log and checkpoint are made durable, and Stop re-anchors the tree from
+	// disk. Stop and SessionEnd append lazily and then Sync, which is the same
+	// durability as a durable append with half the fsyncs.
+	boundary := ev.Kind == kernel.EvTurnAnchored || ev.Kind == kernel.EvSessionUsage
+	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, engine.Lazy); err != nil {
 		return fmt.Errorf("hook: recording %s: %w", ev.Kind, err)
+	}
+	if boundary {
+		if err := deps.Store.Sync(); err != nil {
+			return fmt.Errorf("hook: syncing after %s: %w", ev.Kind, err)
+		}
 	}
 	return nil
 }
