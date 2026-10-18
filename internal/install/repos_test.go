@@ -29,8 +29,51 @@ func TestInstall_RecordsTheRepo(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []string{want}) {
 		t.Fatalf("Repos = %v, %v; want [%s] once", got, err, want)
 	}
-	if file := readFile(t, filepath.Join(f.root, "repos.txt")); file != want+"\n" {
-		t.Errorf("repos.txt = %q, want %q", file, want+"\n")
+	if file, wantFile := readFile(t, filepath.Join(f.root, "repos.txt")), "# trellis repos v1\n"+want+"\n"; file != wantFile {
+		t.Errorf("repos.txt = %q, want %q", file, wantFile)
+	}
+}
+
+func TestRepos_OnlyAnInstallMarksTheRecordComplete(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	if done, err := ReposComplete(root); err != nil || done {
+		t.Fatalf("ReposComplete with no record = %v, %v; want false", done, err)
+	}
+	legacy := filepath.Join(t.TempDir(), "legacy")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "repos.txt"), []byte(legacy+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := ReposComplete(root); done {
+		t.Error("a record with no marker line is complete")
+	}
+	if err := ForgetRepo(root, filepath.Join(t.TempDir(), "never-recorded")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ForgetRepo(root, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := ReposComplete(root); done {
+		t.Error("forgetting a repo marked the record complete")
+	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	if err := RecordRepo(root, other); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := ReposComplete(root); err != nil || !done {
+		t.Errorf("after RecordRepo ReposComplete = %v, %v; want true", done, err)
+	}
+	if got, err := Repos(root); err != nil || !reflect.DeepEqual(got, []string{store.Canonical(other)}) {
+		t.Errorf("Repos = %v, %v; want the marker line left out", got, err)
+	}
+	if err := ForgetRepo(root, other); err != nil {
+		t.Fatal(err)
+	}
+	if done, _ := ReposComplete(root); !done {
+		t.Error("forgetting a repo dropped the marker")
 	}
 }
 
