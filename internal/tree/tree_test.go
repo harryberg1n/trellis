@@ -651,6 +651,24 @@ func TestMerge_RefusesDirtyTree(t *testing.T) {
 	}
 }
 
+func TestMerge_RefusesTreeTheCheckDirtied(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+
+	err := Merge(f.env(path), "echo x>out.txt")
+
+	want := "tree merge: the check left 1 untracked file in feat; commit, ignore or clean them first"
+	if err == nil || fixable(err) != nil || err.Error() != want {
+		t.Errorf("err = %v, want %q (exit 1)", err, want)
+	}
+	if len(f.gh.Specs()) != 0 {
+		t.Errorf("gh calls = %v, want none", f.ghCalls())
+	}
+	if got := testiso.Git(t, f.primary, "branch", "--list", "-r", "origin/feat"); got != "" {
+		t.Errorf("pushed (%q) after the check dirtied the tree", got)
+	}
+}
+
 func TestMerge_LocalRefusesDirtyTree(t *testing.T) {
 	f := newLocalFixture(t)
 	path := f.openTree(t)

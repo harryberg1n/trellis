@@ -274,6 +274,15 @@ func runCheck(env Env, dir, name, cmd string) error {
 	}
 	env.record(checkEvent(name, "green"))
 	env.say("check passed")
+	// a check that writes artifacts must not send the merge on: the push would
+	// leave them out and the removal after the merge would refuse the tree
+	dirty, err := walls.Dirty(env.git(), dir)
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	if dirty != "" {
+		return fmt.Errorf("tree merge: the check left %s in %s; commit, ignore or clean them first", dirty, name)
+	}
 	return nil
 }
 
