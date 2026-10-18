@@ -11,6 +11,7 @@ import (
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/store"
+	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 var t0 = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
@@ -271,5 +272,48 @@ func TestEngine_CheckpointAheadOfTheLogIsRebuiltFromTheLog(t *testing.T) {
 	want := `{"last_seq":2,"arms":{"tree/a":{}},"trees":{"tree/a":1}}`
 	if string(raw) != want {
 		t.Errorf("state.json = %s, want %s", raw, want)
+	}
+}
+
+func TestEngine_StampRunsInsideTheLockBeforeTheAppend(t *testing.T) {
+	s, _, _ := open(t)
+	stamp := WithStamp(func(e kernel.Event) kernel.Event {
+		e.TookMS = 42
+		return e
+	})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}, stamp); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Read(1)
+	if err != nil || len(got) != 1 || got[0].TookMS != 42 {
+		t.Fatalf("Read = %+v, %v; want one event with TookMS 42", got, err)
+	}
+}
+
+func TestEngine_StampRunsOnTheParkedEventWhenTheLockTimesOut(t *testing.T) {
+	s, dir, fc := open(t)
+	release, err := s.Hold()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	stamp := WithStamp(func(e kernel.Event) kernel.Event {
+		e.TookMS = kernel.Millis(fc.Now().Sub(t0))
+		return e
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := Step(s, nil, ev(kernel.EvEdit, "tree/p"), kernel.Context{}, stamp)
+		done <- err
+	}()
+	fc.BlockUntil(1)
+	fc.Advance(store.LockTimeout)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	parked := testsupport.PendingEvents(t, dir)
+	if len(parked) != 1 || parked[0].TookMS != 2000 {
+		t.Fatalf("parked = %+v, want one event with TookMS 2000 (the 2s lock wait)", parked)
 	}
 }

@@ -33,6 +33,12 @@ type Deps struct {
 	// Repo is the repository the caller already located from the payload's
 	// cwd; parse then does not locate it again. nil means locate it.
 	Repo *objects.Repo
+	// Start is when the hook command began, read from the real clock once at its
+	// entry. Each event Run appends carries the time from Start to just before
+	// the append: lock wait and anchor included; append, checkpoint, fsync and
+	// process start excluded (the last is a few milliseconds). The zero
+	// value leaves events unmeasured.
+	Start time.Time
 }
 
 // Run reads one payload from stdin and records it. It returns the exit code,
@@ -141,7 +147,7 @@ func record(deps Deps, p *parsed) error {
 	// disk. Stop and SessionEnd append lazily and then Sync, which is the same
 	// durability as a durable append with half the fsyncs.
 	boundary := ev.Kind == kernel.EvTurnAnchored || ev.Kind == kernel.EvSessionUsage
-	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, engine.WithDurability(store.Lazy)); err != nil {
+	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, engine.WithDurability(store.Lazy), stampTook(deps)); err != nil {
 		return fmt.Errorf("hook: recording %s: %w", ev.Kind, err)
 	}
 	if boundary {
@@ -157,6 +163,23 @@ func storeMissing(deps Deps) error {
 		return fmt.Errorf("hook: no store: %w", deps.Err)
 	}
 	return errors.New("hook: no store")
+}
+
+// tookMS is the time from deps.Start to now, 0 when there is no start.
+func tookMS(deps Deps) int64 {
+	if deps.Start.IsZero() {
+		return 0
+	}
+	return kernel.Millis(now(deps).Sub(deps.Start))
+}
+
+// stampTook sets TookMS on the event inside the lock, just before it is
+// appended, so the wait for the lock is part of it.
+func stampTook(deps Deps) engine.Option {
+	return engine.WithStamp(func(ev kernel.Event) kernel.Event {
+		ev.TookMS = tookMS(deps)
+		return ev
+	})
 }
 
 func now(deps Deps) time.Time {
@@ -178,6 +201,7 @@ func fail(deps Deps, event string, p parsed, err error) {
 		Tree:    p.ev.Tree,
 		Session: p.ev.Session,
 		At:      now(deps),
+		TookMS:  tookMS(deps),
 		Detail:  map[string]string{"error": err.Error(), "event": event},
 	}
 	if p.ev.Kind != "" {

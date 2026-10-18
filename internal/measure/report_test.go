@@ -89,3 +89,28 @@ func TestReport_NamesUnpricedTokensAndMissingTranscripts(t *testing.T) {
 		}
 	}
 }
+
+func TestReport_HookLatencyBlock(t *testing.T) {
+	evs := tooks(kernel.EvWallDenied, 3, 11)
+	evs = append(evs, tooks(kernel.EvEdit, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40)...)
+	evs = append(evs, tooks(kernel.EvTurnAnchored, 40, 180, 400)...)
+	evs = append(evs, tooks(kernel.EvSessionUsage, 9)...)
+	got := string(Report(Facts{Now: day(20), Events: evs}))
+	want := "\n" +
+		"hook latency: p50 / p95 ms over 26 timed events (lock wait and anchor included; append, checkpoint, fsync and process start excluded)\n" +
+		"  PreToolUse (denies only) p50 3    p95 11   n 2     (no criterion)\n" +
+		"  PostToolUse              p50 20   p95 38   n 20    (criterion 20: over)\n" +
+		"  Stop                     p50 180  p95 400  n 3     (criterion 300: over)\n" +
+		"  SessionEnd               p50 9    p95 9    n 1     (no criterion)\n" +
+		"\nas of "
+	if !strings.Contains(got, want) {
+		t.Fatalf("report lacks the block\n--- want\n%s\n--- got\n%s", want, got)
+	}
+}
+
+func TestReport_HookLatencyNoneWhenNoEventCarriesATime(t *testing.T) {
+	got := string(Report(Facts{Now: day(20), Events: tooks(kernel.EvEdit, 0)}))
+	if !strings.Contains(got, "\nhook latency: none\n\nas of ") {
+		t.Fatalf("report lacks the none line:\n%s", got)
+	}
+}

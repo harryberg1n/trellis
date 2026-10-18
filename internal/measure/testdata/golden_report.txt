@@ -13,4 +13,6 @@ cost: agent dollars at list price
   w.main  denies=2  injected_tokens=103  turns=3  unresolved=1  unresolved_turns=1
   w.secrets  denies=1  injected_tokens=10  turns=0  unresolved=1  unresolved_turns=0
 
+hook latency: none
+
 as of 2026-10-21T12:00:00Z

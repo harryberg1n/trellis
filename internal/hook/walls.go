@@ -120,7 +120,7 @@ func note(deps Deps, event string, p parsed, kind string, detail map[string]stri
 		fail(deps, event, p, storeMissing(deps))
 		return
 	}
-	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx); err != nil {
+	if _, err := engine.Step(deps.Store, deps.Rows, ev, p.ctx, stampTook(deps)); err != nil {
 		fail(deps, event, p, fmt.Errorf("hook: recording %s: %w", kind, err))
 	}
 }

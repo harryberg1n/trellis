@@ -19,6 +19,10 @@ import (
 // missing event is a wiring mistake and exits 1, which the harness shows to
 // the user without blocking the agent.
 func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code int) {
+	// The one real-clock read for the hook's timing: every event Run appends
+	// carries the time since this start. Process start to main is not in it and
+	// is a few milliseconds.
+	start := clock.Real().Now()
 	// Whatever panics below, the agent must not see a trace or a blocking exit.
 	defer func() {
 		if r := recover(); r != nil {
@@ -35,6 +39,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	}
 	clk := clock.Real()
 	deps := hook.Deps{
+		Start:  start,
 		Runner: runner.Exec{Clock: clk},
 		Clock:  clk,
 		Rows:   walls.Rows(),
