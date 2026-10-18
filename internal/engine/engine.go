@@ -9,13 +9,25 @@ import (
 )
 
 // Option changes how Step writes.
-type Option func(*store.Durability)
+type Option func(*config)
+
+// config is what the options set.
+type config struct {
+	mode  store.Durability
+	stamp func(kernel.Event) kernel.Event
+}
 
 // WithDurability sets whether Step fsyncs its append and checkpoint. The
 // default is store.Durable; with store.Lazy the caller flushes later with
 // Store.Sync.
 func WithDurability(d store.Durability) Option {
-	return func(mode *store.Durability) { *mode = d }
+	return func(c *config) { c.mode = d }
+}
+
+// WithStamp runs f on the event inside the lock, after the decision and just
+// before the append, so what f reads (a clock) includes the wait for the lock.
+func WithStamp(f func(kernel.Event) kernel.Event) Option {
+	return func(c *config) { c.stamp = f }
 }
 
 // Step records ev and returns the actions the rows give it. Under the repo
@@ -25,13 +37,13 @@ func WithDurability(d store.Durability) Option {
 // free in time the event is parked, never dropped, and Step returns the
 // actions for the event as given.
 func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context, opts ...Option) ([]kernel.Action, error) {
-	mode := store.Durable
+	cfg := config{mode: store.Durable}
 	for _, o := range opts {
-		o(&mode)
+		o(&cfg)
 	}
 	var actions []kernel.Action
 	err := s.Locked(func(tx *store.Tx) error {
-		tx.SetDurability(mode)
+		tx.SetDurability(cfg.mode)
 		cp, err := tx.Checkpoint()
 		if err != nil {
 			return err
@@ -83,6 +95,9 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		}
 		ev = stamp(ev)
 		actions = kernel.Decide(rows, ev, ctx)
+		if cfg.stamp != nil {
+			ev = cfg.stamp(ev)
+		}
 		if _, err := tx.Append(ev); err != nil {
 			return err
 		}
@@ -90,6 +105,9 @@ func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context
 		return tx.Save(cp)
 	})
 	if errors.Is(err, store.ErrLockTimeout) {
+		if cfg.stamp != nil {
+			ev = cfg.stamp(ev) // the wait for the lock is what timed out
+		}
 		if perr := s.Park(ev); perr != nil {
 			return nil, perr
 		}

@@ -273,3 +273,18 @@ func TestEngine_CheckpointAheadOfTheLogIsRebuiltFromTheLog(t *testing.T) {
 		t.Errorf("state.json = %s, want %s", raw, want)
 	}
 }
+
+func TestEngine_StampRunsInsideTheLockBeforeTheAppend(t *testing.T) {
+	s, _, _ := open(t)
+	stamp := WithStamp(func(e kernel.Event) kernel.Event {
+		e.TookMS = 42
+		return e
+	})
+	if _, err := Step(s, nil, ev(kernel.EvEdit, "tree/a"), kernel.Context{}, stamp); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Read(1)
+	if err != nil || len(got) != 1 || got[0].TookMS != 42 {
+		t.Fatalf("Read = %+v, %v; want one event with TookMS 42", got, err)
+	}
+}

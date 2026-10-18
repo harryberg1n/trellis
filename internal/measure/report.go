@@ -69,6 +69,8 @@ func Report(f Facts) []byte {
 		p("  %s  denies=%d  injected_tokens=%d  turns=%d  unresolved=%d  unresolved_turns=%d", r.Row, r.Denies, r.InjectedTokens, r.Turns, r.Unresolved, r.UnresolvedTurns)
 	}
 	p("")
+	latencyBlock(p, Latency(f.Events))
+	p("")
 	p("as of %s", f.Now.UTC().Format(time.RFC3339))
 	return b.Bytes()
 }
@@ -82,4 +84,30 @@ func mean(xs []float64) float64 {
 		s += x
 	}
 	return s / float64(len(xs))
+}
+
+// latencyBlock prints the hook latency lines. The times are the hooks' own,
+// from the start of the hook command to just before its event was appended,
+// so lock wait and the turn anchor are inside and process start is not.
+func latencyBlock(p func(string, ...any), lat []HookLatency) {
+	if len(lat) == 0 {
+		p("hook latency: none")
+		return
+	}
+	var n int
+	for _, l := range lat {
+		n += l.N
+	}
+	p("hook latency: p50 / p95 ms over %d events (lock wait and anchor included; process start excluded)", n)
+	for _, l := range lat {
+		verdict := "(no criterion)"
+		if l.Criterion > 0 {
+			ok := "ok"
+			if !l.Holds {
+				ok = "over"
+			}
+			verdict = fmt.Sprintf("(criterion %d: %s)", l.Criterion, ok)
+		}
+		p("  %-12s p50 %-2d p95 %-3d n %-5d %s", l.Hook, l.P50, l.P95, l.N, verdict)
+	}
 }

@@ -40,4 +40,17 @@ type Event struct {
 	At      time.Time         `json:"at"`
 	Arms    map[string]string `json:"arms,omitempty"`
 	Detail  map[string]string `json:"detail,omitempty"`
+	// TookMS is how long a hook ran, in whole milliseconds rounded up, from the
+	// start of `trellis hook` to just before this event was appended. 0 means
+	// not measured: records written before it existed, and events no hook wrote.
+	TookMS int64 `json:"took_ms,omitempty"`
+}
+
+// Millis is d in whole milliseconds, rounded up so that a hook that took
+// something is never recorded as not measured. A d at or below zero is 0.
+func Millis(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64((d + time.Millisecond - 1) / time.Millisecond)
 }
