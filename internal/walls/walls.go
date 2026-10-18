@@ -163,7 +163,8 @@ func Decide(rows []kernel.Row, ev kernel.Event, ctx kernel.Context, r run.Runner
 		return actions
 	}
 	for i, act := range actions {
-		if act.Verdict != kernel.VerdictDeny || kindOf(rows, act.RowID) != kernel.Wall {
+		// An id no row has is left as it is: only a known wall softens.
+		if row, ok := kernel.Find(rows, act.RowID); act.Verdict != kernel.VerdictDeny || !ok || row.Kind != kernel.Wall {
 			continue
 		}
 		if act.RowID == Secrets && present(rows, SecretsEveryone) {
@@ -176,21 +177,8 @@ func Decide(rows []kernel.Row, ev kernel.Event, ctx kernel.Context, r run.Runner
 
 // present reports whether the table has the row and it acts.
 func present(rows []kernel.Row, id string) bool {
-	for _, r := range rows {
-		if r.ID == id {
-			return r.State == kernel.Admitted || r.State == kernel.LiveAB
-		}
-	}
-	return false
-}
-
-func kindOf(rows []kernel.Row, id string) kernel.Kind {
-	for _, r := range rows {
-		if r.ID == id {
-			return r.Kind
-		}
-	}
-	return kernel.Check
+	r, ok := kernel.Find(rows, id)
+	return ok && (r.State == kernel.Admitted || r.State == kernel.LiveAB)
 }
 
 // onDefault reports whether this is the primary checkout with the default
