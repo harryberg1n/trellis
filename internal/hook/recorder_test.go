@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"github.com/harryberg1n/trellis/internal/testsupport"
 	"os"
 	"path/filepath"
@@ -313,5 +314,82 @@ func TestRecorder_SpawnShimSeesTheStopAnchor(t *testing.T) {
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
 	if n := spawned(); n == 0 {
 		t.Error("Stop started git 0 times: the shim would not catch an Edit that spawned")
+	}
+}
+
+func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
+	e := newEnv(t)
+	repo := filepath.Join(t.TempDir(), "fresh")
+	testsupport.Git(t, filepath.Dir(repo), "init", "-q", "-b", "trunk", repo)
+	f := filepath.Join(repo, "a.txt")
+	testsupport.Write(t, f, "a\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(repo, f, "a\n")))
+	e.do(t, "Stop", fill(readShape(t, "stop"), vars(repo, "", "")))
+
+	evs := e.events(t)
+	if got, want := kinds(evs), []string{"edit", "turn.anchored"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kinds %v, want %v", got, want)
+	}
+	if evs[0].Lane != "trunk" {
+		t.Errorf("lane %q, want trunk", evs[0].Lane)
+	}
+	if files := testsupport.Git(t, repo, "ls-tree", "-r", "--name-only", "refs/trellis/replay/trunk"); files != "a.txt" {
+		t.Errorf("anchored tree holds %q, want a.txt", files)
+	}
+}
+
+func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
+	e := newEnv(t)
+	wt := filepath.Join(filepath.Dir(e.repo), "wt")
+	testsupport.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	f := filepath.Join(wt, "w.txt")
+	testsupport.Write(t, f, "w\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(wt, f, "w\n")))
+	e.do(t, "Stop", fill(readShape(t, "stop"), vars(wt, "", "")))
+
+	evs := e.events(t)
+	if got, want := kinds(evs), []string{"edit", "turn.anchored"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kinds %v, want %v", got, want)
+	}
+	if evs[0].Lane != "side/lane" || evs[0].Detail["path"] != "w.txt" || evs[1].Lane != "side/lane" {
+		t.Errorf("events %+v, want lane side/lane and path w.txt", evs)
+	}
+	if got := testsupport.Git(t, e.repo, "rev-parse", "--verify", "-q", "refs/trellis/replay/side--lane"); got == "" {
+		t.Error("no replay ref for side/lane")
+	}
+}
+
+func TestRecorder_NestedCwdFindsRoot(t *testing.T) {
+	e := newEnv(t)
+	sub := filepath.Join(e.repo, "pkg", "deep")
+	f := filepath.Join(sub, "n.txt")
+	testsupport.Write(t, f, "n\n")
+	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(sub, f, "n\n")))
+
+	evs := e.events(t)
+	if len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Lane != "main" || evs[0].Detail["path"] != "pkg/deep/n.txt" {
+		t.Errorf("events %+v, want one edit on main for pkg/deep/n.txt", evs)
+	}
+}
+
+func TestRecorder_SyncFailureBecomesInternalError(t *testing.T) {
+	e := newEnv(t)
+	e.st.SetFsync(func(*os.File) error { return errors.New("disk full") })
+	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
+
+	m, _ := filepath.Glob(filepath.Join(e.fallback, "events.pending", "*.json"))
+	if len(m) != 1 {
+		t.Fatalf("fallback holds %v, want the internal.error", m)
+	}
+	raw, err := os.ReadFile(m[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ev kernel.Event
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != "internal.error" || !strings.Contains(ev.Detail["error"], "syncing after turn.anchored") || !strings.Contains(ev.Detail["error"], "disk full") {
+		t.Errorf("fallback event %+v, want an internal.error naming the failed sync", ev)
 	}
 }
