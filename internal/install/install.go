@@ -1,0 +1,233 @@
+package install
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// timeoutSeconds is every trellis hook's timeout. A hook that cannot finish
+// in this time is the harness's to cut off, never the agent's to wait on.
+const timeoutSeconds = 10
+
+// toolMatcher is the PreToolUse and PostToolUse matcher: the tools that edit
+// files or run commands.
+const toolMatcher = "Edit|Write|Bash|PowerShell"
+
+// Options says where to install and what.
+type Options struct {
+	Repo    string // the repository root
+	Root    string // the state root
+	Exe     string // the running binary, the source of the pinned copy
+	Version string // buildinfo.Version of that binary
+	Dry     bool   // report the actions without performing them
+}
+
+// SettingsPath is the file trellis installs into: the project-local settings,
+// which the harness keeps out of version control, so a consumer repository's
+// tracked files and CI never change.
+func SettingsPath(repo string) string {
+	return filepath.Join(repo, ".claude", "settings.local.json")
+}
+
+// wanted is the entry for each event, in the order they are installed.
+func wanted(bin string) []eventEntry {
+	type spec struct{ event, matcher string }
+	specs := []spec{
+		{"PreToolUse", toolMatcher}, {"PostToolUse", toolMatcher},
+		{"Stop", ""}, {"SessionStart", ""}, {"SessionEnd", ""}, {"UserPromptSubmit", ""},
+	}
+	out := make([]eventEntry, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, eventEntry{Event: s.event, Entry: Entry{
+			Matcher: s.matcher,
+			Hooks:   []Hook{{Type: "command", Command: Command(bin, s.event), Timeout: timeoutSeconds}},
+		}})
+	}
+	return out
+}
+
+// ownedBy is the ownership test for a state root: any hook whose executable
+// is a pinned trellis binary under it.
+func ownedBy(root string) func(Entry) bool {
+	return func(e Entry) bool {
+		for _, h := range e.Hooks {
+			if _, ok := Owned(h.Command, root); ok {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// readSettings returns the settings file's bytes, none when it is absent.
+func readSettings(repo string) ([]byte, error) {
+	b, err := os.ReadFile(SettingsPath(repo))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// Install pins the running binary under the state root and points the repo's
+// hooks at the pinned copy. It validates everything before it writes anything,
+// and returns one line per action; with Dry the lines start "would " and
+// nothing is written.
+func Install(o Options) ([]string, error) {
+	if o.Version == "" || o.Version == ".." || strings.ContainsAny(o.Version, `/\`) {
+		return nil, fmt.Errorf("version %q cannot name a directory", o.Version)
+	}
+	bin := BinPath(o.Root, o.Version, filepath.Ext(o.Exe))
+	doc, err := readSettings(o.Repo)
+	if err != nil {
+		return nil, err
+	}
+	next, hookActions, err := addEntries(doc, wanted(bin), ownedBy(o.Root))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+	}
+	src, err := os.ReadFile(o.Exe)
+	if err != nil {
+		return nil, err
+	}
+	have, _ := os.ReadFile(bin) // absent or unreadable: copy over it
+	same := bytes.Equal(have, src)
+
+	verb := "copy"
+	if same {
+		verb = "keep"
+	}
+	actions := append([]string{verb + " binary " + bin}, hookActions...)
+	if o.Dry {
+		for i, a := range actions {
+			actions[i] = "would " + a
+		}
+		return actions, nil
+	}
+	if !same {
+		if err := pin(bin, src); err != nil {
+			return nil, err
+		}
+	}
+	if err := writeSettings(o.Repo, next); err != nil {
+		return nil, err
+	}
+	return actions, nil
+}
+
+// pin writes the binary through a temp file so a half copy never sits at the
+// path a hook runs.
+func pin(bin string, content []byte) error {
+	dir := filepath.Dir(bin)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".pin-*")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(content)
+	cerr := tmp.Close()
+	if err := errors.Join(werr, cerr, os.Chmod(tmp.Name(), 0o755)); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), bin); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
+}
+
+func writeSettings(repo string, doc []byte) error {
+	path := SettingsPath(repo)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, doc, 0o644)
+}
+
+// Eject removes the entries Install added, from this repo's settings, and
+// returns one line per removal. Everything else in the file is left byte for
+// byte. The pinned binaries stay: other repos may point at them.
+func Eject(o Options) ([]string, error) {
+	doc, err := readSettings(o.Repo)
+	if err != nil || doc == nil {
+		return nil, err
+	}
+	next, actions, err := removeEntries(doc, ownedBy(o.Root))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
+	}
+	if len(actions) == 0 {
+		return nil, nil
+	}
+	return actions, writeSettings(o.Repo, next)
+}
+
+// Doctor returns one line per problem: no install, a hook pinned to another
+// version than the running binary, a pinned binary gone, a state root that
+// cannot be written. No lines means all is well.
+func Doctor(o Options) []string {
+	var problems []string
+	doc, err := readSettings(o.Repo)
+	if err == nil {
+		var found []located
+		if found, err = walkEntries(doc); err == nil {
+			problems = append(problems, checkHooks(found, o)...)
+		}
+	}
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("cannot read %s: %v", SettingsPath(o.Repo), err))
+	}
+	if !writable(o.Root) {
+		problems = append(problems, "state root not writable: "+o.Root)
+	}
+	return problems
+}
+
+func checkHooks(found []located, o Options) []string {
+	var problems []string
+	seen := map[string]bool{}
+	ours := 0
+	for _, l := range found {
+		for _, h := range l.Entry.Hooks {
+			version, ok := Owned(h.Command, o.Root)
+			if !ok {
+				continue
+			}
+			ours++
+			bin, _ := executable(h.Command)
+			if version != o.Version && !seen[version] {
+				seen[version] = true
+				problems = append(problems, fmt.Sprintf("plugin %s, binary %s", version, o.Version))
+			}
+			if _, err := os.Stat(bin); err != nil && !seen[bin] {
+				seen[bin] = true
+				problems = append(problems, "pinned binary missing: "+bin)
+			}
+		}
+	}
+	if ours == 0 {
+		problems = append(problems, "trellis is not installed: "+SettingsPath(o.Repo))
+	}
+	return problems
+}
+
+// writable reports whether a file can be made and removed in the root,
+// creating the root when it is absent.
+func writable(root string) bool {
+	if os.MkdirAll(root, 0o755) != nil {
+		return false
+	}
+	f, err := os.CreateTemp(root, ".doctor-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	cerr := f.Close()
+	return errors.Join(cerr, os.Remove(name)) == nil
+}
