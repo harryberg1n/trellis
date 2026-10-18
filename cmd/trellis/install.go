@@ -92,6 +92,9 @@ func installOptions(repoFlag, configFlag string, env installEnv) (install.Option
 		return install.Options{}, err
 	}
 	opts := install.Options{ConfigDir: configDir, Exe: env.Exe, Version: buildinfo.Version, Clock: env.Clock}
+	// Repo is the checkout the verb runs in: the marker is its own. The state root
+	// and the record are the primary's, which install.Options resolves itself.
+	primary := "" // the primary checkout: it keys the state root and the record
 	repo, err := objects.Open(abs)
 	switch {
 	case errors.Is(err, objects.ErrNotARepo) && repoFlag == "":
@@ -99,9 +102,9 @@ func installOptions(repoFlag, configFlag string, env installEnv) (install.Option
 	case err != nil:
 		return install.Options{}, err
 	default:
-		opts.Repo = repo.PrimaryRoot()
+		opts.Repo, primary = repo.Root, repo.PrimaryRoot()
 	}
-	if opts.Root, err = store.Root(opts.Repo); err != nil {
+	if opts.Root, err = store.Root(primary); err != nil {
 		return install.Options{}, err
 	}
 	return opts, nil

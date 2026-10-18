@@ -270,6 +270,7 @@ func TestTreeUsage_NamesEveryRefusalThatExitsTwo(t *testing.T) {
 		"commits on origin the tree lacks",
 		"a head that moved after the checks judged it",
 		"still queued after 30 minutes",
+		"an untracked file in the primary at a path the tree changes",
 	} {
 		if !strings.Contains(treeUsage, want) {
 			t.Errorf("tree usage lacks %q", want)

@@ -279,7 +279,7 @@ func TestRecordRepo_TimesOutOnTheFakeClockWhileAnotherInstallHoldsTheLock(t *tes
 	}
 }
 
-func TestInstall_InALinkedWorktreeRecordsAndMarksThePrimary(t *testing.T) {
+func TestInstall_InALinkedWorktreeRecordsThePrimaryAndMarksTheTree(t *testing.T) {
 	f := newFixture(t)
 	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
 	o := f.opts("v0.0.2", false)
@@ -293,10 +293,10 @@ func TestInstall_InALinkedWorktreeRecordsAndMarksThePrimary(t *testing.T) {
 	if want := []string{store.Canonical(f.repo)}; err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("Repos = %v, %v; want %v: the primary, not the tree", got, err, want)
 	}
-	if _, err := os.Stat(filepath.Join(f.repo, "trellis.toml")); err != nil {
-		t.Errorf("trellis.toml not written at the primary: %v", err)
+	if _, err := os.Stat(filepath.Join(tree, "trellis.toml")); err != nil {
+		t.Errorf("trellis.toml not written in the tree: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(tree, "trellis.toml")); !os.IsNotExist(err) {
-		t.Errorf("trellis.toml written in the tree (%v)", err)
+	if _, err := os.Stat(filepath.Join(f.repo, "trellis.toml")); !os.IsNotExist(err) {
+		t.Errorf("trellis.toml written at the primary (%v)", err)
 	}
 }
