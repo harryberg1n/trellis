@@ -1,14 +1,25 @@
 name: release
 
+# A release is a merge that changes VERSION: the push to main that carries it
+# builds the binaries and creates the GitHub Release, whose tag v<VERSION>
+# goes on that commit. No hand tagging. The idea is aphrollo-tools' release
+# job in .github/workflows/pipeline.yml and deploy/tag-release.sh at
+# 12b3724e (the push to main earns its own tag, idempotent on an existing
+# one), with VERSION as the decision instead of changelog fragments. A
+# hand-pushed v* tag still builds, and must match VERSION.
+
 on:
   push:
+    branches: [main]
+    paths: [VERSION]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -16,34 +27,48 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: tag matches VERSION
+      - name: the tag this commit earns
+        id: tag
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="$(cat VERSION | tr -d '[:space:]')"
-          if [ "v${version}" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match VERSION v${version}" >&2
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="v${version}"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME does not match VERSION $tag" >&2
             exit 1
           fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "[skip] release $tag already exists"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: build
+        if: steps.tag.outputs.skip != 'true'
         shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           pkg=github.com/harryberg1n/trellis/internal/buildinfo
-          ldflags="-s -w -X ${pkg}.Version=${GITHUB_REF_NAME} -X ${pkg}.Commit=${GITHUB_SHA::7} -X ${pkg}.Time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X ${pkg}.Version=${TAG} -X ${pkg}.Commit=${GITHUB_SHA::7} -X ${pkg}.Time=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir dist
           for target in linux/amd64 linux/arm64 windows/amd64; do
             os="${target%/*}"; arch="${target#*/}"
             ext=""; [ "$os" = windows ] && ext=".exe"
-            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-              go build -trimpath -ldflags "$ldflags" -o "dist/trellis-${os}-${arch}${ext}" ./cmd/trellis
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "dist/trellis-${os}-${arch}${ext}" ./cmd/trellis
           done
           (cd dist && sha256sum trellis-* > sha256sums.txt)
       - name: publish
+        if: steps.tag.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --generate-notes

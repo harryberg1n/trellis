@@ -1,5 +1,12 @@
 name: ci
 
+# Shape taken from aphrollo-tools .github/workflows/pipeline.yml at 12b3724e,
+# cut to what a repo this size needs: actions pinned to a commit with the
+# version beside it (dependabot moves the pin), -shuffle=on so an ordering
+# assumption cannot hide behind the one order Go happens to pick, an explicit
+# go test -timeout below timeout-minutes so a hang names its test, and no
+# paths-ignore: a required check that is path-filtered out stays pending.
+#
 # Every commit on main lands through a pull request that trellis tree merge
 # refuses unless the branch is up to date with main, so the pull request run
 # already tests the exact content that reaches main. A run on the push to
@@ -20,8 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -31,18 +38,18 @@ jobs:
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
       # The linux run never builds the *_windows.go files; lint them too.
       - name: golangci-lint (windows files)
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         env:
           GOOS: windows
         with:
           version: v2.12.2
           skip-cache: true
-      - run: go test -race ./...
+      - run: go test -race -shuffle=on -timeout=600s ./...
       # The latency tests carry the !race build tag, so the step above skips
       # them: the race detector slows every call and would measure itself.
       # Informational: the M0 criterion is measured on the owner's box, and
@@ -55,8 +62,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -65,7 +72,7 @@ jobs:
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -shuffle=on -timeout=600s ./...
       # The latency tests carry the !race build tag, so the step above skips
       # them: the race detector slows every call and would measure itself.
       # Informational: the M0 criterion is measured on the owner's box, and
@@ -73,4 +80,3 @@ jobs:
       - name: hook latency (no -race, informational)
         continue-on-error: true
         run: go test ./internal/hook -run Latency -count=1 -v
-

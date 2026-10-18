@@ -1,0 +1,39 @@
+name: nightly flake hunt
+
+# Copied in shape from aphrollo-tools .github/workflows/nightly-flake-hunt.yml
+# at 12b3724e, where five flaky tests reached a merge in one week (a WaitDelay
+# deadline, a real SIGTERM, a shared temp dir, a leaked goroutine, a lock-probe
+# race) and every one was a shape -race -shuffle=on catches given repeats.
+# The suite runs harder once a night than a pull request can afford:
+# -count=5 so a flake with any real rate has several tries, -shuffle=on
+# against ordering assumptions, on both runners since the Windows one is
+# where trellis's own surprises came from. A red night is read by a person;
+# the issue filer aphrollo had is left out.
+
+on:
+  schedule:
+    - cron: "25 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-flake-hunt
+  cancel-in-progress: false
+
+jobs:
+  flake-hunt:
+    if: github.repository == 'harryberg1n/trellis'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race -shuffle=on -count=5 -timeout=3000s ./...

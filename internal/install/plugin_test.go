@@ -73,7 +73,9 @@ func TestRelease_TagMustMatchTheVersionFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`cat VERSION`, `"v${version}" != "$GITHUB_REF_NAME"`} {
+	// The release reads VERSION, runs on a change of it on main, and refuses
+	// a hand-pushed tag that does not match it.
+	for _, want := range []string{`< VERSION`, `paths: [VERSION]`, `"$GITHUB_REF_NAME" != "$tag"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("release.yml lacks the VERSION check %q", want)
 		}

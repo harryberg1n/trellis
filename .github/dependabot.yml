@@ -1,0 +1,33 @@
+# Copied from aphrollo-tools .github/dependabot.yml at 12b3724e: weekly,
+# grouped into one pull request per ecosystem, with a cooldown so a release
+# is not taken the day it appears. The auto-merge workflow aphrollo pairs
+# with it is left out; a dependabot pull request lands like any other.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    assignees: ["harryberg1n"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      all:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    assignees: ["harryberg1n"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 5
+    groups:
+      all:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
