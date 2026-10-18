@@ -73,14 +73,62 @@ func TestCost_DenyTurnsCharged(t *testing.T) {
 
 	// Deny at 10:00, green at 10:05: replies r1 (once, though split in two
 	// records), r2 and r3 are the 3 turns; r0 is before it and r4 after.
-	// The second deny (10:06) has no green: it is unresolved and takes r4.
+	// The second deny (10:06) has no green: it is unresolved and its turn r4 is
+	// reported apart, as UnresolvedTurns.
 	// Injected tokens: (400 + 12) / 4 = 103.
 	want := []RowCost{
-		{Row: "w.main", Denies: 2, InjectedTokens: 103, Turns: 4, Unresolved: 1},
+		{Row: "w.main", Denies: 2, InjectedTokens: 103, Turns: 3, Unresolved: 1, UnresolvedTurns: 1},
 		{Row: "w.secrets", Denies: 1, InjectedTokens: 10, Turns: 0, Unresolved: 1},
 	}
 	if len(rows) != 2 || rows[0] != want[0] || rows[1] != want[1] {
 		t.Errorf("rows = %+v, want %+v", rows, want)
+	}
+}
+
+// anchored is n turn.anchored events of lane A, one a minute from 10:01.
+func anchored(n int) []kernel.Event {
+	var evs []kernel.Event
+	for i := 1; i <= n; i++ {
+		evs = append(evs, kernel.Event{Kind: kernel.EvTurnAnchored, Lane: "A", At: time.Date(2026, 10, 1, 10, i, 0, 0, time.UTC)})
+	}
+	return evs
+}
+
+func denyAt(m int) kernel.Event {
+	return kernel.Event{Kind: kernel.EvWallDenied, Lane: "A", At: time.Date(2026, 10, 1, 10, m, 0, 0, time.UTC), Detail: map[string]string{"row": "r"}}
+}
+
+func TestCost_UnresolvedDenyIsCappedAt50Turns(t *testing.T) {
+	evs := append([]kernel.Event{denyAt(0)}, anchored(59)...)
+
+	rows := RowCosts(Facts{Events: evs})
+
+	if len(rows) != 1 || rows[0].Turns != 0 || rows[0].UnresolvedTurns != 50 || rows[0].Unresolved != 1 {
+		t.Errorf("rows = %+v, want 0 turns and 50 unresolved turns", rows)
+	}
+}
+
+func TestCost_UnresolvedDenyStopsAtTheNextDeny(t *testing.T) {
+	evs := append([]kernel.Event{denyAt(0), denyAt(4)}, anchored(9)...)
+
+	rows := RowCosts(Facts{Events: evs})
+
+	// First deny: turns at 10:01..10:03 (3); the second, at 10:04, takes the
+	// turns 10:05..10:09 (5).
+	if len(rows) != 1 || rows[0].UnresolvedTurns != 8 || rows[0].Unresolved != 2 {
+		t.Errorf("rows = %+v, want 8 unresolved turns over 2 denies", rows)
+	}
+}
+
+func TestCost_UnresolvedDenyStopsAtTheLanesMerge(t *testing.T) {
+	evs := append([]kernel.Event{denyAt(0)}, anchored(9)...)
+	merge := Merge{Sha: "aaaaaaa1111", Subject: "x (#1)", PR: 1, Lane: "A", At: time.Date(2026, 10, 1, 10, 3, 0, 0, time.UTC)}
+
+	rows := RowCosts(Facts{Events: evs, Merges: []Merge{merge}})
+
+	// The merge at 10:03 ends it: turns 10:01, 10:02 and 10:03.
+	if len(rows) != 1 || rows[0].UnresolvedTurns != 3 {
+		t.Errorf("rows = %+v, want 3 unresolved turns", rows)
 	}
 }
 
