@@ -15,7 +15,7 @@ const maxMessageFile = 1 << 20
 // read from `git commit -m/-F` and `gh pr create/edit --body/--body-file`, at
 // PreToolUse, before the text exists anywhere else.
 func undercover(a *analysis) string {
-	if !a.isShell() || !strings.Contains(a.command, "git") && !strings.Contains(a.command, "gh") {
+	if !a.isShell() || !strings.Contains(foldName(a.command), "git") && !strings.Contains(foldName(a.command), "gh") {
 		return ""
 	}
 	var cause string

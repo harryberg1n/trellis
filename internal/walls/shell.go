@@ -94,13 +94,11 @@ func terminatorLine(lines []string, from int, delim string) int {
 }
 
 // baseCommand is the program a word names, without its directory or an .exe
-// suffix: `/usr/bin/sed` and `sed.exe` are both `sed`.
+// suffix: `/usr/bin/sed` and `sed.exe` are both `sed`. On Windows the name is
+// also case-folded (see foldName): `Git` and `GIT.EXE` are `git`.
 func baseCommand(w string) string {
-	name := filepath.Base(filepath.FromSlash(w))
-	if lower := strings.ToLower(name); strings.HasSuffix(lower, ".exe") {
-		return lower[:len(lower)-len(".exe")]
-	}
-	return name
+	name := foldName(filepath.Base(filepath.FromSlash(w)))
+	return strings.TrimSuffix(name, ".exe")
 }
 
 // maxDepth bounds how far a walk follows `bash -c` and `$(...)`.
