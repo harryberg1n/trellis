@@ -94,7 +94,7 @@ func TestIsolate_PutsTheGitConfigTempDirAndHomeUnderTheRunsRoot(t *testing.T) {
 }
 
 // Nested temp roots (a probe that runs a whole test binary inside a test's own
-// temp dir, under a gate checkout) pass Windows' 260-character limit, and git
+// temp dir, under a nested checkout) pass Windows' 260-character limit, and git
 // refuses a longer path unless it is told to take it: "Filename too long".
 func TestIsolate_TellsGitToTakeLongPaths(t *testing.T) {
 	out, err := exec.Command("git", "config", "--global", "--get", "core.longpaths").Output() // stderr-ok: the value is asserted below

@@ -3,7 +3,7 @@
 
 // Package testiso is the one place a test binary is cut off from the git state
 // of the box it runs on: the repositories around it, the environment a git hook
-// or a gate spawn handed it, and the operator's own git config. Every
+// or a parent process handed it, and the operator's own git config. Every
 // package's TestMain calls Main (or Isolate, when it has setup of its own), so
 // a fixture that runs a bare `git init`, `git config` or `git commit` can only
 // ever reach a repository the test made.
