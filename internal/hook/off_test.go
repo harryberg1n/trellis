@@ -11,7 +11,7 @@ import (
 
 func wdOf(dir string) func() (string, error) { return func() (string, error) { return dir, nil } }
 
-func TestOff_AnswersFromThePayloadCwdAndTheMarkerAtTheRepoRoot(t *testing.T) {
+func TestOff_AnswersFromTheCwdAndTheMarkerAtTheRepoRoot(t *testing.T) {
 	bare := testiso.Repo(t)
 	on := testiso.Repo(t)
 	testiso.Write(t, filepath.Join(on, "trellis.toml"), "# on\n")
@@ -24,35 +24,42 @@ func TestOff_AnswersFromThePayloadCwdAndTheMarkerAtTheRepoRoot(t *testing.T) {
 	outside := t.TempDir()
 
 	cases := []struct {
-		name    string
-		payload string
-		off     string
-		wd      string
-		want    bool
+		name string
+		cwd  string
+		off  string
+		want bool
 	}{
-		{"repo with the marker", testiso.JSONString(on), "", outside, false},
-		{"a subdirectory of it", testiso.JSONString(sub), "", outside, false},
-		{"a linked worktree carrying the marker", testiso.JSONString(tree), "", outside, false},
-		{"repo without the marker", testiso.JSONString(bare), "", outside, true},
-		{"TRELLIS_OFF=1 in a repo with the marker", testiso.JSONString(on), "1", outside, true},
-		{"outside any repo", testiso.JSONString(outside), "", outside, true},
-		{"no cwd in the payload, process in a marked repo", `""`, "", on, false},
-		{"no cwd in the payload, process outside any repo", `""`, "", outside, true},
-		{"relative cwd", testiso.JSONString("a/b"), "", on, true},
+		{"repo with the marker", on, "", false},
+		{"a subdirectory of it", sub, "", false},
+		{"a linked worktree carrying the marker", tree, "", false},
+		{"repo without the marker", bare, "", true},
+		{"TRELLIS_OFF=1 in a repo with the marker", on, "1", true},
+		{"outside any repo", outside, "", true},
+		{"no cwd at all", "", "", true},
+		{"relative cwd", "a/b", "", true},
 	}
 	for _, c := range cases {
-		raw := []byte(`{"hook_event_name":"Stop","cwd":` + c.payload + `}`)
-		if got := Off(raw, c.off, wdOf(c.wd)); got != c.want {
+		if got := Off(c.cwd, c.off); got != c.want {
 			t.Errorf("%s: Off = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
-func TestOff_GarbageAndAnUnreadableWorkingDirectoryAreOff(t *testing.T) {
-	if !Off([]byte("not json"), "", wdOf("")) {
-		t.Errorf("Off on garbage with no working directory = false, want true")
+func TestCwd_IsThePayloadsElseTheProcessesElseNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		wd   func() (string, error)
+		want string
+	}{
+		{"payload cwd wins", `{"cwd":"/p"}`, wdOf("/w"), "/p"},
+		{"no cwd in the payload", `{"hook_event_name":"Stop"}`, wdOf("/w"), "/w"},
+		{"garbage", "not json", wdOf("/w"), "/w"},
+		{"nothing known", "", func() (string, error) { return "", errors.New("gone") }, ""},
 	}
-	if !Off(nil, "", func() (string, error) { return "", errors.New("gone") }) {
-		t.Errorf("Off with an unreadable working directory = false, want true")
+	for _, c := range cases {
+		if got := Cwd([]byte(c.raw), c.wd); got != c.want {
+			t.Errorf("%s: Cwd = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

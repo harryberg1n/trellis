@@ -203,7 +203,7 @@ func (p wirePlan) apply(o Options) (backup string, err error) {
 // of it sits beside it first. The reference copies before every change; this
 // keeps the copy of the file as it was before the first one.
 func backUp(file string, content []byte, clk clock.Clock) (string, error) {
-	if old, _ := filepath.Glob(file + ".pre-trellis-*"); len(old) > 0 {
+	if hasBackup(file) {
 		return "", nil
 	}
 	if clk == nil {
@@ -215,6 +215,15 @@ func backUp(file string, content []byte, clk clock.Clock) (string, error) {
 		return "", fmt.Errorf("writing backup %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// hasBackup reports whether a backup of the settings file sits beside it. It
+// lists the directory and matches the name's prefix: the path is never a glob
+// pattern, so a config directory with a bracket in its name is read as it is.
+func hasBackup(file string) bool {
+	entries, _ := os.ReadDir(filepath.Dir(file))
+	prefix := filepath.Base(file) + ".pre-trellis-"
+	return slices.ContainsFunc(entries, func(e os.DirEntry) bool { return strings.HasPrefix(e.Name(), prefix) })
 }
 
 // wouldAll marks every action as not done.
@@ -268,9 +277,10 @@ func Install(o Options) ([]string, error) {
 	}
 	actions := p.actions
 	var edits []prune
+	var notes []string
 	writeMarker := false
 	if o.Repo != "" {
-		if edits, err = planPrune(o); err != nil {
+		if edits, notes, err = planPrune(o); err != nil {
 			return nil, err
 		}
 		if writeMarker = !objects.HasMarker(o.Repo); writeMarker {
@@ -282,6 +292,7 @@ func Install(o Options) ([]string, error) {
 	for _, e := range edits {
 		actions = append(actions, e.actions...)
 	}
+	actions = append(actions, notes...)
 	if o.Dry {
 		return wouldAll(actions), nil
 	}
@@ -317,36 +328,41 @@ type prune struct {
 
 // checkouts is the repository's primary checkout and each of its linked
 // worktrees.
-func checkouts(repo string) ([]string, error) {
-	trees, err := LinkedWorktrees(repo)
+// A worktree that is not found is skipped, with a note line: the user-level
+// settings never wait on a git worktree prune.
+func checkouts(repo string) (dirs, notes []string, err error) {
+	trees, missing, err := LinkedWorktrees(repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return append([]string{repo}, slices.DeleteFunc(trees, func(t string) bool { return t == repo })...), nil
+	for _, m := range missing {
+		notes = append(notes, "skip "+m+": not found, git worktree prune forgets it")
+	}
+	return append([]string{repo}, slices.DeleteFunc(trees, func(t string) bool { return t == repo })...), notes, nil
 }
 
 // planPrune finds the project-local settings of the repository and its linked
 // worktrees that hold trellis entries and works out the edit of each. A file
 // that is absent, or holds none, is left out. A file left with nothing of its
 // own stays, as removeEntries leaves it.
-func planPrune(o Options) ([]prune, error) {
-	dirs, err := checkouts(o.Repo)
+// Notes are the skipped worktrees.
+func planPrune(o Options) (out []prune, notes []string, err error) {
+	dirs, notes, err := checkouts(o.Repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []prune
 	for _, dir := range dirs {
 		file := retiredSettings(dir)
 		doc, err := readSettings(file)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if doc == nil {
 			continue
 		}
 		next, removed, err := removeEntries(doc, ownedBy(o.Root))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", file, err)
+			return nil, nil, fmt.Errorf("%s: %w", file, err)
 		}
 		if len(removed) == 0 {
 			continue
@@ -356,7 +372,7 @@ func planPrune(o Options) ([]prune, error) {
 		}
 		out = append(out, prune{file: file, next: next, actions: removed})
 	}
-	return out, nil
+	return out, notes, nil
 }
 
 func applyPrune(edits []prune) error {
@@ -373,7 +389,7 @@ func applyPrune(edits []prune) error {
 // Dry the lines start "would " and nothing is written.
 func Prune(o Options) ([]string, error) {
 	o = o.atPrimary()
-	edits, err := planPrune(o)
+	edits, notes, err := planPrune(o)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +397,7 @@ func Prune(o Options) ([]string, error) {
 	for _, e := range edits {
 		actions = append(actions, e.actions...)
 	}
+	actions = append(actions, notes...)
 	if o.Dry {
 		return wouldAll(actions), nil
 	}
@@ -475,8 +492,9 @@ func Eject(o Options) ([]string, error) {
 		}
 	}
 	var edits []prune
+	var notes []string
 	if o.Repo != "" {
-		if edits, err = planPrune(o); err != nil {
+		if edits, notes, err = planPrune(o); err != nil {
 			return nil, err
 		}
 	}
@@ -491,6 +509,7 @@ func Eject(o Options) ([]string, error) {
 	for _, e := range edits {
 		actions = append(actions, e.actions...)
 	}
+	actions = append(actions, notes...)
 	if o.Repo == "" {
 		return actions, nil
 	}
@@ -534,7 +553,7 @@ func checkRepo(o Options) []string {
 	if !objects.HasMarker(o.Repo) {
 		problems = append(problems, objects.MarkerFile+" missing: this repository is off")
 	}
-	dirs, err := checkouts(o.Repo)
+	dirs, _, err := checkouts(o.Repo)
 	if err != nil {
 		return append(problems, "cannot list the linked worktrees: "+err.Error())
 	}

@@ -186,24 +186,69 @@ func TestLinkedWorktrees_ResolvesARelativeGitdirAgainstItsAdminDirectory(t *test
 	}
 	testiso.Write(t, filepath.Join(admin, "gitdir"), filepath.ToSlash(rel)+"\n")
 
-	got, err := LinkedWorktrees(f.repo)
+	got, _, err := LinkedWorktrees(f.repo)
 
 	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("LinkedWorktrees = %v, %v; want %v", got, err, want)
 	}
 }
 
-func TestPrune_AWorktreeThatIsGoneStopsIt(t *testing.T) {
-	f := newFixture(t)
+// goneTree is a linked worktree whose directory was deleted without a git
+// worktree prune, and the note line every verb prints for it.
+func goneTree(t *testing.T, f fixture) (note string) {
+	t.Helper()
 	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
 	if err := os.RemoveAll(tree); err != nil {
 		t.Fatal(err)
 	}
+	return "skip " + tree + ": not found, git worktree prune forgets it"
+}
 
-	_, err := Prune(f.optsIn(false))
+func TestInstall_AWorktreeThatIsGoneIsSkippedWithANoteAndTheUserLevelFileIsWritten(t *testing.T) {
+	f := newFixture(t)
+	note := goneTree(t, f)
 
-	if err == nil || !strings.Contains(err.Error(), "linked worktree "+tree) || !strings.Contains(err.Error(), "git worktree prune") || !strings.Contains(err.Error(), "trellis update continues once it is pruned") {
-		t.Errorf("err = %v, want one line naming the missing worktree", err)
+	actions, err := Install(f.optsIn(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !contains(actions, note) {
+		t.Errorf("no note %q in %q", note, actions)
+	}
+	if n := strings.Count(readFile(t, f.settings()), "/bin/v0.0.2/trellis' hook "); n != 6 {
+		t.Errorf("%d trellis hooks in the user-level file, want 6", n)
+	}
+}
+
+func TestEject_AWorktreeThatIsGoneIsSkippedWithANoteAndTheUserLevelFileIsCleaned(t *testing.T) {
+	f := newFixture(t)
+	if _, err := Install(f.optsIn(false)); err != nil {
+		t.Fatal(err)
+	}
+	note := goneTree(t, f)
+
+	actions, err := Eject(f.optsIn(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !contains(actions, note) {
+		t.Errorf("no note %q in %q", note, actions)
+	}
+	if got := readFile(t, f.settings()); strings.Contains(got, "trellis") {
+		t.Errorf("trellis entries left in the user-level file: %s", got)
+	}
+}
+
+func TestPrune_AWorktreeThatIsGoneIsSkippedWithANote(t *testing.T) {
+	f := newFixture(t)
+	note := goneTree(t, f)
+
+	actions, err := Prune(f.optsIn(false))
+
+	if err != nil || !contains(actions, note) {
+		t.Errorf("actions %q, err %v; want the note %q", actions, err, note)
 	}
 }
 

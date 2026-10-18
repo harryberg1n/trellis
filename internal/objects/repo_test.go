@@ -247,3 +247,13 @@ func TestHasMarker_IsTheCommittedFileAtTheRoot(t *testing.T) {
 		t.Errorf("HasMarker with trellis.toml = false, want true")
 	}
 }
+
+func TestHasMarker_ADirectoryNamedTrellisTomlIsNotTheMarker(t *testing.T) {
+	repo := testiso.Repo(t)
+	if err := os.Mkdir(filepath.Join(repo, "trellis.toml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if HasMarker(repo) {
+		t.Errorf("HasMarker with a directory called trellis.toml = true, want false")
+	}
+}

@@ -934,3 +934,35 @@ func TestUpdate_GivesItsContextToEveryChild(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdate_LeavesAConfigDirWithoutTrellisHooksAlone(t *testing.T) {
+	w := newWorld(t)
+	w.config = filepath.Join(w.dir, "never-installed")
+	testiso.Write(t, install.SettingsFile(w.config), testiso.ForeignSettings)
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := read(t, install.SettingsFile(w.config)); got != testiso.ForeignSettings {
+		t.Errorf("update wired a file that held no trellis hook:\n%s", got)
+	}
+	if want := "skip rewire " + install.SettingsFile(w.config) + ": no trellis hooks there; trellis install [--config-dir D] wires them"; !contains(w.lines(), want) {
+		t.Errorf("no line %q in:\n%s", want, w.out)
+	}
+}
+
+func TestUpdate_AfterEjectTheHooksStayOut(t *testing.T) {
+	w := newWorld(t)
+	if _, err := install.Eject(install.Options{ConfigDir: w.config, Root: w.root}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.run(Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := w.referenced(); len(got) != 0 {
+		t.Errorf("update brought the hooks back: %v", got)
+	}
+}

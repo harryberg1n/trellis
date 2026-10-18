@@ -259,3 +259,30 @@ func TestDoctor_AnInstalledRepositoryWithTheMarkerIsClean(t *testing.T) {
 		t.Errorf("doctor = %q, want no problems", got)
 	}
 }
+
+func TestInstall_ABackupIsFoundInAConfigDirWithGlobCharactersInItsName(t *testing.T) {
+	f := newFixture(t)
+	f.config = filepath.Join(filepath.Dir(f.config), "cfg[1]")
+	testiso.Write(t, f.settings(), foreignSettings)
+	o := f.opts("v0.0.2", false)
+	o.Clock = clock.Fake(time.Unix(1000, 0))
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+
+	o.Version, o.Clock = "v0.0.3", clock.Fake(time.Unix(2000, 0))
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(f.config)
+	var backups []string
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".pre-trellis-") {
+			backups = append(backups, e.Name())
+		}
+	}
+	if len(backups) != 1 || backups[0] != "settings.json.pre-trellis-1000" {
+		t.Errorf("backups %v, want only settings.json.pre-trellis-1000", backups)
+	}
+}

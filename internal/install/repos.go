@@ -141,20 +141,21 @@ func ReferencedVersions(root, configDir string) ([]string, error) {
 
 // LinkedWorktrees is the linked worktrees of the repository around repo, read
 // from the gitdir file each one has under <common dir>/worktrees, the same
-// list `git worktree list` prints; the primary checkout is not among them.
-func LinkedWorktrees(repo string) ([]string, error) {
+// list `git worktree list` prints; the primary checkout is not among them. A
+// worktree whose directory is gone (deleted, not yet pruned, or unmounted) is
+// returned apart, in missing, as it was recorded: git worktree prune forgets it.
+func LinkedWorktrees(repo string) (trees, missing []string, err error) {
 	r, err := objects.Open(repo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	entries, err := os.ReadDir(filepath.Join(r.Common, "worktrees"))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []string
 	for _, e := range entries {
 		admin := filepath.Join(r.Common, "worktrees", e.Name())
 		b, err := os.ReadFile(filepath.Join(admin, "gitdir"))
@@ -167,9 +168,10 @@ func LinkedWorktrees(repo string) ([]string, error) {
 			dotGit = filepath.Join(admin, dotGit)
 		}
 		if _, err := os.Stat(dotGit); err != nil {
-			return nil, fmt.Errorf("linked worktree %s is not found (deleted or unmounted?): git worktree prune forgets it, and trellis update continues once it is pruned", filepath.Dir(dotGit))
+			missing = append(missing, filepath.Dir(dotGit))
+			continue
 		}
-		out = append(out, store.Canonical(filepath.Dir(dotGit)))
+		trees = append(trees, store.Canonical(filepath.Dir(dotGit)))
 	}
-	return out, nil
+	return trees, missing, nil
 }

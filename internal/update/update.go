@@ -299,9 +299,19 @@ func repoProblem(repo string) string {
 }
 
 // rewire points the six user-level hook entries at the pinned binary of tag.
-// A quiet rewire that changes nothing says nothing.
+// A quiet rewire that changes nothing says nothing. A file that holds no
+// trellis entry is not wired: it is not where this box installed, and update
+// never installs; it says so and goes on.
 func (u updater) rewire(tag, bin string, quiet bool) error {
 	file := install.SettingsFile(u.ConfigDir)
+	refs, err := install.ReferencedVersions(u.Root, u.ConfigDir)
+	if err != nil {
+		return err
+	}
+	if len(refs) == 0 {
+		u.step("skip rewire %s: no trellis hooks there; trellis install [--config-dir D] wires them", file)
+		return nil
+	}
 	if u.dry {
 		u.step("rewire %s to %s", file, tag)
 		return nil

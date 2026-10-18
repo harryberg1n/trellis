@@ -17,11 +17,12 @@ import (
 )
 
 // updateUsageLine is the usage line of update.
-const updateUsageLine = "update [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
+const updateUsageLine = "update [--config-dir D] [--to VERSION] [--dry] [--allow-dev] [--forget-missing]"
 
 // updateVerb runs `trellis update` in the real process.
 func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("update", updateUsageLine, stderr)
+	configFlag := fs.String("config-dir", "", "the Claude config directory (default: $CLAUDE_CONFIG_DIR, else ~/.claude)")
 	to := fs.String("to", "", "switch to this pinned (or released) version instead of the newest release")
 	dry := fs.Bool("dry", false, "print each step with \"would \" and change nothing")
 	allowDev := fs.Bool("allow-dev", false, "let a build whose version is \"dev\" update")
@@ -37,7 +38,7 @@ func updateVerb(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	root, exe, err := updatePaths()
 	var configDir string
 	if err == nil {
-		configDir, err = install.ConfigDir("")
+		configDir, err = install.ConfigDir(*configFlag)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis update: %v\n", err)

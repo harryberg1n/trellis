@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
-	"github.com/harryberg1n/trellis/internal/store"
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
@@ -123,7 +122,7 @@ func fileTree(t *testing.T, dir string) string {
 	return b.String()
 }
 
-func TestHook_OffHereWritesNothingAndSaysNothing(t *testing.T) {
+func TestHook_OffHereWritesNothingAndSaysNothingOnEveryInstalledEvent(t *testing.T) {
 	bin := build(t)
 	unmarked := testiso.Repo(t)
 	marked := markedRepo(t)
@@ -141,53 +140,96 @@ func TestHook_OffHereWritesNothingAndSaysNothing(t *testing.T) {
 		{"a payload outside any repository", string(testiso.HookPayload(t, kernel.HookStop, "", outside, nil)), nil, outside},
 		{"no cwd, the process outside any repository", `{"hook_event_name":"Stop","session_id":"s-1"}`, nil, outside},
 	}
-	for _, c := range cases {
-		beforeState, beforeCache, beforeRepos := fileTree(t, stateRoot), fileTree(t, cache), fileTree(t, marked)+fileTree(t, unmarked)
-		env := append([]string{"LocalAppData=" + cache, "XDG_CACHE_HOME=" + cache, "HOME=" + cache}, c.env...)
-		code, stdout, stderr := runBin(t, bin, stateRoot, c.payload, []string{"hook", "PostToolUse"}, withEnv(env...), inDir(c.dir))
-		if code != 0 || stdout != "" || stderr != "" {
-			t.Errorf("%s: exit %d, stdout %q, stderr %q; want 0, empty, empty", c.name, code, stdout, stderr)
-		}
-		if got := fileTree(t, stateRoot); got != beforeState || got != "" {
-			t.Errorf("%s: the state root changed or exists:\n%s", c.name, got)
-		}
-		if got := fileTree(t, cache); got != beforeCache {
-			t.Errorf("%s: the cache dir changed:\n%s", c.name, got)
-		}
-		if _, err := os.Stat(filepath.Join(cache, "trellis-fallback")); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s: the fallback dir exists (%v), want it absent", c.name, err)
-		}
-		if got := fileTree(t, marked) + fileTree(t, unmarked); got != beforeRepos {
-			t.Errorf("%s: a repository changed", c.name)
+	events := kernel.InstalledHookEvents()
+	if len(events) != 6 {
+		t.Fatalf("%d installed events %v, want 6", len(events), events)
+	}
+	for _, event := range events {
+		for _, c := range cases {
+			name := event + ", " + c.name
+			beforeState, beforeCache, beforeRepos := fileTree(t, stateRoot), fileTree(t, cache), fileTree(t, marked)+fileTree(t, unmarked)
+			env := append([]string{"LocalAppData=" + cache, "XDG_CACHE_HOME=" + cache, "HOME=" + cache}, c.env...)
+			code, stdout, stderr := runBin(t, bin, stateRoot, c.payload, []string{"hook", event}, withEnv(env...), inDir(c.dir))
+			if code != 0 || stdout != "" || stderr != "" {
+				t.Errorf("%s: exit %d, stdout %q, stderr %q; want 0, empty, empty", name, code, stdout, stderr)
+			}
+			if got := fileTree(t, stateRoot); got != beforeState || got != "" {
+				t.Errorf("%s: the state root changed or exists:\n%s", name, got)
+			}
+			if got := fileTree(t, cache); got != beforeCache {
+				t.Errorf("%s: the cache dir changed:\n%s", name, got)
+			}
+			if _, err := os.Stat(filepath.Join(cache, "trellis-fallback")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s: the fallback dir exists (%v), want it absent", name, err)
+			}
+			if got := fileTree(t, marked) + fileTree(t, unmarked); got != beforeRepos {
+				t.Errorf("%s: a repository changed", name)
+			}
 		}
 	}
+}
+
+// storeIDOf records one edit from repo into a fresh state root and returns the
+// id of the one store directory it made, and the root.
+func storeIDOf(t *testing.T, bin, repo string) (id, state string) {
+	t.Helper()
+	state = filepath.Join(t.TempDir(), "state")
+	code, stdout, stderr := runBin(t, bin, state, string(helloEdit(t, repo)), []string{"hook", "PostToolUse"}, inDir(t.TempDir()))
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("%s: exit %d, stdout %q, stderr %q", repo, code, stdout, stderr)
+	}
+	logs, _ := filepath.Glob(filepath.Join(state, "repos", "*", "events.jsonl"))
+	if len(logs) != 1 {
+		t.Fatalf("%s: event logs %v, want exactly one", repo, logs)
+	}
+	return filepath.Base(filepath.Dir(logs[0])), state
 }
 
 func TestHook_ATreeWithTheCommittedMarkerRecordsToThePrimarysStore(t *testing.T) {
 	bin := build(t)
 	primary := markedRepo(t)
 	tree := testiso.AddTree(t, primary, "tree", "tree/x")
-	state := filepath.Join(t.TempDir(), "state")
 
-	for _, repo := range []string{primary, tree} {
-		code, stdout, stderr := runBin(t, bin, state, string(helloEdit(t, repo)), []string{"hook", "PostToolUse"}, inDir(t.TempDir()))
-		if code != 0 || stdout != "" || stderr != "" {
-			t.Fatalf("%s: exit %d, stdout %q, stderr %q", repo, code, stdout, stderr)
-		}
+	primaryID, _ := storeIDOf(t, bin, primary)
+	treeID, treeState := storeIDOf(t, bin, tree)
+	if treeID != primaryID {
+		t.Fatalf("the tree wrote to store %s, the primary to %s; want one store", treeID, primaryID)
 	}
 
-	logs, _ := filepath.Glob(filepath.Join(state, "repos", "*", "events.jsonl"))
-	if len(logs) != 1 {
-		t.Fatalf("event logs %v, want exactly one: the tree shares the primary's store", logs)
+	// Both in one state root: one log, two edits.
+	code, _, _ := runBin(t, bin, treeState, string(helloEdit(t, primary)), []string{"hook", "PostToolUse"}, inDir(t.TempDir()))
+	if code != 0 {
+		t.Fatalf("exit %d", code)
 	}
-	raw, err := os.ReadFile(logs[0])
+	raw, err := os.ReadFile(filepath.Join(treeState, "repos", primaryID, "events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(string(raw), `"kind":"edit"`); n != 2 {
-		t.Errorf("%d edit events in the one log, want 2 (one from the primary, one from the tree):\n%s", n, raw)
+		t.Errorf("%d edit events in the one log, want 2 (one from the tree, one from the primary):\n%s", n, raw)
 	}
-	if want := store.RepoID("", primary); !strings.Contains(logs[0], want) {
-		t.Errorf("log %s is not under the primary path's id %s", logs[0], want)
+}
+
+func TestHook_APayloadWithoutCwdIsRecordedFromTheProcessWorkingDirectory(t *testing.T) {
+	bin := build(t)
+	repo := markedRepo(t)
+	file := filepath.Join(repo, "hello.txt")
+	testiso.Write(t, file, "hello\n")
+	payload := `{"session_id":"s-1","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":` +
+		testiso.JSONString(file) + `,"old_string":"a","new_string":"b"}}`
+	state := filepath.Join(t.TempDir(), "state")
+
+	code, stdout, stderr := runBin(t, bin, state, payload, []string{"hook", "PostToolUse"}, inDir(repo))
+
+	if code != 0 || stdout != "" || stderr != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	logs, _ := filepath.Glob(filepath.Join(state, "repos", "*", "events.jsonl"))
+	if len(logs) != 1 {
+		t.Fatalf("event logs %v, want one: the event is recorded", logs)
+	}
+	raw, _ := os.ReadFile(logs[0])
+	if !strings.Contains(string(raw), `"kind":"edit"`) || strings.Contains(string(raw), "internal.error") {
+		t.Errorf("log:\n%s", raw)
 	}
 }

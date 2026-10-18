@@ -170,6 +170,9 @@ func HistoryRef(common string) string {
 // PrimaryRoot is the main working tree of the repository: Root for the primary
 // checkout, the checkout that owns the common git dir for a linked worktree.
 // The state a repository keeps is keyed by this path, never by a worktree's.
+// A linked worktree of a bare repository or of a submodule, whose common git
+// dir is not named .git, has no primary checkout to name: it stands for itself
+// and gets its own store, marker and prune target.
 func (r Repo) PrimaryRoot() string {
 	if r.Primary || filepath.Base(r.Common) != ".git" {
 		return r.Root
@@ -183,6 +186,6 @@ const MarkerFile = "trellis.toml"
 
 // HasMarker reports whether the working tree at root holds the marker file.
 func HasMarker(root string) bool {
-	_, err := os.Stat(filepath.Join(root, MarkerFile))
-	return err == nil
+	fi, err := os.Stat(filepath.Join(root, MarkerFile))
+	return err == nil && !fi.IsDir()
 }

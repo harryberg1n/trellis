@@ -39,7 +39,8 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 	}
 	// Before anything else: no store is opened and nothing is written where
 	// the repository has not opted in.
-	if hook.Off(raw, os.Getenv("TRELLIS_OFF"), os.Getwd) {
+	cwd := hook.Cwd(raw, os.Getwd)
+	if hook.Off(cwd, os.Getenv("TRELLIS_OFF")) {
 		return 0
 	}
 	clk := clock.Real()
@@ -49,7 +50,7 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 		Clock:  clk,
 		Rows:   walls.Rows(),
 	}
-	repo, err := objects.Open(hook.PayloadCwd(raw))
+	repo, err := objects.Open(cwd)
 	// The fallback is for when the state root is what failed, so it sits in
 	// the user's cache dir (private to them), beside the state root and not
 	// inside it, one directory per repo so the next good run folds its own.
