@@ -29,15 +29,32 @@ func parse(tool, cmd string) (segs [][]word, masked string) {
 	}
 	start := 0
 	cut := func(end, next int) {
-		if ws := tokenize(tool, code[start:end]); len(ws) > 0 {
+		if ws := dropReserved(tokenize(tool, code[start:end])); len(ws) > 0 {
 			segs = append(segs, ws)
 		}
 		start = next
 	}
+	var subst []bool // one entry per open parenthesis: true for $( and @(
 	for i := 0; i < len(masked); i++ {
 		switch masked[i] {
 		case esc:
 			i++ // the escaped byte is never an operator
+		case '(':
+			// A $( opens a substitution that substitutionBodies walks on its
+			// own; any other ( opens a subshell whose commands are segments.
+			sub := i > 0 && (masked[i-1] == '$' || masked[i-1] == '@' && isPowerShell(tool))
+			subst = append(subst, sub)
+			if !sub {
+				cut(i, i+1)
+			}
+		case ')':
+			sub := false
+			if n := len(subst); n > 0 {
+				sub, subst = subst[n-1], subst[:n-1]
+			}
+			if !sub {
+				cut(i, i+1)
+			}
 		case '\n', ';':
 			cut(i, i+1)
 		case '|':
@@ -61,6 +78,21 @@ func parse(tool, cmd string) (segs [][]word, masked string) {
 	}
 	cut(len(masked), len(masked))
 	return segs, masked
+}
+
+// reserved are the words that open or close a compound command without being
+// a command: the command after them is the one that runs.
+var reserved = map[string]bool{
+	"{": true, "}": true, "!": true, "if": true, "then": true, "else": true, "elif": true,
+	"fi": true, "do": true, "done": true, "while": true, "until": true,
+}
+
+// dropReserved is ws without the unquoted reserved words that lead it.
+func dropReserved(ws []word) []word {
+	for len(ws) > 0 && reserved[ws[0].text] && ws[0].raw == ws[0].text {
+		ws = ws[1:]
+	}
+	return ws
 }
 
 // segments is parse without the masked text.
@@ -110,7 +142,8 @@ func (b *wordBuilder) plain(r rune) {
 
 // tokenizeBash reads bash words: a backslash escapes the next rune (a
 // backslash and a newline is a line continuation), single quotes are literal,
-// double quotes allow a backslash escape.
+// double quotes allow a backslash escape, and $'...' reads the escapes of
+// ANSI-C quoting.
 func tokenizeBash(s string) []word {
 	var b wordBuilder
 	runes := []rune(s)
@@ -120,6 +153,16 @@ func tokenizeBash(s string) []word {
 		case c == '\\' && i+1 < len(runes):
 			i++
 			if runes[i] != '\n' {
+				b.quoted(runes[i])
+			}
+		case c == '$' && i+1 < len(runes) && runes[i+1] == '\'':
+			b.has = true
+			for i += 2; i < len(runes) && runes[i] != '\''; i++ {
+				if runes[i] == '\\' && i+1 < len(runes) {
+					i++
+					b.quoted(ansiEscape(runes[i]))
+					continue
+				}
 				b.quoted(runes[i])
 			}
 		case c == '\'':
@@ -143,6 +186,20 @@ func tokenizeBash(s string) []word {
 	}
 	b.flush()
 	return b.words
+}
+
+// ansiEscape is the rune a backslash and r stand for inside $'...': the
+// control letters, and r itself for a quote, a backslash or anything else.
+func ansiEscape(r rune) rune {
+	switch r {
+	case 'n':
+		return '\n'
+	case 't':
+		return '\t'
+	case 'r':
+		return '\r'
+	}
+	return r
 }
 
 // tokenizePS reads PowerShell words: a backslash is an ordinary rune, the

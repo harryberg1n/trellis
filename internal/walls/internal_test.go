@@ -161,3 +161,46 @@ func TestTokenize_PerTool(t *testing.T) {
 		}
 	}
 }
+
+func TestGitCalls_InsideShellConstructs(t *testing.T) {
+	cases := []struct {
+		name, cmd string
+		verbs     []string
+		bypass    bool
+	}{
+		{"subshell", `(git commit --no-verify)`, []string{"commit"}, true},
+		{"brace group", `{ git commit --no-verify; }`, []string{"commit"}, true},
+		{"if", `if true; then git commit --no-verify; fi`, []string{"commit"}, true},
+		{"negation", `! git commit --no-verify`, []string{"commit"}, true},
+		{"for loop", `for f in a; do git reset --hard; done`, []string{"reset"}, false},
+		{"bash -lc", `bash -lc 'git commit --no-verify'`, []string{"commit"}, true},
+		{"sh -ec", `sh -ec "git commit --no-verify"`, []string{"commit"}, true},
+		{"eval", `eval "git commit --no-verify"`, []string{"commit"}, true},
+		{"env -i", `env -i git commit --no-verify`, []string{"commit"}, true},
+		{"env -u NAME", `env -u FOO BAR=1 git commit --no-verify`, []string{"commit"}, true},
+		{"sudo -u", `sudo -u x git commit --no-verify`, []string{"commit"}, true},
+		{"sudo bash -c", `sudo bash -c 'git commit --no-verify'`, []string{"commit"}, true},
+		{"xargs", `xargs git commit --no-verify`, []string{"commit"}, true},
+		{"substitution in double quotes", `echo "$(git commit --no-verify)"`, []string{"commit"}, true},
+		{"substitution in single quotes is data", `echo '$(git commit --no-verify)'`, nil, false},
+		{"ansi-c quote with an escaped quote", `git commit -m $'it\'s' --no-verify`, []string{"commit"}, true},
+		{"ansi-c quote alone is no bypass", `git commit -m $'it\'s --no-verify'`, []string{"commit"}, false},
+		{"quoted parenthesis is data", `git commit -m '(x)' -m "{ y; }"`, []string{"commit"}, false},
+		{"plain substitution counted once", `echo $(git commit --no-verify)`, []string{"commit"}, true},
+		{"nested depth", `(if true; then bash -c "git push --no-verify"; fi)`, []string{"push"}, true},
+		{"while", `while true; do git commit -n; done`, []string{"commit"}, true},
+	}
+	for _, c := range cases {
+		a := &analysis{tool: "Bash", cwd: t.TempDir(), command: c.cmd}
+		var verbs []string
+		for _, call := range a.gitCalls() {
+			verbs = append(verbs, call.Verb)
+		}
+		if !reflect.DeepEqual(verbs, c.verbs) {
+			t.Errorf("%s: %q: git verbs %q, want %q", c.name, c.cmd, verbs, c.verbs)
+		}
+		if got := hookBypass(a) != ""; got != c.bypass {
+			t.Errorf("%s: %q: hook-bypass deny = %v, want %v", c.name, c.cmd, got, c.bypass)
+		}
+	}
+}
