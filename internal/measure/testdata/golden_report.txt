@@ -10,7 +10,7 @@ cost: agent dollars at list price
   lanes with usage: 1  total $0.0140
   per lane: mean $0.0140, 90% interval [$0.0140, $0.0140]
   net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)
-  w.main  denies=2  injected_tokens=103  turns=4  unresolved=1
-  w.secrets  denies=1  injected_tokens=10  turns=0  unresolved=1
+  w.main  denies=2  injected_tokens=103  turns=3  unresolved=1  unresolved_turns=1
+  w.secrets  denies=1  injected_tokens=10  turns=0  unresolved=1  unresolved_turns=0
 
 as of 2026-10-21T12:00:00Z

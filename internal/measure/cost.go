@@ -187,11 +187,12 @@ func LaneCosts(f Facts) map[string]float64 {
 // RowCost is the net_cost inputs of one table row: what its denies injected
 // and the turns the agent spent before the next green.
 type RowCost struct {
-	Row            string
-	Denies         int
-	InjectedTokens int64 // injected bytes / 4
-	Turns          int
-	Unresolved     int // denies with no green yet
+	Row             string
+	Denies          int
+	InjectedTokens  int64 // injected bytes / 4
+	Turns           int
+	Unresolved      int // denies with no green yet
+	UnresolvedTurns int // turns after those denies, capped; not in Turns
 }
 
 // RowCosts folds the wall.denied events into per-row net_cost inputs, by row
@@ -212,12 +213,17 @@ func RowCosts(f Facts) []RowCost {
 			times[u.Lane] = append(times[u.Lane], t.at)
 		}
 	}
+	withUsage := map[string]bool{}
+	for lane, ts := range times {
+		withUsage[lane] = len(ts) > 0
+	}
 	for _, ev := range f.Events {
-		if ev.Kind == kernel.EvTurnAnchored && !hasUsage(f, ev.Lane) {
+		if ev.Kind == kernel.EvTurnAnchored && !withUsage[ev.Lane] {
 			times[ev.Lane] = append(times[ev.Lane], ev.At)
 		}
 	}
 	rows := map[string]*RowCost{}
+	merges := linked(f)
 	var bytesBy = map[string]int64{}
 	for _, d := range f.Events {
 		if d.Kind != kernel.EvWallDenied {
@@ -239,11 +245,20 @@ func RowCosts(f Facts) []RowCost {
 		if !resolved {
 			rc.Unresolved++
 		}
+		end, inclusive, capped := capFor(f.Events, merges, d)
+		n := 0
 		for _, at := range times[d.Lane] {
-			if at.After(d.At) && (!resolved || !at.After(green)) {
-				rc.Turns++
+			switch {
+			case !at.After(d.At):
+			case resolved:
+				if !at.After(green) {
+					rc.Turns++
+				}
+			case n < maxUnresolvedTurns && (!capped || at.Before(end) || (inclusive && at.Equal(end))):
+				n++
 			}
 		}
+		rc.UnresolvedTurns += n
 	}
 	out := make([]RowCost, 0, len(rows))
 	for _, id := range sortedKeys(rows) {
@@ -254,13 +269,24 @@ func RowCosts(f Facts) []RowCost {
 	return out
 }
 
-func hasUsage(f Facts, lane string) bool {
-	for _, u := range f.Usage {
-		if u.Lane == lane && len(parseTurns(u.Transcript)) > 0 {
-			return true
+// maxUnresolvedTurns caps the turns charged to a deny that has no green.
+const maxUnresolvedTurns = 50
+
+// capFor is where the turns of an unresolved deny end: at the lane's next
+// deny (exclusive) or at the lane's merge (inclusive), whichever is first.
+// ok is false when neither exists; the turn count cap still applies.
+func capFor(evs []kernel.Event, merges []Merge, deny kernel.Event) (end time.Time, inclusive, ok bool) {
+	for _, ev := range evs {
+		if ev.Kind == kernel.EvWallDenied && ev.Lane == deny.Lane && ev.At.After(deny.At) && (!ok || ev.At.Before(end)) {
+			end, inclusive, ok = ev.At, false, true
 		}
 	}
-	return false
+	for _, m := range merges {
+		if m.Lane == deny.Lane && !m.At.Before(deny.At) && (!ok || m.At.Before(end)) {
+			end, inclusive, ok = m.At, true, true
+		}
+	}
+	return end, inclusive, ok
 }
 
 func nextGreen(evs []kernel.Event, deny kernel.Event) (time.Time, bool) {

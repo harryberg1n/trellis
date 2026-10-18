@@ -57,7 +57,7 @@ func Report(f Facts) []byte {
 		p("  none")
 	}
 	for _, r := range rows {
-		p("  %s  denies=%d  injected_tokens=%d  turns=%d  unresolved=%d", r.Row, r.Denies, r.InjectedTokens, r.Turns, r.Unresolved)
+		p("  %s  denies=%d  injected_tokens=%d  turns=%d  unresolved=%d  unresolved_turns=%d", r.Row, r.Denies, r.InjectedTokens, r.Turns, r.Unresolved, r.UnresolvedTurns)
 	}
 	p("")
 	p("as of %s", f.Now.UTC().Format(time.RFC3339))
