@@ -27,6 +27,10 @@ jobs:
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "gofmt would change:"; echo "$out"; exit 1; fi
       - run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
       - run: go test -race ./...
       # The latency tests carry the !race build tag, so the step above skips
       # them: the race detector slows every call and would measure itself.

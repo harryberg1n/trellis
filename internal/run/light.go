@@ -126,8 +126,10 @@ func isGit(name string) bool {
 // (the sandbox and the user's own), tracing and prompting. Every other GIT_*
 // variable, GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE above all, would point
 // the child at a repository other than its Dir.
-var gitKeep = []string{"GIT_CONFIG", "GIT_CEILING_DIRECTORIES", "GIT_EXEC_PATH", "GIT_TERMINAL_PROMPT",
-	"GIT_ASKPASS", "GIT_SSH", "GIT_TRACE", "GIT_TEMPLATE_DIR", "GIT_ATTR_NOSYSTEM"}
+var gitKeep = []string{
+	"GIT_CONFIG", "GIT_CEILING_DIRECTORIES", "GIT_EXEC_PATH", "GIT_TERMINAL_PROMPT",
+	"GIT_ASKPASS", "GIT_SSH", "GIT_TRACE", "GIT_TEMPLATE_DIR", "GIT_ATTR_NOSYSTEM",
+}
 
 // scrubGitEnv is env without the GIT_* variables a git child must not inherit.
 func scrubGitEnv(env []string) []string {

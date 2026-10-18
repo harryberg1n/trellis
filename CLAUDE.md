@@ -23,3 +23,7 @@ Dependencies point down only. `internal/kernel` and `internal/measure` import th
 ## Release
 
 A `v*` tag builds `linux/amd64`, `linux/arm64` and `windows/amd64` with `-trimpath` and the `buildinfo` ldflags, and attaches them with `sha256sums.txt`.
+
+## Style
+
+Code follows the Uber Go style guide (https://github.com/uber-go/guide/blob/master/style.md). The mechanical part is `.golangci.yml`, run by CI on Linux and locally with `golangci-lint run ./...` (v2.12.2); `golangci-lint run --fix ./...` applies gofumpt and goimports. The rules that bite most: wrap an error once with `%w`, no package-level mutable state, `os.Exit` only in `main`, `var _ Interface = (*T)(nil)` for compliance, functional options instead of new positional parameters, no `init()`, no goroutine without a known exit, field names in struct literals, imports grouped std, third-party, local. `depguard` keeps `os` and `os/exec` out of `internal/kernel` and `internal/measure`, beside the layering law.

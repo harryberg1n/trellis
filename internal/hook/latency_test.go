@@ -9,10 +9,11 @@ package hook
 
 import (
 	"bytes"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 const (

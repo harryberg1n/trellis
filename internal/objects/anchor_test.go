@@ -1,13 +1,14 @@
 package objects
 
 import (
-	"github.com/harryberg1n/trellis/internal/testsupport"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"

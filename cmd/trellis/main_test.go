@@ -33,7 +33,6 @@ func TestVersion_PrintsBuildInfo(t *testing.T) {
 	bin := build(t, "-ldflags", "-X "+pkg+".Version=v0.0.1 -X "+pkg+".Commit=abc1234")
 
 	out, err := exec.Command(bin, "version").Output()
-
 	if err != nil {
 		t.Fatal(err)
 	}

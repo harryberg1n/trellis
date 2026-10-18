@@ -175,8 +175,10 @@ func TestLog_LastSeqComesFromALongLog(t *testing.T) {
 	s, dir, fc := open(t)
 	batch := make([]kernel.Event, 600)
 	for i := range batch {
-		batch[i] = kernel.Event{Kind: "edit", Lane: "lane/long", Session: "s", At: t0,
-			Detail: map[string]string{"pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+		batch[i] = kernel.Event{
+			Kind: "edit", Lane: "lane/long", Session: "s", At: t0,
+			Detail: map[string]string{"pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+		}
 	}
 	if _, err := s.Append(batch...); err != nil {
 		t.Fatal(err)
