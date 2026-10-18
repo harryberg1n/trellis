@@ -262,14 +262,14 @@ func TestVictimState_ChangesWithEachThingALeakedFixtureWrites(t *testing.T) {
 		name string
 		leak func(t *testing.T, victim string)
 	}{
-		{"config", func(t *testing.T, victim string) { gitIn(t, victim, "config", "leak.key", "1") }},
-		{"HEAD", func(t *testing.T, victim string) { gitIn(t, victim, "symbolic-ref", "HEAD", "refs/heads/elsewhere") }},
-		{"refs", func(t *testing.T, victim string) { gitIn(t, victim, "branch", "feat/x") }},
+		{"config", func(t *testing.T, victim string) { Git(t, victim, "config", "leak.key", "1") }},
+		{"HEAD", func(t *testing.T, victim string) { Git(t, victim, "symbolic-ref", "HEAD", "refs/heads/elsewhere") }},
+		{"refs", func(t *testing.T, victim string) { Git(t, victim, "branch", "feat/x") }},
 		{"index", func(t *testing.T, victim string) {
 			if err := os.WriteFile(filepath.Join(victim, "new.txt"), []byte("x\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			gitIn(t, victim, "add", "new.txt")
+			Git(t, victim, "add", "new.txt")
 		}},
 	}
 	for _, c := range cases {
@@ -286,17 +286,6 @@ func TestVictimState_ChangesWithEachThingALeakedFixtureWrites(t *testing.T) {
 				t.Errorf("a leaked %s did not change the state", c.name)
 			}
 		})
-	}
-}
-
-// gitIn runs git in dir with the process's git variables dropped.
-func gitIn(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = cleanedEnv()
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
 

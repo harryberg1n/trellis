@@ -103,13 +103,13 @@ func TestRepo_HandsOutFreshCommittedReposUnderTheSandbox(t *testing.T) {
 		if err := Verify(repo); err != nil {
 			t.Errorf("Verify(%q) = %v", repo, err)
 		}
-		if got := templateGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+		if got := Git(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 			t.Errorf("%s: branch = %q, want main", repo, got)
 		}
-		if got := templateGit(t, repo, "log", "--format=%s"); got != "init" {
+		if got := Git(t, repo, "log", "--format=%s"); got != "init" {
 			t.Errorf("%s: log = %q, want the one init commit", repo, got)
 		}
-		if got := templateGit(t, repo, "status", "--porcelain"); got != "" {
+		if got := Git(t, repo, "status", "--porcelain"); got != "" {
 			t.Errorf("%s: a fresh repo is dirty:\n%s", repo, got)
 		}
 	}

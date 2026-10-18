@@ -40,8 +40,8 @@ func BuildRepo(dir string, files map[string]string) error {
 	}
 	steps := [][]string{
 		{"init", "-q", "-b", "main"},
-		{"config", "user.email", "t@t"},
-		{"config", "user.name", "t"},
+		{"config", "user.email", AuthorEmail},
+		{"config", "user.name", AuthorName},
 		{"config", "commit.gpgsign", "false"},
 		{"config", "core.autocrlf", "false"},
 	}

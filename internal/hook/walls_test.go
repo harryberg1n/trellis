@@ -3,15 +3,15 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/testiso"
+
 	"github.com/harryberg1n/trellis/internal/kernel"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 // pre runs one PreToolUse Bash payload and returns the exit code and what it
@@ -35,8 +35,8 @@ func (e *env) pre(t testing.TB, cwd, command string, session bool) (code int, st
 func (e *env) dirtyLane(t testing.TB) string {
 	t.Helper()
 	lane := filepath.Join(filepath.Dir(e.repo), "lane")
-	testsupport.Git(t, e.repo, "worktree", "add", "-q", "-b", "lane/x", lane)
-	testsupport.Write(t, filepath.Join(lane, "README.md"), "changed\n")
+	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "lane/x", lane)
+	testiso.Write(t, filepath.Join(lane, "README.md"), "changed\n")
 	return lane
 }
 
@@ -54,7 +54,7 @@ func details(evs []kernel.Event) []map[string]string {
 
 func TestPreToolUse_DenyPrintsTheLineExits2AndRecords(t *testing.T) {
 	e := newEnv(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	code, stdout, stderr := e.pre(t, e.repo, "git commit -m wip", true)
 	line := "trellis: main-commit: git commit in the primary checkout, which is on main. Override: trellis allow main-commit."
 	if code != 2 || stdout != "" || stderr != line+"\n" {
@@ -73,7 +73,7 @@ func TestPreToolUse_DenyPrintsTheLineExits2AndRecords(t *testing.T) {
 func TestPreToolUse_APolicyDenialIsPolicyDenied(t *testing.T) {
 	e := newEnv(t)
 	lane := e.dirtyLane(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	code, _, stderr := e.pre(t, lane, "git commit -m \"x\n\nCo-Authored-By: A <a@b>\"", true)
 	if code != 2 {
 		t.Fatalf("exit %d (stderr %q), want 2", code, stderr)
@@ -121,7 +121,7 @@ func TestOverride_OneShot(t *testing.T) {
 func TestOverride_NotForSecretsOrUndercover(t *testing.T) {
 	e := newEnv(t)
 	lane := e.dirtyLane(t)
-	testsupport.FakeTool(t, "gitleaks", 2, "leaks found: 1")
+	testiso.FakeTool(t, "gitleaks", 2, "leaks found: 1")
 	for _, row := range []string{"secrets", "undercover"} {
 		if err := e.st.Allow(row); err != nil {
 			t.Fatal(err)
@@ -142,7 +142,7 @@ func TestOverride_NotForSecretsOrUndercover(t *testing.T) {
 
 func TestPreToolUse_WarnGoesToTheAgentAsContextAndRecordsNothing(t *testing.T) {
 	e := newEnv(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	code, stdout, stderr := e.pre(t, e.repo, "git commit -m wip", false)
 	line := "trellis: main-commit: git commit in the primary checkout, which is on main. Override: trellis allow main-commit."
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":` + strconv.Quote(line) + `}}` + "\n"
@@ -156,7 +156,7 @@ func TestPreToolUse_WarnGoesToTheAgentAsContextAndRecordsNothing(t *testing.T) {
 
 func TestPreToolUse_DenyStandsWithoutAStore(t *testing.T) {
 	e := newEnv(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	e.deps.Store = nil
 	e.deps.Fallback = ""
 	code, _, stderr := e.pre(t, e.repo, "git commit -m wip", true)
@@ -192,11 +192,7 @@ func TestContextJSON_IsValidJSONForControlCharacters(t *testing.T) {
 func TestPreToolUse_AnAllowWithALineIsShownAsContext(t *testing.T) {
 	e := newEnv(t)
 	lane := e.dirtyLane(t)
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Dir(gitPath))
+	testiso.PathWithOnly(t, "git")
 	code, stdout, stderr := e.pre(t, lane, `git commit -m "fix"`, true)
 	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"not applicable: gitleaks not installed"}}` + "\n"
 	if code != 0 || stdout != want || stderr != "" {
@@ -209,7 +205,7 @@ func TestPreToolUse_AnAllowWithALineIsShownAsContext(t *testing.T) {
 
 func TestOverride_NeedsATokenForEveryDeny(t *testing.T) {
 	e := newEnv(t)
-	testsupport.FakeTool(t, "gitleaks", 0, "")
+	testiso.FakeTool(t, "gitleaks", 0, "")
 	cmd := "git commit --no-verify -m x" // main-commit and hook-bypass, in the primary on main
 	if err := e.st.Allow("main-commit"); err != nil {
 		t.Fatal(err)

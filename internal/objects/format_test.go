@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/harryberg1n/trellis/internal/testsupport"
+	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
 func TestFormat(t *testing.T) {
@@ -24,7 +24,7 @@ func TestFormat(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			if c.config != "" {
-				testsupport.Write(t, filepath.Join(dir, "config"), c.config)
+				testiso.Write(t, filepath.Join(dir, "config"), c.config)
 			}
 			got, err := Format(dir)
 			if (err != nil) != c.wantErr || got != c.want {
@@ -37,9 +37,9 @@ func TestFormat(t *testing.T) {
 func TestFormat_WorktreeReadsCommonDirConfig(t *testing.T) {
 	root := t.TempDir()
 	common := filepath.Join(root, "main", ".git")
-	testsupport.Write(t, filepath.Join(common, "config"), "[extensions]\n\tobjectformat = sha256\n")
+	testiso.Write(t, filepath.Join(common, "config"), "[extensions]\n\tobjectformat = sha256\n")
 	wt := filepath.Join(common, "worktrees", "w")
-	testsupport.Write(t, filepath.Join(wt, "commondir"), "../..\n")
+	testiso.Write(t, filepath.Join(wt, "commondir"), "../..\n")
 	got, err := Format(wt)
 	if err != nil || got != "sha256" {
 		t.Fatalf("Format(worktree) = %q, %v; want sha256", got, err)

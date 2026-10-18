@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 )
 
 const keptSettings = `{ "model" : "opus",
@@ -26,8 +25,8 @@ func installFixture(t *testing.T) (env installEnv, repo, state string) {
 	state = filepath.Join(dir, "state")
 	t.Setenv("TRELLIS_STATE", state)
 	exe := filepath.Join(dir, "trellis")
-	testsupport.Write(t, exe, "stand-in")
-	testsupport.Write(t, filepath.Join(repo, ".claude", "settings.local.json"), keptSettings)
+	testiso.Write(t, exe, "stand-in")
+	testiso.Write(t, filepath.Join(repo, ".claude", "settings.local.json"), keptSettings)
 	return installEnv{Cwd: repo, Exe: exe}, repo, state
 }
 

@@ -1,6 +1,6 @@
 //go:build !windows
 
-package testsupport
+package testiso
 
 import "strconv"
 

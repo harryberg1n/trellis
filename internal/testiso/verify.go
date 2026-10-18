@@ -69,8 +69,8 @@ func Probe(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"config", "user.name", "probe"},
-		{"config", "user.email", "probe@example.com"},
+		{"config", "user.name", AuthorName},
+		{"config", "user.email", AuthorEmail},
 		{"add", "-A"},
 		{"commit", "-q", "-m", "probe"},
 		{"remote", "add", "dest", filepath.Join(base, "dest")},
@@ -160,23 +160,18 @@ func makeVictim(t *testing.T) string {
 	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
-		{"-c", "user.name=v", "-c", "user.email=v@example.com", "add", "-A"},
-		{"-c", "user.name=v", "-c", "user.email=v@example.com", "commit", "-q", "-m", "victim"},
+		{"-c", "user.name=" + AuthorName, "-c", "user.email=" + AuthorEmail, "add", "-A"},
+		{"-c", "user.name=" + AuthorName, "-c", "user.email=" + AuthorEmail, "commit", "-q", "-m", "victim"},
 	} {
 		// exec-ok: testiso cannot import internal/run: run's own tests run under testiso.Main, so the import would be a cycle in test.
 		cmd := exec.Command("git", args...)
 		cmd.Dir = victim
-		cmd.Env = cleanedEnv()
+		cmd.Env = dropGit(os.Environ())
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
 	return victim
-}
-
-// cleanedEnv is this process's environment with every GIT_* variable dropped.
-func cleanedEnv() []string {
-	return dropGit(os.Environ())
 }
 
 // hostileEnv is the environment of the probe's child: this process's, with the
@@ -218,7 +213,7 @@ func victimText(victim string) string {
 	// exec-ok: testiso cannot import internal/run: run's own tests run under testiso.Main, so the import would be a cycle in test.
 	cmd := exec.Command("git", "for-each-ref", "--format=%(refname) %(objectname)")
 	cmd.Dir = victim
-	cmd.Env = cleanedEnv()
+	cmd.Env = dropGit(os.Environ())
 	refs, _ := cmd.CombinedOutput()
 	sb.WriteString("refs:\n" + string(refs))
 	return sb.String()

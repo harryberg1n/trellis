@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/harryberg1n/trellis/internal/testiso"
+
 	"github.com/harryberg1n/trellis/internal/objects"
-	"github.com/harryberg1n/trellis/internal/testsupport"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/run"
@@ -58,7 +59,7 @@ func TestRecorder_SilentOverAllPayloads(t *testing.T) {
 func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 	e := newEnv(t)
 	file := filepath.Join(e.repo, "hello.txt")
-	testsupport.Write(t, file, "hello\n")
+	testiso.Write(t, file, "hello\n")
 	v := vars(e.repo, file, "hello\n")
 	v["@SESSION@"] = "sess-1"
 
@@ -79,16 +80,16 @@ func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 	if !reflect.DeepEqual(ev.Detail, want) {
 		t.Errorf("detail = %v, want %v", ev.Detail, want)
 	}
-	if got := testsupport.Git(t, e.repo, "hash-object", "hello.txt"); ev.Detail["blob"] != got {
+	if got := testiso.Git(t, e.repo, "hash-object", "hello.txt"); ev.Detail["blob"] != got {
 		t.Errorf("blob %s, git hash-object says %s", ev.Detail["blob"], got)
 	}
-	testsupport.Git(t, e.repo, "cat-file", "-e", ev.Detail["blob"])
+	testiso.Git(t, e.repo, "cat-file", "-e", ev.Detail["blob"])
 }
 
 func TestRecorder_EditHookSpawnsNothing(t *testing.T) {
 	e := newEnv(t)
 	gens := generate(t, e.repo, 1000)
-	spawned := testsupport.CountGitSpawns(t) // real starts of git, not the Runner's count
+	spawned := testiso.CountGitSpawns(t) // real starts of git, not the Runner's count
 	for _, g := range gens {
 		e.do(t, "PostToolUse", g.payload)
 	}
@@ -107,11 +108,11 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 	e := newEnv(t)
 	a := filepath.Join(e.repo, "a.txt")
 	b := filepath.Join(e.repo, "dir", "b.txt")
-	testsupport.Write(t, a, "a\n")
-	testsupport.Write(t, b, "b\n")
+	testiso.Write(t, a, "a\n")
+	testiso.Write(t, b, "b\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "write_01_create_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, b, "b\n")))
-	testsupport.Write(t, filepath.Join(e.repo, "c.txt"), "made by bash\n") // what the Bash command did
+	testiso.Write(t, filepath.Join(e.repo, "c.txt"), "made by bash\n") // what the Bash command did
 	e.do(t, "PostToolUse", fill(readShape(t, "bash_post"), vars(e.repo, "", "")))
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
 
@@ -124,12 +125,12 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 	}
 	anchor := evs[3]
 	ref := "refs/trellis/replay/main"
-	commit := testsupport.Git(t, e.repo, "rev-parse", ref)
-	tree := testsupport.Git(t, e.repo, "rev-parse", ref+"^{tree}")
+	commit := testiso.Git(t, e.repo, "rev-parse", ref)
+	tree := testiso.Git(t, e.repo, "rev-parse", ref+"^{tree}")
 	if anchor.Detail["commit"] != commit || anchor.Detail["tree"] != tree || anchor.Detail["ref"] != ref {
 		t.Errorf("turn.anchored detail %v, want commit %s tree %s ref %s", anchor.Detail, commit, tree, ref)
 	}
-	files := strings.Fields(testsupport.Git(t, e.repo, "ls-tree", "-r", "--name-only", ref))
+	files := strings.Fields(testiso.Git(t, e.repo, "ls-tree", "-r", "--name-only", ref))
 	if want := []string{"README.md", "a.txt", "c.txt", "dir/b.txt"}; !reflect.DeepEqual(files, want) {
 		t.Errorf("anchored tree holds %v, want %v", files, want)
 	}
@@ -138,7 +139,7 @@ func TestRecorder_StopAnchorsTheTurn(t *testing.T) {
 func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 	editPayload := func(e *env) []byte {
 		f := filepath.Join(e.repo, "x.txt")
-		testsupport.Write(t, f, "x\n")
+		testiso.Write(t, f, "x\n")
 		return fill(readShape(t, "edit_01_full"), vars(e.repo, f, "x\n"))
 	}
 	pendingKinds := func(e *env) []string {
@@ -174,7 +175,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 	t.Run("state root is a file", func(t *testing.T) {
 		e := newEnv(t)
 		root := filepath.Join(t.TempDir(), "root")
-		testsupport.Write(t, root, "not a directory")
+		testiso.Write(t, root, "not a directory")
 		_, err := store.Open(root, e.deps.Clock)
 		if err == nil {
 			t.Fatal("store.Open on a file succeeded")
@@ -190,7 +191,7 @@ func TestRecorder_ErrorNeverBlocks(t *testing.T) {
 		if err := os.RemoveAll(e.state); err != nil {
 			t.Fatal(err)
 		}
-		testsupport.Write(t, e.state, "not a directory")
+		testiso.Write(t, e.state, "not a directory")
 		record(t, e, editPayload(e))
 		if got, want := pendingKinds(e), []string{"internal.error"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("fallback pending holds %v, want %v", got, want)
@@ -228,7 +229,7 @@ func TestRecorder_EditIsLazyStopIsDurable(t *testing.T) {
 		return f.Sync()
 	})
 	a := filepath.Join(e.repo, "a.txt")
-	testsupport.Write(t, a, "a\n")
+	testiso.Write(t, a, "a\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "write_01_create_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, a, "a\n")))
 	e.do(t, "PostToolUse", fill(readShape(t, "bash_post"), vars(e.repo, "", "")))
@@ -260,7 +261,7 @@ func TestRecorder_NonRepoCwdIsSilentNoop(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir() // no .git here or above, inside the sandbox
 	f := filepath.Join(dir, "x.txt")
-	testsupport.Write(t, f, "x\n")
+	testiso.Write(t, f, "x\n")
 	for _, c := range []struct{ event, shape string }{
 		{"PostToolUse", "edit_01_full"},
 		{"PostToolUse", "bash_post"},
@@ -280,7 +281,7 @@ func TestRecorder_NonRepoCwdIsSilentNoop(t *testing.T) {
 func TestRecorder_FileOutsideRepoIsIgnored(t *testing.T) {
 	e := newEnv(t)
 	outside := filepath.Join(t.TempDir(), "elsewhere.txt")
-	testsupport.Write(t, outside, "x\n")
+	testiso.Write(t, outside, "x\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(e.repo, outside, "x\n")))
 	if evs := e.events(t); len(evs) != 0 {
 		t.Errorf("events %v, want none", kinds(evs))
@@ -313,7 +314,7 @@ func TestRecorder_DoublePanicStillSilent(t *testing.T) {
 
 func TestRecorder_SpawnShimSeesTheStopAnchor(t *testing.T) {
 	e := newEnv(t)
-	spawned := testsupport.CountGitSpawns(t)
+	spawned := testiso.CountGitSpawns(t)
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
 	if n := spawned(); n == 0 {
 		t.Error("Stop started git 0 times: the shim would not catch an Edit that spawned")
@@ -323,9 +324,9 @@ func TestRecorder_SpawnShimSeesTheStopAnchor(t *testing.T) {
 func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 	e := newEnv(t)
 	repo := filepath.Join(t.TempDir(), "fresh")
-	testsupport.Git(t, filepath.Dir(repo), "init", "-q", "-b", "trunk", repo)
+	testiso.Git(t, filepath.Dir(repo), "init", "-q", "-b", "trunk", repo)
 	f := filepath.Join(repo, "a.txt")
-	testsupport.Write(t, f, "a\n")
+	testiso.Write(t, f, "a\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(repo, f, "a\n")))
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(repo, "", "")))
 
@@ -336,7 +337,7 @@ func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 	if evs[0].Lane != "trunk" {
 		t.Errorf("lane %q, want trunk", evs[0].Lane)
 	}
-	if files := testsupport.Git(t, repo, "ls-tree", "-r", "--name-only", "refs/trellis/replay/trunk"); files != "a.txt" {
+	if files := testiso.Git(t, repo, "ls-tree", "-r", "--name-only", "refs/trellis/replay/trunk"); files != "a.txt" {
 		t.Errorf("anchored tree holds %q, want a.txt", files)
 	}
 }
@@ -344,9 +345,9 @@ func TestRecorder_UnbornHeadIsSilent(t *testing.T) {
 func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
 	e := newEnv(t)
 	wt := filepath.Join(filepath.Dir(e.repo), "wt")
-	testsupport.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
+	testiso.Git(t, e.repo, "worktree", "add", "-q", "-b", "side/lane", wt)
 	f := filepath.Join(wt, "w.txt")
-	testsupport.Write(t, f, "w\n")
+	testiso.Write(t, f, "w\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(wt, f, "w\n")))
 	e.do(t, "Stop", fill(readShape(t, "stop"), vars(wt, "", "")))
 
@@ -357,7 +358,7 @@ func TestRecorder_LinkedWorktreeRecordsItsBranch(t *testing.T) {
 	if evs[0].Lane != "side/lane" || evs[0].Detail["path"] != "w.txt" || evs[1].Lane != "side/lane" {
 		t.Errorf("events %+v, want lane side/lane and path w.txt", evs)
 	}
-	if got := testsupport.Git(t, e.repo, "rev-parse", "--verify", "-q", "refs/trellis/replay/side--lane"); got == "" {
+	if got := testiso.Git(t, e.repo, "rev-parse", "--verify", "-q", "refs/trellis/replay/side--lane"); got == "" {
 		t.Error("no replay ref for side/lane")
 	}
 }
@@ -366,7 +367,7 @@ func TestRecorder_NestedCwdFindsRoot(t *testing.T) {
 	e := newEnv(t)
 	sub := filepath.Join(e.repo, "pkg", "deep")
 	f := filepath.Join(sub, "n.txt")
-	testsupport.Write(t, f, "n\n")
+	testiso.Write(t, f, "n\n")
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(sub, f, "n\n")))
 
 	evs := e.events(t)
@@ -417,7 +418,7 @@ func TestRecorder_UsesTheRepoTheCallerLocated(t *testing.T) {
 	}
 	e.deps.Repo = &loc
 	f := filepath.Join(e.repo, "k.txt")
-	testsupport.Write(t, f, "k\n")
+	testiso.Write(t, f, "k\n")
 	// The payload's cwd is nowhere near a repo; only the caller's Repo can place the edit.
 	e.do(t, "PostToolUse", fill(readShape(t, "edit_01_full"), vars(t.TempDir(), f, "k\n")))
 	if evs := e.events(t); len(evs) != 1 || evs[0].Kind != "edit" || evs[0].Detail["path"] != "k.txt" {
