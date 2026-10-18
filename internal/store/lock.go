@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	// LockTimeout is how long an event waits for the repo lock before it is
-	// parked.
+	// LockTimeout is the default for how long an event waits for the repo lock
+	// before it is parked.
 	LockTimeout  = 2 * time.Second
 	lockPollWait = 10 * time.Millisecond
 )
@@ -34,7 +34,7 @@ func (s *Store) acquire() (release func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := s.clock.Now().Add(LockTimeout)
+	deadline := s.clock.Now().Add(s.lockTimeout)
 	for {
 		ok, err := tryLock(f)
 		if err != nil {

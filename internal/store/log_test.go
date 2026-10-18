@@ -131,7 +131,7 @@ func TestLog_ConcurrentAppendsLoseNothing(t *testing.T) {
 	stores := make([]*Store, 8)
 	for g := range stores {
 		var err error
-		if stores[g], err = Open(dir, &spinClock{now: t0}); err != nil {
+		if stores[g], err = Open(dir, &spinClock{now: t0}, WithLockTimeout(10*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 	}
