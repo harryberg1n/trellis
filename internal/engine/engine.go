@@ -8,15 +8,27 @@ import (
 	"github.com/harryberg1n/trellis/internal/store"
 )
 
+// Option changes how Step writes.
+type Option func(*store.Durability)
+
+// Lazy makes Step append and save without fsync; the caller flushes later with
+// Store.Sync. Without it Step is durable.
+func Lazy(d *store.Durability) { *d = store.Lazy }
+
 // Step records ev and returns the actions the rows give it. Under the repo
 // lock it loads the checkpoint, folds in parked events, stamps ev.Arms from
 // the lane sticky record, runs kernel.Decide, appends, saves and unlocks.
 // The caller runs the returned actions outside the lock. If the lock is not
 // free in time the event is parked, never dropped, and Step returns the
 // actions for the event as given.
-func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context) ([]kernel.Action, error) {
+func Step(s *store.Store, rows []kernel.Row, ev kernel.Event, ctx kernel.Context, opts ...Option) ([]kernel.Action, error) {
+	mode := store.Durable
+	for _, o := range opts {
+		o(&mode)
+	}
 	var actions []kernel.Action
 	err := s.Locked(func(tx *store.Tx) error {
+		tx.SetDurability(mode)
 		cp, err := tx.Checkpoint()
 		if err != nil {
 			return err
