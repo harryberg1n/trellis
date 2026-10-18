@@ -52,7 +52,10 @@ func TestInstall_InATreeOfAnUninstalledPrimaryRecordsNothingAndSaysSo(t *testing
 	if got, _ := Repos(f.root); len(got) != 0 {
 		t.Errorf("Repos = %v, want nothing recorded", got)
 	}
-	want := "not recorded: update re-installs primary checkouts only; run trellis install in " + store.Canonical(f.repo) + " to include this repository"
+	if got, err := ReferencedRepos(f.root); err != nil || !reflect.DeepEqual(got, []string{store.Canonical(f.repo)}) {
+		t.Errorf("ReferencedRepos = %v, %v; want the primary, referenced only", got, err)
+	}
+	want := "not re-installed by update (primary checkout not installed; its pins are kept): run trellis install in " + store.Canonical(f.repo) + " to include this repository"
 	if last := actions[len(actions)-1]; last != want {
 		t.Errorf("last action = %q, want %q", last, want)
 	}
@@ -219,5 +222,28 @@ func TestRecordRepo_ParallelRecordsLoseNoLine(t *testing.T) {
 	pins, err := CreatedPins(root)
 	if err != nil || len(pins) != 8 {
 		t.Fatalf("CreatedPins = %v, %v; want 8 lines", pins, err)
+	}
+}
+
+func TestSweepReferences_ReadsLinkedWorktreesOfAPrimaryThatHasNoHooks(t *testing.T) {
+	f := newFixture(t)
+	tree := testiso.AddTree(t, f.repo, "feat-tree", "feat")
+	o := f.opts("v0.0.7", false)
+	o.Repo = tree
+	if _, err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+
+	own, err := ReferencedVersions(f.root, f.repo)
+	if err != nil || len(own) != 0 {
+		t.Fatalf("the primary references %v, %v; want nothing of its own", own, err)
+	}
+	got, err := SweepReferences(f.root, f.repo)
+	if want := []string{"v0.0.7"}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("SweepReferences = %v, %v; want %v", got, err, want)
+	}
+	trees, err := LinkedWorktrees(f.repo)
+	if want := []string{store.Canonical(tree)}; err != nil || !reflect.DeepEqual(trees, want) {
+		t.Errorf("LinkedWorktrees = %v, %v; want %v", trees, err, want)
 	}
 }

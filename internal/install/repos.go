@@ -90,7 +90,8 @@ func addLine(root, name, line string) error {
 // returns a note when it recorded nothing. A linked worktree is recorded as its
 // primary checkout, but only when the primary holds trellis hooks of its own:
 // update re-installs what it records, and must not write hooks into a checkout
-// the user never installed in. A tree that `trellis tree rm` later removes
+// the user never installed in. Otherwise the primary is recorded as referenced
+// only, which the sweep of pins reads and update never re-installs. A tree that `trellis tree rm` later removes
 // leaves no record that is not found.
 func recordInstall(root, repo string) (note string, err error) {
 	canon, err := canonicalRepo(repo)
@@ -107,7 +108,12 @@ func recordInstall(root, repo string) (note string, err error) {
 		return "", err
 	}
 	if len(refs) == 0 {
-		return "not recorded: update re-installs primary checkouts only; run trellis install in " + primary + " to include this repository", nil
+		// Referenced only: the sweep reads the primary's worktrees, so this
+		// tree'"'"'s pin is kept; update never re-installs the primary.
+		if err := RecordReferenced(root, primary); err != nil {
+			return "", err
+		}
+		return "not re-installed by update (primary checkout not installed; its pins are kept): run trellis install in " + primary + " to include this repository", nil
 	}
 	return "", RecordRepo(root, primary)
 }
@@ -156,6 +162,95 @@ func ReferencedVersions(root, repo string) ([]string, error) {
 	for _, l := range found {
 		for _, h := range l.Entry.Hooks {
 			if v, ok := Owned(h.Command, root); ok && !slices.Contains(out, v) {
+				out = append(out, v)
+			}
+		}
+	}
+	return out, nil
+}
+
+// referencedFile is the record of primary checkouts that hold no trellis hooks
+// themselves but have a linked worktree that does. The sweep of pinned
+// versions reads them, update never re-installs them.
+const referencedFile = "referenced.txt"
+
+// ReferencedRepos is the primary checkouts recorded as referenced only.
+func ReferencedRepos(root string) ([]string, error) { return readLines(root, referencedFile) }
+
+// RecordReferenced adds repo to the referenced-only record, once.
+func RecordReferenced(root, repo string) error {
+	canon, err := canonicalRepo(repo)
+	if err != nil {
+		return err
+	}
+	return addLine(root, referencedFile, canon)
+}
+
+// ForgetReferenced removes repo from the referenced-only record.
+func ForgetReferenced(root, repo string) error {
+	canon, err := canonicalRepo(repo)
+	if err != nil {
+		return err
+	}
+	return lockRecords(root, func() error {
+		repos, err := ReferencedRepos(root)
+		if err != nil {
+			return err
+		}
+		kept := slices.DeleteFunc(slices.Clone(repos), func(r string) bool { return r == canon })
+		if len(kept) == len(repos) {
+			return nil
+		}
+		return writeLines(root, referencedFile, kept)
+	})
+}
+
+// LinkedWorktrees is the linked worktrees of the repository around repo, read
+// from the gitdir file each one has under <common dir>/worktrees, the same
+// list `git worktree list` prints; the primary checkout is not among them.
+func LinkedWorktrees(repo string) ([]string, error) {
+	r, err := objects.Open(repo)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(r.Common, "worktrees"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(r.Common, "worktrees", e.Name(), "gitdir"))
+		if err != nil {
+			continue // a half-made or half-removed worktree has nothing to read
+		}
+		dotGit := filepath.FromSlash(strings.TrimSpace(string(b)))
+		out = append(out, store.Canonical(filepath.Dir(dotGit)))
+	}
+	return out, nil
+}
+
+// SweepReferences is the versions the trellis hooks in repo and in each of its
+// linked worktrees point at, each once. A worktree installed before its
+// primary points at a pin the primary's own settings never name.
+func SweepReferences(root, repo string) ([]string, error) {
+	out, err := ReferencedVersions(root, repo)
+	if err != nil {
+		return nil, err
+	}
+	trees, err := LinkedWorktrees(repo)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range trees {
+		refs, err := ReferencedVersions(root, t)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range refs {
+			if !slices.Contains(out, v) {
 				out = append(out, v)
 			}
 		}
