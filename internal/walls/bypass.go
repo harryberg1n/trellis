@@ -53,7 +53,7 @@ func skipsVerification(c gitCall) bool {
 		case takesValue[a]:
 			i++
 		case strings.HasPrefix(a, "--"):
-			if len(a) >= len("--no-ve") && strings.HasPrefix("--no-verify", a) {
+			if noVerify := "--no-verify"; len(a) >= len("--no-ve") && strings.HasPrefix(noVerify, a) {
 				return true
 			}
 		case c.Verb == "commit" && strings.HasPrefix(a, "-") && len(a) > 1:

@@ -116,7 +116,7 @@ func segments(cmd string) [][]word {
 			if len(cur) > 0 {
 				segs = append(segs, cur)
 			}
-			cur = nil
+			cur = make([]word, 0, 4)
 		default:
 			cur = append(cur, w)
 		}

@@ -39,7 +39,7 @@ func (e *env) dirtyLane(t testing.TB) string {
 }
 
 func details(evs []kernel.Event) []map[string]string {
-	var out []map[string]string
+	out := make([]map[string]string, 0, len(evs))
 	for _, ev := range evs {
 		d := map[string]string{"kind": ev.Kind}
 		for k, v := range ev.Detail {

@@ -10,7 +10,7 @@ import (
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
 
-func gitSpec(dir string, stdin string, args ...string) Spec {
+func gitSpec(dir, stdin string, args ...string) Spec {
 	s := Spec{Name: "git", Args: args, Dir: dir, Timeout: time.Minute}
 	if stdin != "" {
 		s.Stdin = []byte(stdin)

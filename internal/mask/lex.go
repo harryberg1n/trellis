@@ -56,7 +56,7 @@ type strForm struct {
 func NewLexer(l Language) *Lexer {
 	x := &Lexer{codeEscape: l.CodeEscape}
 	x.starts['\\'] = l.CodeEscape
-	var except [][]byte
+	except := make([][]byte, 0, len(l.LineExcept))
 	for _, e := range l.LineExcept {
 		except = append(except, []byte(e))
 	}

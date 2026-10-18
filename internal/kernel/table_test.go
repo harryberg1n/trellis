@@ -97,7 +97,7 @@ func TestValidate_ShippedRowsPass(t *testing.T) {
 }
 
 func TestTable_ShipsTheLaneSixRows(t *testing.T) {
-	var got []string
+	got := make([]string, 0, len(Table))
 	for _, r := range Table {
 		got = append(got, r.ID)
 	}

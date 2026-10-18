@@ -11,11 +11,11 @@ package mask
 type Escape string
 
 const (
-	// EscapeNone: nothing is special inside the string but its closer.
+	// EscapeNone means nothing is special inside the string but its closer.
 	EscapeNone Escape = "none"
-	// EscapeBackslash: a backslash makes the byte after it part of the string.
+	// EscapeBackslash means a backslash makes the byte after it part of the string.
 	EscapeBackslash Escape = "backslash"
-	// EscapeDoubling: two closers in a row are one literal closer and end
+	// EscapeDoubling means two closers in a row are one literal closer and end
 	// nothing, and a backslash is text.
 	EscapeDoubling Escape = "doubling"
 )
