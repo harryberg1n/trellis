@@ -297,11 +297,12 @@ func parseLsTree(out []byte) (map[string]entry, error) {
 	return list, nil
 }
 
-// Git runs one git child through r and returns its stdout.
+// Git runs one git child through r and returns its stdout. A child that fails
+// still returns what it printed: git writes a conflict list to stdout.
 func Git(r run.Runner, repo string, stdin []byte, args ...string) ([]byte, error) {
 	res, err := r.Light(run.Spec{Name: "git", Args: args, Dir: repo, Timeout: gitTimeout, Stdin: stdin})
 	if err != nil {
-		return nil, fmt.Errorf("objects: git %s: %w", run.Kind(run.Spec{Name: "git", Args: args}), err)
+		return res.Stdout, fmt.Errorf("objects: git %s: %w", run.Kind(run.Spec{Name: "git", Args: args}), err)
 	}
 	return res.Stdout, nil
 }

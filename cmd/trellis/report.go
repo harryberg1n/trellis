@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -56,11 +55,10 @@ type reportEnv struct {
 // reportCmd runs `trellis report [--issue]`. All facts are gathered here and
 // handed to measure.
 func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
-	fs := flag.NewFlagSet("report", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs := newFlagSet("report", "report [--issue]", stderr)
 	issue := fs.Bool("issue", false, "file the aggregate report as an issue on "+reportRepo)
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return parseExit(err)
 	}
 	repo, err := objects.Open(env.Repo)
 	if err != nil {

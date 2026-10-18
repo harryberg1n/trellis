@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -46,13 +45,12 @@ func installVerb(args []string, stdout, stderr io.Writer) int {
 // runInstallVerb parses the flags the three verbs share (--repo) and runs one.
 func runInstallVerb(args []string, stdout, stderr io.Writer, env installEnv) int {
 	verb := args[0]
-	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs := newFlagSet(verb, installUsage(verb), stderr)
 	repo := fs.String("repo", "", "the repository (default: the one holding the working directory)")
 	dry := fs.Bool("dry", false, "install only: print the actions without performing them")
 	allowDev := fs.Bool("allow-dev", false, "install only: pin a build whose version is \"dev\"")
 	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+		return parseExit(err)
 	}
 	if (*dry || *allowDev) && verb != "install" {
 		_, _ = fmt.Fprintf(stderr, "trellis %s: --dry and --allow-dev are install flags\n", verb)

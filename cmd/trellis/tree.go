@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,13 +19,31 @@ verbs:
   new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory
   sync                    fetch origin and rebase this tree onto its default branch
   merge [--check CMD]     push, open or find the pull request, wait for its checks, rebase-merge, remove the tree
+                          (a repository with no remote: a --no-ff merge into the default branch, no gh)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work without --force
+
+exit codes of merge: 0 merged; 2 when you can fix it and run it again (red checks, a conflict,
+a branch that is behind, a head that moved); 1 anything else.
 `
+
+// treeUsageLine is the usage line of a tree verb.
+func treeUsageLine(verb string) string {
+	switch verb {
+	case "new":
+		return "tree new <name> [--path P]"
+	case "merge":
+		return "tree merge [--check CMD]"
+	case "rm":
+		return "tree rm [<name>] [--force]"
+	}
+	return "tree " + verb
+}
 
 // treeEnv is what the tree verbs take from the process.
 type treeEnv struct {
 	Dir    string
 	Runner runner.Runner
+	Clock  clock.Clock
 	Leave  func(primary string) error
 }
 
@@ -35,19 +54,33 @@ func treeVerb(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "trellis tree: %v\n", err)
 		return 1
 	}
-	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clock.Real()}, Leave: os.Chdir}, stdout, stderr)
+	clk := clock.Real()
+	return treeCmd(args, treeEnv{Dir: dir, Runner: runner.Exec{Clock: clk}, Clock: clk, Leave: os.Chdir}, stdout, stderr)
 }
 
-// treeCmd dispatches one tree verb and returns the exit code. An error is one
-// message on stderr and exit 1.
+// treeExit is the exit code for a failed tree verb: 2 for a failure the
+// operator can fix and run again, 1 for any other.
+func treeExit(err error) int {
+	var fixable *tree.Fixable
+	if errors.As(err, &fixable) {
+		return 2
+	}
+	return 1
+}
+
+// treeCmd dispatches one tree verb and returns the exit code. An error is
+// reported on stderr.
 func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, treeUsage)
 		return 2
 	}
 	verb := args[0]
-	fs := flag.NewFlagSet("tree "+verb, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	if verb == "-h" || verb == "--help" {
+		_, _ = io.WriteString(stdout, treeUsage)
+		return 0
+	}
+	fs := newFlagSet("tree "+verb, treeUsageLine(verb), stderr)
 	var path, check string
 	var force bool
 	switch verb {
@@ -64,11 +97,12 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	}
 	positional, err := parseInterspersed(fs, args[1:])
 	if err != nil {
-		return 2
+		return parseExit(err)
 	}
 	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 0}, "rm": {0, 1}}[verb]
 	if len(positional) < want[0] || len(positional) > want[1] {
-		_, _ = fmt.Fprintf(stderr, "trellis tree %s: wrong number of arguments\n\n%s", verb, treeUsage)
+		_, _ = fmt.Fprintf(stderr, "trellis tree %s: wrong number of arguments\n", verb)
+		fs.Usage()
 		return 2
 	}
 	var name string
@@ -78,6 +112,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	e := tree.Env{
 		Dir:    env.Dir,
 		Runner: env.Runner,
+		Clock:  env.Clock,
 		Out:    stdout,
 		Err:    stderr,
 		Record: treeRecorder(env.Dir),
@@ -94,8 +129,8 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		err = tree.Rm(e, name, force)
 	}
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "trellis: %v\n", err)
-		return 1
+		_, _ = fmt.Fprintf(stderr, "trellis %v\n", err)
+		return treeExit(err)
 	}
 	return 0
 }
@@ -123,8 +158,7 @@ func treeRecorder(dir string) func(kernel.Event) error {
 		if err != nil {
 			return err
 		}
-		clk := clock.Real()
-		ev.At = clk.Now()
+		ev.At = clock.Real().Now()
 		_, err = s.Append(ev)
 		return err
 	}

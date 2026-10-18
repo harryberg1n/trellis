@@ -53,7 +53,7 @@ func TestGH_PRViewDecodesAndNamesAMissingPR(t *testing.T) {
 	if err != nil || got != (PRState{Number: 7, State: "OPEN"}) {
 		t.Fatalf("PRView = %+v, %v; want #7 OPEN", got, err)
 	}
-	if want := []string{"pr", "view", "feat", "--json", "number,state"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
+	if want := []string{"pr", "view", "feat", "--json", "number,state,mergeable,mergeStateStatus,headRefOid"}; !reflect.DeepEqual(r.Specs()[0].Args, want) {
 		t.Errorf("argv = %v, want %v", r.Specs()[0].Args, want)
 	}
 
@@ -62,6 +62,42 @@ func TestGH_PRViewDecodesAndNamesAMissingPR(t *testing.T) {
 	}}
 	if _, err := (GH{Runner: none}).PRView("feat"); !errors.Is(err, ErrNoPR) {
 		t.Errorf("err = %v, want ErrNoPR", err)
+	}
+}
+
+func TestGH_ViewMergeableRepollsUnknownAndStopsAtTheBound(t *testing.T) {
+	reads := 0
+	answers := []string{"UNKNOWN", "UNKNOWN", "CONFLICTING"}
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		a := answers[min(reads, len(answers)-1)]
+		reads++
+		return run.Result{Stdout: []byte(`{"number":7,"state":"OPEN","mergeable":"` + a + `","mergeStateStatus":"DIRTY"}`)}, nil
+	}}
+	waits := 0
+	pr, err := GH{Runner: r}.ViewMergeable("feat", func(d time.Duration) {
+		waits++
+		if d != 750*time.Millisecond {
+			t.Errorf("delay = %v, want 750ms", d)
+		}
+	})
+	if err != nil || !pr.IsConflicting() || reads != 3 || waits != 2 {
+		t.Errorf("pr %+v, err %v, reads %d, waits %d; want conflicting after 3 reads and 2 waits", pr, err, reads, waits)
+	}
+
+	reads, answers = 0, []string{"UNKNOWN"}
+	pr, err = GH{Runner: r}.ViewMergeable("feat", func(time.Duration) {})
+	if err != nil || !pr.MergeUnknown() || reads != 4 {
+		t.Errorf("pr %+v, err %v, reads %d; want UNKNOWN returned after 4 reads", pr, err, reads)
+	}
+}
+
+func TestGH_ChecksReadsTheListThoughGhExitsNonZero(t *testing.T) {
+	r := &testsupport.FakeRunner{Answer: func(run.Spec) (run.Result, error) {
+		return run.Result{Stdout: []byte(`[{"name":"test","bucket":"fail","link":"L"}]`), ExitCode: 1}, errors.New("exit status 1")
+	}}
+	got, err := GH{Runner: r}.Checks(7)
+	if err != nil || !reflect.DeepEqual(got, []Check{{Name: "test", Bucket: "fail", Link: "L"}}) {
+		t.Errorf("Checks = %+v, %v", got, err)
 	}
 }
 

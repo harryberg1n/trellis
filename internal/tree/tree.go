@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -31,12 +32,29 @@ type Env struct {
 	Out    io.Writer  // one line per step
 	Err    io.Writer  // warnings; nil discards them
 	Record func(kernel.Event) error
+	Clock  clock.Clock // paces the mergeable poll; nil is the wall clock
 	// Leave is called with the primary checkout before a tree the process
 	// stands in is removed, so the process can step out of it. May be nil.
 	Leave func(primary string) error
 }
 
 func (e Env) git() run.Runner { return run.Direct{Inner: e.Runner} }
+
+// wait pauses for d on the env's clock.
+func (e Env) wait(d time.Duration) {
+	clk := e.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
+	<-clk.After(d)
+}
+
+// Fixable is a failure the operator can fix and run the verb again: red CI, a
+// conflict, a branch that is behind, a head that moved. The command exits 2
+// for it and 1 for any other error.
+type Fixable struct{ Msg string }
+
+func (f *Fixable) Error() string { return f.Msg }
 
 func (e Env) say(format string, a ...any) { _, _ = fmt.Fprintf(e.Out, format+"\n", a...) }
 
@@ -127,15 +145,26 @@ func New(env Env, name, path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("tree new: path %s exists", path)
 	}
-	if _, err := env.runGit(w.Primary, "fetch", "origin"); err != nil {
-		return fmt.Errorf("tree new: %w", err)
+	if w.Repo.Remote != "" {
+		if _, err := env.runGit(w.Primary, "fetch", "origin"); err != nil {
+			return fmt.Errorf("tree new: %w", err)
+		}
 	}
-	if _, err := env.runGit(w.Primary, "worktree", "add", "-b", name, path, "origin/"+w.Repo.Default); err != nil {
+	if _, err := env.runGit(w.Primary, "worktree", "add", "-b", name, path, baseOf(w.Repo)); err != nil {
 		return fmt.Errorf("tree new: %w", err)
 	}
 	env.record(openedEvent(name))
 	env.say("%s", path)
 	return nil
+}
+
+// baseOf is the ref a tree is cut from and rebased onto: origin's default
+// branch, or the local one in a repository with no remote.
+func baseOf(repo objects.Repo) string {
+	if repo.Remote == "" {
+		return repo.Default
+	}
+	return "origin/" + repo.Default
 }
 
 // Sync fetches origin and rebases the current tree onto its default branch.
@@ -145,13 +174,16 @@ func Sync(env Env) error {
 	if err != nil {
 		return fmt.Errorf("tree sync: %w", err)
 	}
-	if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
-		return fmt.Errorf("tree sync: %w", err)
+	if w.Repo.Remote != "" {
+		if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
+			return fmt.Errorf("tree sync: %w", err)
+		}
 	}
-	if _, err := env.runGit(w.Repo.Root, "rebase", "origin/"+w.Repo.Default); err != nil {
-		return fmt.Errorf("tree sync: %w", err)
+	base := baseOf(w.Repo)
+	if out, err := env.runGit(w.Repo.Root, "rebase", base); err != nil {
+		return syncError(env, w.Repo, out, err)
 	}
-	env.say("rebased %s onto origin/%s", w.Repo.Branch, w.Repo.Default)
+	env.say("rebased %s onto %s", w.Repo.Branch, base)
 	return nil
 }
 
@@ -173,24 +205,48 @@ func Merge(env Env, check string) error {
 		return errors.New("tree merge: HEAD is detached")
 	}
 	name := repo.Branch
+	if repo.Remote == "" {
+		return mergeLocal(env, w, check)
+	}
 	if check != "" {
 		if err := runCheck(env, repo.Root, name, check); err != nil {
 			return err
 		}
+	}
+	if err := (host.GH{Runner: env.Runner, Dir: repo.Root}).Ready(); err != nil {
+		return errors.New("tree merge: gh is not installed or not authenticated")
 	}
 	if _, err := env.runGit(repo.Root, "push", "--force-with-lease", "-u", "origin", name); err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
 	env.say("pushed %s", name)
 	gh := host.GH{Runner: env.Runner, Dir: repo.Root}
-	pr, err := pullRequest(env, gh, name, repo.Default)
+	if err := ensurePullRequest(gh, name, repo.Default); err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	st, err := gh.ViewMergeable(name, env.wait)
 	if err != nil {
 		return fmt.Errorf("tree merge: %w", err)
 	}
-	if out, err := gh.WatchChecks(pr); err != nil {
-		return fmt.Errorf("tree merge: checks of #%d: %w\n%s", pr, err, out)
+	pr := st.Number
+	env.say("pull request #%d", pr)
+	switch {
+	case st.IsConflicting():
+		return conflictError(env, repo)
+	case st.IsBehind():
+		return &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
 	}
-	env.say("checks passed on #%d", pr)
+	switch out, err := gh.WatchChecks(pr); {
+	case errors.Is(err, host.ErrNoChecks):
+		env.say("no checks on this PR")
+	case err != nil:
+		return checksError(env, gh, pr, out, err)
+	default:
+		env.say("checks passed on #%d", pr)
+	}
+	if err := headMoved(env, gh, repo, name); err != nil {
+		return err
+	}
 	if err := gh.MergePR(pr); err != nil {
 		// gh merges first and then tries to move this checkout off the branch,
 		// which it cannot while the default branch is checked out elsewhere.
@@ -209,7 +265,7 @@ func runCheck(env Env, dir, name, cmd string) error {
 	res, err := env.Runner.Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout})
 	if err != nil {
 		env.record(checkEvent(name, "red"))
-		return fmt.Errorf("tree merge: check %q failed: %s", cmd, lastLine(res, err))
+		return &Fixable{Msg: fmt.Sprintf("tree merge: check %q failed: %s", cmd, lastLine(res, err))}
 	}
 	env.record(checkEvent(name, "green"))
 	env.say("check passed")
@@ -227,22 +283,38 @@ func lastLine(res run.Result, err error) string {
 	return line
 }
 
-// pullRequest is the number of the open pull request of branch, opened
-// against base when there is none.
-func pullRequest(env Env, gh host.GH, branch, base string) (int, error) {
+// ensurePullRequest opens a pull request of branch against base unless an
+// open one exists.
+func ensurePullRequest(gh host.GH, branch, base string) error {
 	st, err := gh.PRView(branch)
-	if errors.Is(err, host.ErrNoPR) || err == nil && st.State != "OPEN" {
-		if _, err := gh.CreatePR(base); err != nil {
-			return 0, err
-		}
-		st, err = gh.PRView(branch)
+	if err == nil && st.State == "OPEN" {
+		return nil
 	}
-	if err != nil {
-		return 0, err
+	if err != nil && !errors.Is(err, host.ErrNoPR) {
+		return err
 	}
-	env.say("pull request #%d", st.Number)
-	return st.Number, nil
+	_, err = gh.CreatePR(base)
+	return err
 }
+
+// headMoved is a Fixable when the pull request's head is no longer the commit
+// this tree is on: the checks that just passed judged another commit.
+func headMoved(env Env, gh host.GH, repo objects.Repo, branch string) error {
+	st, err := gh.PRView(branch)
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	local, err := env.runGit(repo.Root, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("tree merge: %w", err)
+	}
+	if st.HeadSHA == "" || strings.EqualFold(st.HeadSHA, local) {
+		return nil
+	}
+	return &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(local), short(st.HeadSHA))}
+}
+
+func short(sha string) string { return sha[:min(12, len(sha))] }
 
 // Rm removes the tree called name (the current tree when empty) and its
 // branch. A tree with work no commit holds is refused unless force.
