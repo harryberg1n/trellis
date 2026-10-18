@@ -121,7 +121,7 @@ func TestOverride_OneShot(t *testing.T) {
 func TestOverride_NotForSecretsOrUndercover(t *testing.T) {
 	e := newEnv(t)
 	lane := e.dirtyLane(t)
-	testsupport.FakeTool(t, "gitleaks", 1, "leaks found: 1")
+	testsupport.FakeTool(t, "gitleaks", 2, "leaks found: 1")
 	for _, row := range []string{"secrets", "undercover"} {
 		if err := e.st.Allow(row); err != nil {
 			t.Fatal(err)
