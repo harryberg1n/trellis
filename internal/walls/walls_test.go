@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -108,7 +109,7 @@ func TestWalls_EachIncidentFixtureIsDenied(t *testing.T) {
 			}
 			leak := 0
 			if row == "secrets" {
-				leak = 1
+				leak = 2
 			}
 			testsupport.FakeTool(t, "gitleaks", leak, "leaks found: 1")
 			actions := decide(t, w.fill(string(raw)), testsupport.Recorder())
@@ -281,7 +282,7 @@ func TestSecrets_SpawnsOnlyForACommit(t *testing.T) {
 	}
 	decide(t, bash(t, w.lane, `git commit -m "x"`, true), rec)
 	spec := rec.Specs()
-	if len(spec) != 1 || spec[0].Name != "gitleaks" || strings.Join(spec[0].Args, " ") != "protect --staged --no-banner --redact" {
+	if len(spec) != 1 || spec[0].Name != "gitleaks" || strings.Join(spec[0].Args, " ") != "protect --staged --no-banner --redact --exit-code 2" {
 		t.Errorf("spawns %+v, want one gitleaks protect --staged --no-banner --redact", spec)
 	}
 }
@@ -406,7 +407,7 @@ func TestUndercover_TrailerDenied(t *testing.T) {
 
 func TestWallsWarnPeople_NonAgentGetsWarning(t *testing.T) {
 	w := newWorld(t)
-	testsupport.FakeTool(t, "gitleaks", 1, "leaks found: 1")
+	testsupport.FakeTool(t, "gitleaks", 2, "leaks found: 1")
 	rec := testsupport.Recorder()
 
 	// main-commit, as an agent: a deny. Without a session_id: a warn.
@@ -447,6 +448,48 @@ func TestMatch_RowWithNothingToSayDoesNotMatch(t *testing.T) {
 	for _, row := range walls.Rows() {
 		if a, ok := walls.Match(row, ctx, testsupport.Recorder()); ok {
 			t.Errorf("Match(%s, ls) = %+v, true; want no match", row.ID, a)
+		}
+	}
+}
+
+func TestSecrets_OnlyExitCodeTwoIsAFinding(t *testing.T) {
+	w := newWorld(t)
+	testsupport.FakeTool(t, "gitleaks", 1, "fatal: not a git repository")
+	got := decide(t, bash(t, w.lane, `git commit -m "x"`, true), testsupport.Recorder())
+	want := []kernel.Action{{RowID: "secrets", Verdict: kernel.VerdictAllow, Line: "not applicable: gitleaks failed (exit 1)"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("exit 1: actions %+v, want %+v", got, want)
+	}
+}
+
+func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
+	w := newWorld(t)
+	staged := "protect --staged --no-banner --redact --exit-code 2"
+	tree := "protect --no-banner --redact --exit-code 2"
+	for _, c := range []struct {
+		cmd  string
+		want []string
+	}{
+		{`git commit -m x`, []string{staged}},
+		{`git commit -m x -- README.md`, []string{staged, tree}},
+		{`git commit -m x README.md`, []string{staged, tree}},
+		{`git commit -am x`, []string{staged, tree}},
+		{`git commit --all -m x`, []string{staged, tree}},
+		{`git commit --amend --no-edit`, []string{staged, tree}},
+		{`git add -A && git commit -m x`, []string{staged, tree}},
+		{`git add . ; git commit -m x`, []string{staged, tree}},
+	} {
+		testsupport.FakeTool(t, "gitleaks", 0, "")
+		rec := testsupport.Recorder()
+		decide(t, bash(t, w.lane, c.cmd, true), rec)
+		var got []string
+		for _, s := range rec.Specs() {
+			if s.Name == "gitleaks" {
+				got = append(got, strings.Join(s.Args, " "))
+			}
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%q: gitleaks calls %q, want %q", c.cmd, got, c.want)
 		}
 	}
 }
