@@ -49,6 +49,21 @@ func TestCost_UnpricedModelCostsNothing(t *testing.T) {
 	}
 }
 
+func TestCost_PrefixMustEndAtAFamilyBoundary(t *testing.T) {
+	for model, ok := range map[string]bool{
+		"claude-opus-5":              true,
+		"claude-opus-5-5":            true,
+		"claude-opus-5[1m]":          true,
+		"claude-opus-5x":             false,
+		"claude-opus-50":             false,
+		"claude-sonnet-4-6-20260101": true,
+	} {
+		if _, got := priceFor(model); got != ok {
+			t.Errorf("priceFor(%q) found = %v, want %v", model, got, ok)
+		}
+	}
+}
+
 func TestCost_LongestPrefixWins(t *testing.T) {
 	if p, ok := priceFor("claude-sonnet-5-20260101[1m]"); !ok || p.Input != 3 {
 		t.Errorf("price = %+v %v, want input 3", p, ok)

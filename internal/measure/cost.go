@@ -34,11 +34,19 @@ var modelPrices = []struct {
 	{"claude-haiku-4-5", price{1, 5, 0.1, 1.25}},
 }
 
+// atFamily reports whether model is the family prefix, or the prefix followed
+// by "-" or "[": "claude-opus-5-5" and "claude-opus-5[1m]" are family
+// members, "claude-opus-5x" is not.
+func atFamily(model, prefix string) bool {
+	rest, ok := strings.CutPrefix(model, prefix)
+	return ok && (rest == "" || rest[0] == '-' || rest[0] == '[')
+}
+
 func priceFor(model string) (price, bool) {
 	best, ok := price{}, false
 	n := 0
 	for _, m := range modelPrices {
-		if strings.HasPrefix(model, m.prefix) && len(m.prefix) > n {
+		if atFamily(model, m.prefix) && len(m.prefix) > n {
 			best, ok, n = m.price, true, len(m.prefix)
 		}
 	}

@@ -48,8 +48,8 @@ func Report(f Facts) []byte {
 		total += costs[lane]
 	}
 	lo, hi = Bootstrap(dollars)
-	p("  lanes with usage: %d  total $%.4f", len(dollars), total)
-	p("  per lane: mean $%.4f, 90%% interval [$%.4f, $%.4f]", mean(dollars), lo, hi)
+	p("  lanes with usage: %d  total $%.5f", len(dollars), total)
+	p("  per lane: mean $%.5f, 90%% interval [$%.5f, $%.5f]", mean(dollars), lo, hi)
 	p("  net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)")
 	rows := RowCosts(f)
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Row < rows[j].Row })
