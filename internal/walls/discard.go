@@ -20,18 +20,24 @@ import (
 // discardUncommitted is the discard-uncommitted wall. A form that can throw
 // away work no commit holds is measured with one light process, for that
 // command only, and denied when the measure is not zero. A command that is
-// not one of the forms starts nothing.
-func discardUncommitted(a *analysis) string {
+// not one of the forms starts nothing. A measurement that fails or times out
+// is not a deny (the walls fail open): unmeasured says so, and the call is let
+// through with that line as a warning.
+func discardUncommitted(a *analysis) (cause, unmeasured string) {
 	for _, c := range a.gitCalls() {
 		form, paths, ok := discardIntent(append([]string{c.Verb}, c.Args...))
 		if !ok {
 			continue
 		}
-		if cause := measureDiscard(a, c, form, paths); cause != "" {
-			return cause
+		cause, unmeasured := measureDiscard(a, c, form, paths)
+		if cause != "" {
+			return cause, ""
+		}
+		if unmeasured != "" {
+			return "", unmeasured
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // cost is what an invocation would destroy.
@@ -55,47 +61,47 @@ func (c cost) String() string {
 		parts = append(parts, plural(c.Untracked, "untracked file"))
 	}
 	if c.Commits > 0 {
-		parts = append(parts, plural(c.Commits, "commit")+" unreachable from HEAD or any remote")
+		parts = append(parts, plural(c.Commits, "commit")+" unreachable from any other ref")
 	}
 	return strings.Join(parts, ", ")
 }
 
 // measureDiscard is the deny cause for a classified discard, or "" when it
 // would destroy nothing (or the repository is not one we can read).
-func measureDiscard(a *analysis, c gitCall, form string, paths []string) string {
+func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause, unmeasured string) {
 	if a.r == nil {
-		return ""
+		return "", ""
 	}
 	if _, ok := repoAt(c.Dir); !ok && form != "worktree remove --force" {
-		return ""
+		return "", ""
 	}
 	switch {
 	case strings.HasPrefix(form, "stash "):
-		return form + " discards a stash entry for good"
+		return form + " discards a stash entry for good", ""
 	case strings.HasPrefix(form, "branch -D "):
-		return measureBranch(a, c, form)
+		return measureBranch(a, c, form), ""
 	}
 	dir, where := c.Dir, ""
 	if form == "worktree remove --force" {
 		if len(paths) == 0 {
-			return ""
+			return "", ""
 		}
 		dir = resolve(c.Dir, paths[0])
 		if dir == "" {
-			return ""
+			return "", ""
 		}
 		if _, err := os.Stat(dir); err != nil {
-			return ""
+			return "", ""
 		}
 		where, paths = " in "+dir, nil
 	}
 	if dir == "" {
-		return ""
+		return "", ""
 	}
 	args := append([]string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, pathArgs(paths)...)
 	out, err := objects.Git(a.r, dir, nil, args...)
 	if err != nil {
-		return fmt.Sprintf("%s: could not measure what it would discard (%s)", form, firstLine(err.Error()))
+		return "", fmt.Sprintf("could not measure what %s would discard (%s); allowed", form, firstLine(err.Error()))
 	}
 	got := parseStatus(out)
 	var want cost
@@ -110,23 +116,28 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) string 
 		want = got
 	}
 	if want.zero() {
-		return ""
+		return "", ""
 	}
-	return fmt.Sprintf("%s discards %s%s", form, want, where)
+	return fmt.Sprintf("%s discards %s%s", form, want, where), ""
 }
 
 // measureBranch counts the commits `branch -D` would make unreachable from
-// HEAD and every remote-tracking ref. A branch pushed anywhere reads zero: -D
-// removes the local ref only, and the commits are recoverable from the remote.
+// every other ref: HEAD, the other local branches and every remote-tracking
+// ref. A branch merged locally or pushed anywhere reads zero: -D removes the
+// local ref only, and the commits stay reachable.
 // A branch that does not exist is git's own error to report.
 func measureBranch(a *analysis, c gitCall, form string) string {
 	names := strings.Fields(strings.TrimPrefix(form, "branch -D "))
-	args := make([]string, 0, len(names)+5)
+	args := make([]string, 0, 2*len(names)+4)
 	args = append(args, "rev-list", "--count")
 	for _, n := range names {
 		args = append(args, "refs/heads/"+n)
 	}
-	args = append(args, "--not", "HEAD", "--remotes")
+	args = append(args, "--not")
+	for _, n := range names {
+		args = append(args, "--exclude=refs/heads/"+n)
+	}
+	args = append(args, "--all")
 	out, err := objects.Git(a.r, c.Dir, nil, args...)
 	if err != nil {
 		return ""
@@ -249,8 +260,12 @@ func checkoutIntent(args []string) (string, []string, bool) {
 func restoreIntent(args []string) (string, []string, bool) {
 	opts, ddPaths := splitDashDash(args)
 	staged, worktree := false, false
-	for _, a := range opts {
+	var operands []string
+	for i := 0; i < len(opts); i++ {
+		a := opts[i]
 		switch {
+		case a == "-s" || a == "--source":
+			i++ // the revision to restore from, not a path
 		case a == "--staged":
 			staged = true
 		case a == "--worktree":
@@ -264,12 +279,14 @@ func restoreIntent(args []string) (string, []string, bool) {
 					worktree = true
 				}
 			}
+		case !strings.HasPrefix(a, "-"):
+			operands = append(operands, a)
 		}
 	}
 	if staged && !worktree {
 		return "", nil, false
 	}
-	return "restore <paths>", append(nonFlagOperands(opts), ddPaths...), true
+	return "restore <paths>", append(operands, ddPaths...), true
 }
 
 // cleanIntent reads git clean's combinable short flags character by
@@ -396,14 +413,4 @@ func splitDashDash(rest []string) (opts, paths []string) {
 		}
 	}
 	return rest, nil
-}
-
-func nonFlagOperands(args []string) []string {
-	var out []string
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			out = append(out, a)
-		}
-	}
-	return out
 }

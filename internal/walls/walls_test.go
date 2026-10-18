@@ -345,7 +345,7 @@ func TestDiscard_MeasuresWhatEachFormWouldDestroy(t *testing.T) {
 		{"git restore README.md", "restore <paths> discards 1 unstaged file"},
 		{"git clean -fd", "clean -fd discards 1 untracked file"},
 		{"git stash drop", "stash drop discards a stash entry for good"},
-		{"git branch -D unmerged", "branch -D unmerged discards 1 commit unreachable from HEAD or any remote"},
+		{"git branch -D unmerged", "branch -D unmerged discards 1 commit unreachable from any other ref"},
 	}
 	for _, c := range cases {
 		denies := verdicts(decide(t, bash(t, w.lane, c.cmd, true), r), kernel.VerdictDeny)
@@ -491,5 +491,39 @@ func TestSecrets_ScansTheWorkingTreeWhenTheCommitStagesAsItGoes(t *testing.T) {
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%q: gitleaks calls %q, want %q", c.cmd, got, c.want)
 		}
+	}
+}
+
+// failing is a Runner whose every child fails, as a broken git or a timeout does.
+type failing struct{}
+
+func (failing) Light(run.Spec) (run.Result, error) { return run.Result{}, run.ErrTimeout }
+
+func TestDiscard_AMeasurementThatFailsIsAWarningNotADeny(t *testing.T) {
+	w := newWorld(t)
+	for _, cmd := range []string{"git reset --hard", "git clean -fd", "git worktree remove --force " + filepath.ToSlash(w.lane)} {
+		got := decide(t, bash(t, w.primary, cmd, true), failing{})
+		if len(got) != 1 || got[0].Verdict != kernel.VerdictWarn || got[0].RowID != "discard-uncommitted" ||
+			!strings.Contains(got[0].Line, "could not measure") {
+			t.Errorf("%q with a failing git: actions %+v, want one discard-uncommitted warn naming \"could not measure\"", cmd, got)
+		}
+	}
+}
+
+func TestDiscard_BranchDeleteCountsCommitsNoOtherRefReaches(t *testing.T) {
+	w := newWorld(t)
+	r := quiet(t)
+	// merged: the tip is HEAD's. A second local branch holds the same commits as feat.
+	testsupport.Git(t, w.primary, "branch", "merged")
+	testsupport.Git(t, w.primary, "branch", "feat", "unmerged")
+	if got := decide(t, bash(t, w.lane, "git branch -D merged", true), r); len(got) != 0 {
+		t.Errorf("branch -D of a merged branch: actions %+v, want none", got)
+	}
+	if got := decide(t, bash(t, w.lane, "git branch -D feat", true), r); len(got) != 0 {
+		t.Errorf("branch -D of a branch another local branch holds: actions %+v, want none", got)
+	}
+	testsupport.Git(t, w.primary, "branch", "-D", "feat")
+	if d := verdicts(decide(t, bash(t, w.lane, "git branch -D unmerged", true), r), kernel.VerdictDeny); len(d) != 1 {
+		t.Errorf("branch -D of the only holder of a commit: denies %+v, want one", d)
 	}
 }

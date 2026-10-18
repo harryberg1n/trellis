@@ -135,7 +135,10 @@ func match(row kernel.Row, a *analysis) (kernel.Action, bool) {
 	case HookBypass:
 		cause = hookBypass(a)
 	case DiscardUncommitted:
-		cause = discardUncommitted(a)
+		var unmeasured string
+		if cause, unmeasured = discardUncommitted(a); cause == "" && unmeasured != "" {
+			return kernel.Action{RowID: row.ID, Verdict: kernel.VerdictWarn, Line: "trellis: " + row.ID + ": " + unmeasured + "."}, true
+		}
 	case Secrets:
 		return secrets(a)
 	case Undercover:
