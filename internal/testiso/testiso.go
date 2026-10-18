@@ -110,7 +110,9 @@ func Verify(root string) error {
 	return fmt.Errorf("testiso: %s is outside the sandbox %s", abs, sandboxRoot)
 }
 
-// inside reports whether path is dir or under it.
+// inside reports whether path is dir or under it. It repeats store.Within on
+// purpose: testiso cannot import store, whose tests run under testiso.Main, so
+// the import would be a cycle in test.
 func inside(dir, path string) bool {
 	rel, err := filepath.Rel(dir, path)
 	if err != nil {

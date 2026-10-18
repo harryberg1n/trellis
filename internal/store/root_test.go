@@ -2,16 +2,10 @@ package store
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/harryberg1n/trellis/internal/testiso"
 )
-
-func under(p, dir string) bool {
-	rel, err := filepath.Rel(dir, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
 
 func TestRoot_StateNeverInsideTheRepo(t *testing.T) {
 	r := testiso.Repo(t)
@@ -20,7 +14,7 @@ func TestRoot_StateNeverInsideTheRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if under(RepoDir(root, RepoID("", r)), r) {
+	if _, in := Within(r, RepoDir(root, RepoID("", r))); in {
 		t.Fatalf("state %s is under the repo %s", root, r)
 	}
 }
@@ -59,5 +53,26 @@ func TestRepoDir_JoinsReposAndID(t *testing.T) {
 	want := filepath.Join("R", "repos", "ba7816bf8f01cfea")
 	if got := RepoDir("R", "ba7816bf8f01cfea"); got != want {
 		t.Fatalf("RepoDir = %q, want %q", got, want)
+	}
+}
+
+func TestWithin(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	cases := []struct {
+		name, p, rel string
+		ok           bool
+	}{
+		{"the root itself", root, ".", true},
+		{"a file below", filepath.Join(root, "a", "b.txt"), filepath.Join("a", "b.txt"), true},
+		{"a dotdot-named child", filepath.Join(root, "..x"), "..x", true},
+		{"a sibling", root + "-other", "", false},
+		{"the parent", filepath.Dir(root), "", false},
+		{"above through dotdot", filepath.Join(root, "..", "elsewhere"), "", false},
+	}
+	for _, c := range cases {
+		rel, ok := Within(root, c.p)
+		if rel != c.rel || ok != c.ok {
+			t.Errorf("%s: Within = %q, %v; want %q, %v", c.name, rel, ok, c.rel, c.ok)
+		}
 	}
 }

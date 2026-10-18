@@ -30,7 +30,7 @@ func Root(repoPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if rel, err := filepath.Rel(absRepo, absRoot); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if _, inside := Within(absRepo, absRoot); inside {
 		return "", fmt.Errorf("state root %s is inside the repo %s", absRoot, absRepo)
 	}
 	return absRoot, nil
@@ -50,4 +50,16 @@ func RepoID(remoteURL, absPath string) string {
 // RepoDir is the per-repo directory under root.
 func RepoDir(root, repoID string) string {
 	return filepath.Join(root, "repos", repoID)
+}
+
+// Within is p relative to dir ("." for dir itself) and true when p is dir or
+// below it. Both paths are compared as given: no symlink is resolved and no
+// case is folded. It is the one path-containment test of the module's
+// production code.
+func Within(dir, p string) (rel string, ok bool) {
+	rel, err := filepath.Rel(dir, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return rel, true
 }
