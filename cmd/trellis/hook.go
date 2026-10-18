@@ -46,12 +46,14 @@ func hookVerb(args []string, stdin io.Reader, stdout, stderr io.Writer) (code in
 			deps.Fallback = ""
 		}
 	}
-	if repo, err := hook.Locate(hook.PayloadCwd(raw)); err != nil {
-		deps.Err = err
-	} else if root, err := store.Root(repo.Root); err != nil {
-		deps.Err = err
-	} else {
-		deps.Store, deps.Err = store.Open(store.RepoDir(root, store.RepoID(repo.Remote, repo.Root)), clk)
+	repo, err := hook.Locate(hook.PayloadCwd(raw))
+	if err == nil {
+		deps.Repo = &repo
+		var root string
+		if root, err = store.Root(repo.Root); err == nil {
+			deps.Store, err = store.Open(store.RepoDir(root, store.RepoID(repo.Remote, repo.Root)), clk)
+		}
 	}
+	deps.Err = err
 	return hook.Run(args[0], bytes.NewReader(raw), stdout, stderr, deps)
 }

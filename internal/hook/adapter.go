@@ -71,11 +71,12 @@ type parsed struct {
 // tree root), file_path and path (the changed file, absolute and relative to
 // the repo with forward slashes) and command.
 func Parse(event string, raw []byte) (kernel.Event, kernel.Context, error) {
-	p, err := parse(event, raw)
+	p, err := parse(event, raw, nil)
 	return p.ev, p.ctx, err
 }
 
-func parse(event string, raw []byte) (parsed, error) {
+// parse is Parse with the repo the caller already located, or nil to locate it.
+func parse(event string, raw []byte, known *Repo) (parsed, error) {
 	var out parsed
 	name, ok := canonical(event)
 	if !ok {
@@ -97,10 +98,10 @@ func parse(event string, raw []byte) (parsed, error) {
 	var detail map[string]string
 	switch name {
 	case "PostToolUse":
-		switch p.ToolName {
-		case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		switch {
+		case isFileTool(p.ToolName):
 			kind = kernel.EvEdit
-		case "Bash":
+		case p.ToolName == "Bash":
 			kind = kernel.EvEdit
 			detail = map[string]string{"bash": "1"}
 		}
@@ -120,7 +121,13 @@ func parse(event string, raw []byte) (parsed, error) {
 	out.ev.Detail = detail
 
 	args := map[string]string{"cwd": p.Cwd}
-	repo, rerr := Locate(p.Cwd)
+	var repo Repo
+	var rerr error
+	if known != nil {
+		repo = *known
+	} else {
+		repo, rerr = Locate(p.Cwd)
+	}
 	if rerr == nil {
 		out.repo = repo
 		args["repo"] = repo.Root
