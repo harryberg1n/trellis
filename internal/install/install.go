@@ -22,6 +22,7 @@ const toolMatcher = "Edit|Write|Bash|PowerShell"
 // Options says where to install and what.
 type Options struct {
 	Repo    string // the repository root
+	Common  string // the repository's common git dir; "" skips the exclude list
 	Root    string // the state root
 	Exe     string // the running binary, the source of the pinned copy
 	Version string // buildinfo.Version of that binary
@@ -104,6 +105,13 @@ func Install(o Options) ([]string, error) {
 		verb = "keep"
 	}
 	actions := append([]string{verb + " binary " + bin}, hookActions...)
+	exclude, excludeAction, err := addExclude(o.Common)
+	if err != nil {
+		return nil, err
+	}
+	if excludeAction != "" {
+		actions = append(actions, excludeAction)
+	}
 	if o.Dry {
 		for i, a := range actions {
 			actions[i] = "would " + a
@@ -118,7 +126,86 @@ func Install(o Options) ([]string, error) {
 	if err := writeSettings(o.Repo, next); err != nil {
 		return nil, err
 	}
+	if exclude != nil {
+		if err := writeExclude(o.Common, exclude); err != nil {
+			return nil, err
+		}
+	}
 	return actions, nil
+}
+
+// excludeEntry is the line install adds to the repository's local exclude
+// list (<common dir>/info/exclude): the settings file it writes is untracked
+// in every installed checkout, and nothing that counts untracked files, the
+// discard wall or a tree landing, should count a file trellis itself made.
+const excludeEntry = ".claude/settings.local.json"
+
+func excludePath(common string) string {
+	return filepath.Join(common, "info", "exclude")
+}
+
+// addExclude returns the exclude list with the entry added, or nil with a
+// "keep" action when it is there already, or nil and "" when there is no
+// common dir to write to. Foreign lines are kept byte for byte.
+func addExclude(common string) (next []byte, action string, err error) {
+	if common == "" {
+		return nil, "", nil
+	}
+	cur, err := os.ReadFile(excludePath(common))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, "", err
+	}
+	if hasLine(cur, excludeEntry) {
+		return nil, "keep exclude " + excludeEntry, nil
+	}
+	next = append([]byte{}, cur...)
+	if len(next) > 0 && next[len(next)-1] != '\n' {
+		next = append(next, '\n')
+	}
+	next = append(next, excludeEntry+"\n"...)
+	return next, "exclude " + excludeEntry + " from git status", nil
+}
+
+// removeExclude returns the exclude list without the entry, or nil when it
+// holds none. Every other byte stays.
+func removeExclude(common string) (next []byte, action string, err error) {
+	if common == "" {
+		return nil, "", nil
+	}
+	cur, err := os.ReadFile(excludePath(common))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	if !hasLine(cur, excludeEntry) {
+		return nil, "", nil
+	}
+	lines := strings.SplitAfter(string(cur), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.TrimRight(l, "\r\n") != excludeEntry {
+			kept = append(kept, l)
+		}
+	}
+	return []byte(strings.Join(kept, "")), "remove exclude " + excludeEntry, nil
+}
+
+func hasLine(text []byte, line string) bool {
+	for _, l := range strings.Split(string(text), "\n") {
+		if strings.TrimRight(l, "\r") == line {
+			return true
+		}
+	}
+	return false
+}
+
+func writeExclude(common string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(excludePath(common)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(excludePath(common), content, 0o644)
 }
 
 // pin copies the binary at src to bin through a temp file, so a half copy
@@ -155,10 +242,25 @@ func Eject(o Options) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", SettingsPath(o.Repo), err)
 	}
-	if len(actions) == 0 {
+	exclude, excludeAction, err := removeExclude(o.Common)
+	if err != nil {
+		return nil, err
+	}
+	if len(actions) == 0 && exclude == nil {
 		return nil, nil
 	}
-	return actions, writeSettings(o.Repo, next)
+	if len(actions) > 0 {
+		if err := writeSettings(o.Repo, next); err != nil {
+			return nil, err
+		}
+	}
+	if exclude != nil {
+		if err := writeExclude(o.Common, exclude); err != nil {
+			return nil, err
+		}
+		actions = append(actions, excludeAction)
+	}
+	return actions, nil
 }
 
 // Doctor returns one line per problem: no install, a hook pinned to another
