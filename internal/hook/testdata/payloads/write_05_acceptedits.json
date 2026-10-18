@@ -1,0 +1,1 @@
+{"session_id":"@SESSION@","transcript_path":"@TRANSCRIPT@","cwd":"@CWD@","permission_mode":"acceptEdits","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"@FILE@","content":"@CONTENT@"},"tool_response":{"type":"create","filePath":"@FILE@","content":"@CONTENT@"},"duration_ms":12}
