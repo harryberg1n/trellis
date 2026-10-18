@@ -126,8 +126,8 @@ func TestParse_LaneFromHeadWithoutASpawn(t *testing.T) {
 	}
 
 	testsupport.Git(t, e.repo, "checkout", "-q", "--detach")
-	if got := laneOf(t, payload); got != "detached" {
-		t.Errorf("detached HEAD lane %q, want detached", got)
+	if want := "detached-" + testsupport.Git(t, e.repo, "rev-parse", "--short=12", "HEAD"); laneOf(t, payload) != want {
+		t.Errorf("detached HEAD lane %q, want %q", laneOf(t, payload), want)
 	}
 }
 

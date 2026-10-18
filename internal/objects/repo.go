@@ -11,37 +11,56 @@ import (
 // ErrNotARepo is what FindRoot returns when no .git lies at or above the path.
 var ErrNotARepo = errors.New("objects: not in a git repository")
 
-// FindRoot walks up from dir to the nearest directory holding a .git entry (a
-// directory, or the file a linked worktree has) and returns it. dir need not
-// exist. Nothing is spawned.
+// FindRoot walks up from dir to the nearest directory holding a usable .git
+// (a directory, or the file a linked worktree has, with a HEAD in the git dir
+// it names) and returns it. dir need not exist. Like git, it does not climb
+// into a directory listed in GIT_CEILING_DIRECTORIES. Nothing is spawned.
 func FindRoot(dir string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("objects: %q is not absolute", dir)
 	}
+	ceilings := ceilingDirs()
 	d := filepath.Clean(dir)
 	for {
 		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return d, nil
+			if _, gitDir, err := GitDirs(d); err == nil {
+				if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err == nil {
+					return d, nil
+				}
+			}
 		}
 		up := filepath.Dir(d)
-		if up == d {
+		if up == d || ceilings[up] {
 			return "", fmt.Errorf("%w: %s", ErrNotARepo, dir)
 		}
 		d = up
 	}
 }
 
+// ceilingDirs is GIT_CEILING_DIRECTORIES as a set of cleaned absolute paths.
+func ceilingDirs() map[string]bool {
+	out := map[string]bool{}
+	for _, c := range filepath.SplitList(os.Getenv("GIT_CEILING_DIRECTORIES")) {
+		if filepath.IsAbs(c) {
+			out[filepath.Clean(c)] = true
+		}
+	}
+	return out
+}
+
 // Branch is the branch HEAD names in gitDir (the repo's own git dir, as
 // GitDirs returns it), "feature/x" for refs/heads/feature/x, or "detached"
-// when HEAD holds a commit id.
+// "detached-" and the first 12 characters of the commit id when HEAD holds
+// one, so detached sessions at different commits get different replay refs.
 func Branch(gitDir string) (string, error) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
 		return "", err
 	}
-	ref, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "ref:")
+	head := strings.TrimSpace(string(raw))
+	ref, ok := strings.CutPrefix(head, "ref:")
 	if !ok {
-		return "detached", nil
+		return "detached-" + head[:min(12, len(head))], nil
 	}
 	return strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/"), nil
 }
