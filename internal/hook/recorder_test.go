@@ -83,8 +83,13 @@ func TestRecorder_EditWritesBlobAndEvent(t *testing.T) {
 
 func TestRecorder_EditHookSpawnsNothing(t *testing.T) {
 	e := newEnv(t)
-	for _, g := range generate(t, e.repo, 1000) {
+	gens := generate(t, e.repo, 1000)
+	spawned := testsupport.CountGitSpawns(t) // real starts of git, not the Runner's count
+	for _, g := range gens {
 		e.do(t, "PostToolUse", g.payload)
+	}
+	if n := spawned(); n != 0 {
+		t.Errorf("1000 Edit/Write payloads started git %d times, want 0", n)
 	}
 	if n := e.rec.Count(); n != 0 {
 		t.Errorf("1000 Edit/Write payloads spawned %d children %v, want 0", n, e.rec.Kinds())
@@ -299,5 +304,14 @@ func TestRecorder_DoublePanicStillSilent(t *testing.T) {
 	}
 	if got := fallbackFiles(e); len(got) != 1 {
 		t.Errorf("fallback holds %v, want the internal.error parked there", got)
+	}
+}
+
+func TestRecorder_SpawnShimSeesTheStopAnchor(t *testing.T) {
+	e := newEnv(t)
+	spawned := testsupport.CountGitSpawns(t)
+	e.do(t, "Stop", fill(readShape(t, "stop"), vars(e.repo, "", "")))
+	if n := spawned(); n == 0 {
+		t.Error("Stop started git 0 times: the shim would not catch an Edit that spawned")
 	}
 }
