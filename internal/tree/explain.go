@@ -59,8 +59,8 @@ func lines(s string) []string {
 // the default branch: the files, found with git merge-tree (git 2.38+), and
 // the way out.
 func conflictError(env Env, repo objects.Repo) error {
-	base := "origin/" + repo.Default
-	_, _ = env.runGit(repo.Root, "fetch", "origin") // best effort: the answer is only fresher with it
+	base := baseOf(repo)
+	_, _ = env.runGit(repo.Root, "fetch", remoteOf(repo)) // best effort: the answer is only fresher with it
 	where := "(files unknown)"
 	if files := conflictFiles(env, repo.Root, base); len(files) > 0 {
 		where = "in: " + strings.Join(files, ", ")

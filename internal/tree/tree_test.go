@@ -1476,7 +1476,7 @@ func TestSync_RemotesWithoutOriginAreNamedOnOneLine(t *testing.T) {
 
 	err := Sync(f.env(f.primary))
 
-	want := "tree sync: no remote named origin (remotes: fork, upstream)"
+	want := "tree sync: no remote named origin (remotes: fork, upstream); trellis.toml [tree] remote names another"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}

@@ -149,7 +149,7 @@ func TestOpen_PrimaryAndLinkedWorktree(t *testing.T) {
 	}
 	want := Repo{
 		Root: repo, Common: filepath.Join(repo, ".git"), GitDir: filepath.Join(repo, ".git"),
-		Branch: "main", Primary: true, Remote: "https://example.invalid/o/r.git", Default: "main", History: "refs/heads/main",
+		Branch: "main", Primary: true, Remote: "https://example.invalid/o/r.git", RemoteName: "origin", Default: "main", History: "refs/heads/main",
 	}
 	if got != want {
 		t.Errorf("Open(primary) = %+v, want %+v", got, want)

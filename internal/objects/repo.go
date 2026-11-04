@@ -123,9 +123,12 @@ type Repo struct {
 	// Remote is the URL of remote origin in the repo config, "" if it has none
 	// or the config cannot be read: the remote is best effort, so an unreadable
 	// config never makes a repository unknown to the walls.
-	Remote  string
-	Default string // the default branch, as DefaultBranch reads it
-	History string // the ref to read the default branch's history from, as HistoryRef picks it
+	Remote string
+	// RemoteName is the remote Remote is the URL of: origin, unless the tree
+	// verbs read another from trellis.toml ([tree] remote).
+	RemoteName string
+	Default    string // the default branch, as DefaultBranch reads it
+	History    string // the ref to read the default branch's history from, as HistoryRef picks it
 }
 
 // Open reads the repository around dir without starting a process. It is the
@@ -147,15 +150,16 @@ func Open(dir string) (Repo, error) {
 	}
 	remote, _, _ := ConfigValue(gitDir, `remote "origin"`, "url") // best effort, see Repo.Remote
 	return Repo{
-		Root:     root,
-		Common:   common,
-		GitDir:   gitDir,
-		Branch:   branch,
-		Detached: detached,
-		Primary:  common == gitDir,
-		Remote:   remote,
-		Default:  DefaultBranch(common),
-		History:  HistoryRef(common),
+		Root:       root,
+		Common:     common,
+		GitDir:     gitDir,
+		Branch:     branch,
+		Detached:   detached,
+		Primary:    common == gitDir,
+		Remote:     remote,
+		RemoteName: "origin",
+		Default:    DefaultBranch(common),
+		History:    HistoryRef(common),
 	}, nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
+	"github.com/harryberg1n/trellis/internal/config"
 	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/kernel"
 	"github.com/harryberg1n/trellis/internal/objects"
@@ -143,7 +144,12 @@ func (e Env) runGit(dir string, args ...string) (string, error) {
 type where struct {
 	Repo    objects.Repo
 	Primary string // the primary checkout
+	cfg     config.Config
 }
+
+// remoteOf is the remote the tree verbs work against: [tree] remote of
+// trellis.toml, origin by default.
+func remoteOf(repo objects.Repo) string { return cmp.Or(repo.RemoteName, "origin") }
 
 func locate(dir string) (where, error) {
 	if !filepath.IsAbs(dir) {
@@ -216,17 +222,24 @@ func newTree(env Env, name, path string) error {
 		return fmt.Errorf("tree new: path %s exists", path)
 	}
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "fetch", "--prune", "origin"); err != nil {
+		if _, err := env.runGit(w.Primary, "fetch", "--prune", remoteOf(w.Repo)); err != nil {
 			return fmt.Errorf("tree new: %w", err)
 		}
-		if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name); err == nil {
-			return fmt.Errorf("tree new: branch %q exists on origin: trellis tree adopt %s makes a tree of it", name, name)
+		if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/"+remoteOf(w.Repo)+"/"+name); err == nil {
+			return fmt.Errorf("tree new: branch %q exists on %s: trellis tree adopt %s makes a tree of it", name, remoteOf(w.Repo), name)
 		}
 	}
 	if _, err := env.runGit(w.Primary, "worktree", "add", "-b", name, path, baseOf(w.Repo)); err != nil {
 		return fmt.Errorf("tree new: %w", err)
 	}
 	env.record(openedEvent(name))
+	cfg, err := config.Load(path) // the tree's own trellis.toml: what it was cut from
+	if err != nil {
+		return fmt.Errorf("tree new: %w; the tree is at %s", err, path)
+	}
+	if err := setUp(env, w.Primary, path, cfg.Tree.New); err != nil {
+		return err
+	}
 	env.say("%s", path)
 	return nil
 }
@@ -242,7 +255,7 @@ func baseOf(repo objects.Repo) string {
 	if repo.Remote == "" {
 		return repo.Default
 	}
-	return "origin/" + repo.Default
+	return remoteOf(repo) + "/" + repo.Default
 }
 
 // Sync fetches origin and rebases the current tree onto its default branch.
@@ -263,7 +276,7 @@ func syncTree(env Env) error {
 		return &Fixable{Msg: "tree sync: uncommitted changes: commit or stash, then sync again"}
 	}
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Repo.Root, "fetch", "origin"); err != nil {
+		if _, err := env.runGit(w.Repo.Root, "fetch", remoteOf(w.Repo)); err != nil {
 			return fmt.Errorf("tree sync: %w", err)
 		}
 	}
@@ -370,14 +383,14 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	case st.IsConflicting():
 		return conflictError(env, repo)
 	case st.IsBehind():
-		return &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+		return &Fixable{Msg: "tree merge: behind " + baseOf(repo) + ": run trellis tree sync"}
 	case st.MergeUnknown():
 		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
 	if err := awaitHead(env, gh, name, head, st.HeadSHA); err != nil {
 		return err
 	}
-	seen, err := awaitChecks(env, gh, pr, repo.Root, name, repo.Default, head)
+	seen, err := awaitChecks(env, gh, pr, repo.Root, name, repo.Default, head, w.cfg.Tree.Merge)
 	if err != nil {
 		return err
 	}
@@ -403,7 +416,7 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	}
 	env.record(mergedEvent(name, pr, sha))
 	env.say("merged #%d", pr)
-	deleteRemoteBranch(env, repo.Root, name)
+	deleteRemoteBranch(env, repo.Root, remoteOf(repo), name)
 	return removeTree(env, w, repo.Root, name, false)
 }
 
@@ -493,14 +506,14 @@ func ghUnusable(err error) error {
 // of them would hold the merge for ten minutes.
 func push(env Env, repo objects.Repo, name string) error {
 	err := env.retryIf("push of "+name, func() error {
-		_, err := env.runGit(repo.Root, "push", "--force-with-lease", "--force-if-includes", "-u", "origin", name)
+		_, err := env.runGit(repo.Root, "push", "--force-with-lease", "--force-if-includes", "-u", remoteOf(repo), name)
 		return err
 	}, func(err error) bool { return !errors.Is(err, run.ErrTimeout) && host.Transient(err) })
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, run.ErrTimeout) && !env.cancelled() {
-		if fx := refusedPush(env, repo.Root, name); fx != nil {
+		if fx := refusedPush(env, repo.Root, remoteOf(repo), name); fx != nil {
 			return fx
 		}
 	}
@@ -511,9 +524,9 @@ func push(env Env, repo objects.Repo, name string) error {
 // holds commits the tree lacks, nil when that is not the reason. It fetches the
 // branch first (best effort) so the count is origin's now; the next push is
 // still refused by --force-if-includes until the tree holds what was fetched.
-func refusedPush(env Env, dir, name string) error {
-	_, _ = env.runGit(dir, "fetch", "origin", name)
-	out, err := env.runGit(dir, "rev-list", "--left-right", "--count", "HEAD...origin/"+name)
+func refusedPush(env Env, dir, remote, name string) error {
+	_, _ = env.runGit(dir, "fetch", remote, name)
+	out, err := env.runGit(dir, "rev-list", "--left-right", "--count", "HEAD..."+remote+"/"+name)
 	if err != nil {
 		return nil
 	}
@@ -525,8 +538,8 @@ func refusedPush(env Env, dir, name string) error {
 	if ahead > 0 {
 		local = fmt.Sprintf(" (%d local not pushed)", ahead)
 	}
-	return &Fixable{Msg: fmt.Sprintf("tree merge: push refused: origin/%s has %d %s this tree lacks%s: git pull --rebase origin %s, then merge again",
-		name, behind, commitNoun(behind), local, name)}
+	return &Fixable{Msg: fmt.Sprintf("tree merge: push refused: %[5]s/%[1]s has %[2]d %[3]s this tree lacks%[4]s: git pull --rebase %[5]s %[1]s, then merge again",
+		name, behind, commitNoun(behind), local, remote)}
 }
 
 func commitNoun(n int) string {
@@ -549,13 +562,13 @@ var remoteGone = []string{"does not exist", "unable to resolve reference"}
 // cannot: it first checks the default branch out, which the primary checkout
 // holds, and stops before it reaches the remote. The merge is done by now, so a
 // refusal is a warning.
-func deleteRemoteBranch(env Env, dir, name string) {
-	err := env.retry("delete of origin/"+name, func() error {
-		_, err := env.runGit(dir, "push", "origin", "--delete", "--", name)
+func deleteRemoteBranch(env Env, dir, remote, name string) {
+	err := env.retry("delete of "+remote+"/"+name, func() error {
+		_, err := env.runGit(dir, "push", remote, "--delete", "--", name)
 		return err
 	})
 	if err == nil {
-		env.say("deleted origin/%s", name)
+		env.say("deleted %s/%s", remote, name)
 		return
 	}
 	for _, text := range remoteGone {
@@ -563,7 +576,7 @@ func deleteRemoteBranch(env Env, dir, name string) {
 			return // GitHub deleted it with the merge: nothing to say
 		}
 	}
-	env.warn("origin/%s was not deleted: %s; the merge stands, delete it with git push origin --delete %s", name, firstLine(err), name)
+	env.warn("%s/%s was not deleted: %s; the merge stands, delete it with git push %s --delete %s", remote, name, firstLine(err), remote, name)
 }
 
 // runCheck runs cmd in dir, records its verdict, and fails on red. Its output
@@ -714,7 +727,7 @@ func readyToMerge(env Env, gh host.GH, repo objects.Repo, branch string) (judged
 	case st.IsConflicting():
 		return "", false, conflictError(env, repo)
 	case st.IsBehind():
-		return "", false, &Fixable{Msg: "tree merge: behind origin/" + repo.Default + ": run trellis tree sync"}
+		return "", false, &Fixable{Msg: "tree merge: behind " + baseOf(repo) + ": run trellis tree sync"}
 	case strings.EqualFold(st.MergeStateStatus, "BLOCKED"):
 		return "", false, &Fixable{Msg: "tree merge: blocked by branch protection" + blockReason(st.ReviewDecision)}
 	case strings.EqualFold(st.MergeStateStatus, "UNSTABLE"):
@@ -800,7 +813,7 @@ func refuseUnmerged(env Env, w where, name string) error {
 	base := baseOf(w.Repo)
 	if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", base+"^{commit}"); err != nil {
 		if w.Repo.Remote != "" {
-			return fmt.Errorf("tree rm: %s not fetched: run git fetch origin", base)
+			return fmt.Errorf("tree rm: %s not fetched: run git fetch %s", base, remoteOf(w.Repo))
 		}
 		return fmt.Errorf("tree rm: %s: no such branch", base)
 	}
@@ -945,7 +958,12 @@ func (e Env) locate(verb string) (where, error) {
 	if err != nil {
 		return where{}, fmt.Errorf("tree %s: %w", verb, err)
 	}
-	url, err := e.runGit(w.Repo.Root, "config", "--get", "remote.origin.url")
+	if w.cfg, err = config.Load(w.Repo.Root); err != nil {
+		return where{}, fmt.Errorf("tree %s: %w", verb, err)
+	}
+	remote := w.cfg.Tree.Remote
+	w.Repo.RemoteName = remote
+	url, err := e.runGit(w.Repo.Root, "config", "--get", "remote."+remote+".url")
 	if err != nil || url == "" {
 		remotes, rerr := e.runGit(w.Repo.Root, "remote")
 		if rerr != nil {
@@ -953,16 +971,16 @@ func (e Env) locate(verb string) (where, error) {
 		}
 		if names := strings.Fields(remotes); len(names) > 0 {
 			slices.Sort(names)
-			return where{}, fmt.Errorf("tree %s: no remote named origin (remotes: %s)", verb, strings.Join(names, ", "))
+			return where{}, fmt.Errorf("tree %s: no remote named %s (remotes: %s); trellis.toml [tree] remote names another", verb, remote, strings.Join(names, ", "))
 		}
 		w.Repo.Remote = ""
 		return w, nil
 	}
 	w.Repo.Remote = url
-	head, err := e.runGit(w.Repo.Root, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
-	def, ok := strings.CutPrefix(head, "refs/remotes/origin/")
+	head, err := e.runGit(w.Repo.Root, "symbolic-ref", "-q", "refs/remotes/"+remote+"/HEAD")
+	def, ok := strings.CutPrefix(head, "refs/remotes/"+remote+"/")
 	if err != nil || !ok || def == "" {
-		return where{}, fmt.Errorf("tree %s: origin/HEAD is not set: run git remote set-head origin -a", verb)
+		return where{}, fmt.Errorf("tree %s: %s/HEAD is not set: run git remote set-head %s -a", verb, remote, remote)
 	}
 	w.Repo.Default = def
 	return w, nil
