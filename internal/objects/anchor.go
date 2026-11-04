@@ -63,60 +63,11 @@ type change struct {
 // Git kinds used: status, ls-tree, mktree, commit-tree, update-ref; rev-parse
 // only when the replay ref is not a plain ref file (symbolic, reftable).
 func AnchorTurn(r run.Runner, repo, branch, _ string, blobs map[string]string) (tree, commit string, err error) {
-	common, gitDir, err := GitDirs(repo)
+	common, _, err := GitDirs(repo)
 	if err != nil {
 		return "", "", err
 	}
-	filemode := coreFilemode(gitDir)
-	changes := map[string]change{}
-	for p, id := range blobs {
-		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
-	}
-	st, err := Git(r, repo, nil, "--no-optional-locks", "status", "-z", "--untracked-files=all")
-	if err != nil {
-		return "", "", err
-	}
-	for _, p := range statusPaths(st) {
-		full := filepath.Join(repo, filepath.FromSlash(p))
-		info, err := os.Lstat(full)
-		switch {
-		case pathGone(err):
-			changes[p] = change{del: true}
-		case err != nil:
-			return "", "", err
-		case info.IsDir():
-			// A nested repository: not a blob this anchor makes.
-		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(full)
-			if err != nil {
-				return "", "", err
-			}
-			id, err := writeBlobContent(gitDir, []byte(target))
-			if err != nil {
-				return "", "", err
-			}
-			changes[p] = change{id: id, mode: modeLink}
-		default:
-			id, err := WriteBlob(gitDir, full)
-			if err != nil {
-				return "", "", err
-			}
-			mode := "" // filemode off: the entry already in the tree keeps its mode
-			if filemode {
-				mode = modeFile
-				if info.Mode()&0o111 != 0 {
-					mode = modeExec
-				}
-			}
-			changes[p] = change{id: id, mode: mode}
-		}
-	}
-
-	root := "HEAD"
-	if headUnborn(common, gitDir) {
-		root = "" // no commit yet: start from the empty tree
-	}
-	if tree, err = buildTree(r, repo, root, changes); err != nil {
+	if tree, err = Snapshot(r, repo, blobs); err != nil {
 		return "", "", err
 	}
 
@@ -145,6 +96,70 @@ func AnchorTurn(r run.Runner, repo, branch, _ string, blobs map[string]string) (
 		return "", "", err
 	}
 	return tree, commit, nil
+}
+
+// Snapshot is the tree object of the working tree at repo: HEAD's tree with
+// every path git status names taken from disk (untracked files included,
+// ignored ones not), and blobs (path -> blob id, already hashed) laid over it.
+// It writes objects only: the index, the refs and the working tree are left
+// alone, so a trellis child may run it. Git kinds used: status, ls-tree,
+// mktree.
+func Snapshot(r run.Runner, repo string, blobs map[string]string) (string, error) {
+	common, gitDir, err := GitDirs(repo)
+	if err != nil {
+		return "", err
+	}
+	filemode := coreFilemode(gitDir)
+	changes := map[string]change{}
+	for p, id := range blobs {
+		changes[path.Clean(filepath.ToSlash(p))] = change{id: id}
+	}
+	st, err := Git(r, repo, nil, "--no-optional-locks", "status", "-z", "--untracked-files=all")
+	if err != nil {
+		return "", err
+	}
+	for _, p := range statusPaths(st) {
+		full := filepath.Join(repo, filepath.FromSlash(p))
+		info, err := os.Lstat(full)
+		switch {
+		case pathGone(err):
+			changes[p] = change{del: true}
+		case err != nil:
+			return "", err
+		case info.IsDir():
+			// A nested repository: not a blob this anchor makes.
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(full)
+			if err != nil {
+				return "", err
+			}
+			id, err := writeBlobContent(gitDir, []byte(target))
+			if err != nil {
+				return "", err
+			}
+			changes[p] = change{id: id, mode: modeLink}
+		default:
+			id, err := WriteBlob(gitDir, full)
+			if err != nil {
+				return "", err
+			}
+			mode := "" // filemode off: the entry already in the tree keeps its mode
+			if filemode {
+				mode = modeFile
+				if info.Mode()&0o111 != 0 {
+					mode = modeExec
+				}
+			}
+			changes[p] = change{id: id, mode: mode}
+		}
+	}
+
+	root := "HEAD"
+	if headUnborn(common, gitDir) {
+		root = "" // no commit yet: start from the empty tree
+	}
+	return buildTree(r, repo, root, changes)
+
 }
 
 // buildTree applies changes to the tree named by root (a tree id or HEAD) and

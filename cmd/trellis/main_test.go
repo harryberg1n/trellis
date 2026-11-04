@@ -201,7 +201,7 @@ func TestReadme_NamesEveryVerbOfTheUsage(t *testing.T) {
 			t.Errorf("README does not name the verb `trellis %s`", v)
 		}
 	}
-	for _, v := range []string{"new", "sync", "merge", "rm"} {
+	for _, v := range []string{"new", "adopt", "sync", "merge", "rm", "drop"} {
 		if !strings.Contains(readme, "`trellis tree "+v) {
 			t.Errorf("README does not name `trellis tree %s`", v)
 		}

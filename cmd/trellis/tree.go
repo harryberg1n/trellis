@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/harryberg1n/trellis/internal/clock"
 	"github.com/harryberg1n/trellis/internal/kernel"
@@ -29,7 +30,14 @@ verbs:
                           no wait for checks when no workflow of the tree can run on a pull request
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
+  adopt <branch> [--path P]
+                          make a tree of a branch that exists already (on origin, tracked; or a local one), in the
+                          usual sibling directory, for sync, merge and the report
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
+  drop [<name>] --reason R
+                          remove a tree and its branch, and keep all it held (commits, and uncommitted work as one
+                          commit on top) at refs/trellis/dropped/<name>-<time>; prints the line that restores it; the
+                          reason is recorded; nothing is lost, so it needs no --force and no override
 
 the loop (merge pushes and opens the PR itself; --check binds the merge to the head your gate judged):
   trellis tree new fix/login                          # from the primary checkout
@@ -51,6 +59,10 @@ func treeUsageLine(verb string) string {
 		return "tree merge [<name>] [--check CMD] [--rebase]"
 	case "rm":
 		return "tree rm [<name>] [--force]"
+	case "drop":
+		return "tree drop [<name>] --reason R"
+	case "adopt":
+		return "tree adopt <branch> [--path P]"
 	}
 	return "tree " + verb
 }
@@ -98,7 +110,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		return 0
 	}
 	fs := newFlagSet("tree "+verb, treeUsageLine(verb), stderr)
-	var path, check string
+	var path, check, reason string
 	var force, rebase bool
 	switch verb {
 	case "new":
@@ -108,6 +120,10 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		fs.BoolVar(&rebase, "rebase", false, "keep the tree's commits (a rebase merge) instead of squashing them into one")
 	case "rm":
 		fs.BoolVar(&force, "force", false, "remove the tree though it holds uncommitted or unmerged work")
+	case "drop":
+		fs.StringVar(&reason, "reason", "", "why the work is dropped; recorded with it")
+	case "adopt":
+		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of the primary checkout)")
 	case "sync":
 	default:
 		_, _ = fmt.Fprintf(stderr, "trellis tree: unknown verb %q\n\n%s", verb, treeUsage)
@@ -117,7 +133,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	if err != nil {
 		return parseExit(err)
 	}
-	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 1}, "rm": {0, 1}}[verb]
+	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 1}, "rm": {0, 1}, "drop": {0, 1}, "adopt": {1, 1}}[verb]
 	if len(positional) < want[0] || len(positional) > want[1] {
 		_, _ = fmt.Fprintf(stderr, "trellis tree %s: wrong number of arguments\n", verb)
 		fs.Usage()
@@ -126,6 +142,10 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	var name string
 	if len(positional) > 0 {
 		name = positional[0]
+	}
+	if verb == "drop" && strings.TrimSpace(reason) == "" {
+		_, _ = io.WriteString(stderr, "trellis tree drop: --reason is needed: say why the work is dropped\n")
+		return 2
 	}
 	e := tree.Env{
 		Dir:    env.Dir,
@@ -153,6 +173,10 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		err = tree.Merge(e, check, opts...)
 	case "rm":
 		err = tree.Rm(e, name, force)
+	case "drop":
+		err = tree.Drop(e, name, reason)
+	case "adopt":
+		err = tree.Adopt(e, name, path)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis %v\n", err)

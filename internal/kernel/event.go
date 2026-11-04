@@ -7,8 +7,11 @@ const (
 	// EvTreeOpened may carry Detail["pr"], the decimal number of the pull request
 	// the tree merges as; the report reads it as an override of the tree a
 	// squash merge "(#N)" is linked to.
-	EvTreeOpened   = "tree.opened"
-	EvTreeMerged   = "tree.merged"
+	EvTreeOpened = "tree.opened"
+	EvTreeMerged = "tree.merged"
+	// EvTreeDropped is `tree drop`: the tree was removed on purpose, its work
+	// kept under Detail["ref"], for the Detail["reason"] given.
+	EvTreeDropped  = "tree.dropped"
 	EvEdit         = "edit"
 	EvTurnAnchored = "turn.anchored"
 	EvCommit       = "commit"
