@@ -60,8 +60,9 @@ func newListWorld(t *testing.T) listWorld {
 
 // rows are the output's lines split into fields.
 func rows(out string) [][]string {
-	var rs [][]string
-	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	rs := make([][]string, 0, len(lines))
+	for _, l := range lines {
 		rs = append(rs, strings.Fields(l))
 	}
 	return rs
