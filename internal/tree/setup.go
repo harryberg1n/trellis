@@ -81,11 +81,13 @@ func linkInto(env Env, primary, tree, p string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	prefix := ""
 	if len(raw) > 0 && !strings.HasSuffix(string(raw), "\n") {
 		prefix = "\n"
 	}
 	_, err = f.WriteString(prefix + line + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	return err
 }
