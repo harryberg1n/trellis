@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -186,6 +189,17 @@ func readUsage(facts *measure.Facts, stderr io.Writer) {
 		read := 0
 		for _, p := range s.paths {
 			raw, err := os.ReadFile(p)
+			if err == nil {
+				// A continued session writes into this file too: only this
+				// session's lines are its usage (#52).
+				raw = sessionLines(raw, s.id, false)
+			} else if errors.Is(err, fs.ErrNotExist) {
+				// A session continued after a compaction has no file of its
+				// own: its lines are in the transcript it continues (#52).
+				if found := continuedLines(filepath.Dir(p), s.id); len(found) > 0 {
+					raw, err = found, nil
+				}
+			}
 			if err != nil {
 				// A file that cannot be read is counted in SkippedFiles; the
 				// session is counted in MissingTranscripts only when nothing
@@ -340,6 +354,54 @@ func subagentTranscripts(session string) []string {
 	for _, e := range entries { // sorted by name: the same bytes every run
 		if strings.HasSuffix(e.Name(), ".jsonl") {
 			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// sessionIDField finds the session id a transcript line carries.
+var sessionIDField = regexp.MustCompile(`"sessionId"\s*:\s*"([^"]*)"`)
+
+// sessionLines keeps the lines of a transcript that belong to session id: a
+// line that names it, and unless strict, a line that names no session (an
+// older transcript format, or a record the harness wrote without one).
+func sessionLines(raw []byte, id string, strict bool) []byte {
+	if id == "" || !bytes.Contains(raw, []byte(`"sessionId"`)) {
+		if strict {
+			return nil
+		}
+		return raw
+	}
+	var out bytes.Buffer
+	for _, line := range bytes.Split(raw, []byte("\n")) {
+		m := sessionIDField.FindSubmatch(line)
+		if m == nil && strict || m != nil && string(m[1]) != id {
+			continue
+		}
+		out.Write(line)
+		out.WriteByte('\n')
+	}
+	return bytes.TrimRight(out.Bytes(), "\n")
+}
+
+// continuedLines are the lines of session id found in the other transcripts
+// of dir: where a session continued after a context compaction writes them.
+func continuedLines(dir, id string) []byte {
+	if id == "" {
+		return nil
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	var out []byte
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil || !bytes.Contains(raw, []byte(`"`+id+`"`)) {
+			continue
+		}
+		if lines := sessionLines(raw, id, true); len(lines) > 0 {
+			if len(out) > 0 {
+				out = append(out, '\n')
+			}
+			out = append(out, lines...)
 		}
 	}
 	return out

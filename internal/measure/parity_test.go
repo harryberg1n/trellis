@@ -19,7 +19,7 @@ func TestReport_NoIntervalBelowTheEvidenceFloor(t *testing.T) {
 
 	for _, want := range []string{
 		"  mean 600.0 minutes, n=4, no interval\n",
-		"  per tree: mean $0.01405, n=1, no interval\n",
+		"  per tree: mean $0.01024, n=1, no interval\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)
@@ -57,7 +57,7 @@ func usageOfTrees(n int) Facts {
 func TestReport_NineSamplesGetNoInterval(t *testing.T) {
 	out := string(Report(usageOfTrees(9)))
 
-	if want := "  per tree: mean $25.00000, n=9, no interval\n"; !strings.Contains(out, want) {
+	if want := "  per tree: mean $20.00000, n=9, no interval\n"; !strings.Contains(out, want) {
 		t.Errorf("report lacks %q:\n%s", want, out)
 	}
 }
@@ -65,7 +65,7 @@ func TestReport_NineSamplesGetNoInterval(t *testing.T) {
 func TestReport_TenSamplesGetTheInterval(t *testing.T) {
 	out := string(Report(usageOfTrees(10)))
 
-	if want := "  per tree: mean $27.50000, 90% interval [$20.00000, $35.00000]\n"; !strings.Contains(out, want) {
+	if want := "  per tree: mean $22.00000, 90% interval [$16.00000, $28.00000]\n"; !strings.Contains(out, want) {
 		t.Errorf("report lacks %q:\n%s", want, out)
 	}
 }

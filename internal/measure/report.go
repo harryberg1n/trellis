@@ -31,6 +31,16 @@ func render(f Facts, mask bool) []byte {
 		p("not read: %s", what)
 	}
 	p("trees merged: %d (defect %d, clean %d, pending %d)", len(labels), counts[Defect], counts[Clean], counts[Pending])
+	if len(labels) > 0 {
+		why := DefectReasons(f)
+		parts := make([]string, 0, len(reasons()))
+		for _, r := range reasons() {
+			parts = append(parts, fmt.Sprintf("%s %d", r, why[r]))
+		}
+		days := int(Window.Hours() / 24)
+		p("  defect: within %d days of its merge, %s", days, strings.Join(parts, ", "))
+		p("  pending: merged less than %d days ago with none of these yet; clean: %d days passed with none of these", days, days)
+	}
 
 	p("")
 	p("speed: tree opened to merged, minutes, per ISO week of the merge")

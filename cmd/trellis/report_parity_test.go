@@ -93,8 +93,8 @@ func TestReport_ChargesSubagentTranscriptsBesideTheSession(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 
-	// main q 0.0125 + sub1 0.0125 + sub2 0.0125; the repeated q counts once.
-	if want := "trees with usage: 1  total $0.03750"; !strings.Contains(out.String(), want) {
+	// main q 0.009 + sub1 0.009 + sub2 0.009; the repeated q counts once.
+	if want := "trees with usage: 1  total $0.02700"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, out.String())
 	}
 	if strings.Contains(out.String(), "not read") {

@@ -26,8 +26,8 @@ func TestCost_FixtureTranscript(t *testing.T) {
 
 	got := TreeCosts(f)["A"]
 
-	if math.Abs(got-0.0125) > 1e-9 {
-		t.Errorf("cost of tree A = %v USD, want 0.0125", got)
+	if math.Abs(got-0.009) > 1e-9 {
+		t.Errorf("cost of tree A = %v USD, want 0.009", got)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestCost_LineOverTheLimitIsSkippedAndLaterTurnsCount(t *testing.T) {
 
 	got := TreeCosts(Facts{Usage: []Usage{{Tree: "A", Transcript: tr}}})["A"]
 
-	if math.Abs(got-0.025) > 1e-9 {
-		t.Errorf("cost = %v USD, want 0.025 (both records around the 9 MiB line)", got)
+	if math.Abs(got-0.018) > 1e-9 {
+		t.Errorf("cost = %v USD, want 0.018 (both records around the 9 MiB line)", got)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestCost_TurnsGoToTheTreeCurrentAtTheNextStop(t *testing.T) {
 
 	// a ends at the Stop on A; b at the Stop on B; c came after the last Stop
 	// and goes to the last tree.
-	if math.Abs(costs["A"]-0.0125) > 1e-9 || math.Abs(costs["B"]-0.025) > 1e-9 {
-		t.Errorf("costs = %v, want A 0.0125 and B 0.025", costs)
+	if math.Abs(costs["A"]-0.009) > 1e-9 || math.Abs(costs["B"]-0.018) > 1e-9 {
+		t.Errorf("costs = %v, want A 0.009 and B 0.018", costs)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestCost_MarksOutOfLogOrderAreReadByTime(t *testing.T) {
 
 	costs, _ := Costs(Facts{Usage: []Usage{{Tree: "Y", Transcript: tr, Marks: marks}}})
 
-	if math.Abs(costs["Z"]-0.0125) > 1e-9 || costs["X"] != 0 || costs["Y"] != 0 {
+	if math.Abs(costs["Z"]-0.009) > 1e-9 || costs["X"] != 0 || costs["Y"] != 0 {
 		t.Errorf("costs = %v, want the reply at 15 charged to Z", costs)
 	}
 }
@@ -115,8 +115,39 @@ func TestCost_PrefixMustEndAtAFamilyBoundary(t *testing.T) {
 }
 
 func TestCost_LongestPrefixWins(t *testing.T) {
-	if p, ok := priceFor("claude-sonnet-5-20260101[1m]"); !ok || p.Input != 3 {
-		t.Errorf("price = %+v %v, want input 3", p, ok)
+	if p, ok := priceFor("claude-sonnet-5-20260101[1m]"); !ok || p.Input != 2 {
+		t.Errorf("price = %+v %v, want input 2", p, ok)
+	}
+	if p, ok := priceFor("claude-opus-5-5[1m]"); !ok || p.Input != 4 {
+		t.Errorf("opus 5.5 price = %+v %v, want input 4, not opus 5's 5", p, ok)
+	}
+}
+
+// Issue #52 item 7: claude-haiku-5-5 was unpriced (352671 tokens), and the
+// 5.5 models were priced by their 5 family's prefix. List prices from the
+// Claude API reference (cached 2026-10-06); a 5-minute cache write is 1.25
+// times the input price.
+func TestCost_CurrentModelsAtTheirListPrice(t *testing.T) {
+	million := tokens{Fresh: 1_000_000, Output: 1_000_000, CacheRead: 1_000_000}
+	for _, c := range []struct {
+		model string
+		tok   tokens
+		want  float64
+	}{
+		{"claude-fable-5-1", million, 60.25},
+		{"claude-fable-5", million, 61},
+		{"claude-opus-5-5", million, 24.2},
+		{"claude-opus-5", million, 30.5},
+		{"claude-sonnet-5-5", million, 12.2},
+		{"claude-sonnet-5", million, 12.2},
+		{"claude-opus-5-5", tokens{CacheWrite: 1_000_000}, 5},
+		// Haiku 5.5 is priced up to a 100K-token prompt, five times that beyond.
+		{"claude-haiku-5-5", tokens{Fresh: 50_000, Output: 1_000_000, CacheRead: 40_000}, 0.5054},
+		{"claude-haiku-5-5", tokens{Fresh: 60_000, Output: 1_000_000, CacheRead: 50_000}, 2.5325},
+	} {
+		if got := costUSD(c.model, c.tok); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("costUSD(%s, %+v) = %v, want %v", c.model, c.tok, got, c.want)
+		}
 	}
 }
 
