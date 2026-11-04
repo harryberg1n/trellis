@@ -28,9 +28,14 @@ const (
 // Between tries it waits ghRetryBase, doubled each time, or the Retry-After a
 // rate limit named (at most two minutes) when that is longer, and says so.
 func (e Env) retry(what string, read func() error) error {
+	return e.retryIf(what, read, host.Transient)
+}
+
+// retryIf is retry with the caller's reading of which failures pass.
+func (e Env) retryIf(what string, read func() error, transient func(error) bool) error {
 	for try := 1; ; try++ {
 		err := read()
-		if err == nil || try == maxGHTries || !host.Transient(err) || e.cancelled() {
+		if err == nil || try == maxGHTries || !transient(err) || e.cancelled() {
 			return err
 		}
 		wait := max(ghRetryBase<<(try-1), host.RetryAfter(err))

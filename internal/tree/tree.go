@@ -7,6 +7,8 @@ package tree
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -372,6 +374,9 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	case st.MergeUnknown():
 		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
+	if err := awaitHead(env, gh, name, head, st.HeadSHA); err != nil {
+		return err
+	}
 	seen, err := awaitChecks(env, gh, pr, repo.Root, name, repo.Default, head)
 	if err != nil {
 		return err
@@ -387,15 +392,8 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	if o.rebase {
 		method = host.MergeRebase
 	}
-	if err := gh.MergePR(pr, method, host.MatchHead(judged)); err != nil {
-		if errors.Is(err, host.ErrHeadModified) {
-			return &Fixable{Msg: fmt.Sprintf("tree merge: the PR head moved after it was judged (merge bound to %s): run trellis tree merge again to judge the new head", short(judged))}
-		}
-		// gh merges first and then tries to move this checkout off the branch,
-		// which it cannot while the default branch is checked out elsewhere.
-		if st, verr := gh.PRView(name); verr != nil || st.State != "MERGED" {
-			return fmt.Errorf("tree merge: merge failed: %s", firstLine(err))
-		}
+	if err := mergePR(env, gh, name, pr, method, judged); err != nil {
+		return err
 	}
 	sha, err := gh.MergeCommit(pr)
 	if err != nil {
@@ -407,6 +405,69 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	env.say("merged #%d", pr)
 	deleteRemoteBranch(env, repo.Root, name)
 	return removeTree(env, w, repo.Root, name, false)
+}
+
+// mergePR merges pull request pr bound to the judged head. A failure is first
+// read against the PR's state: gh merges and then tries to move this checkout
+// off the branch, which it cannot while the default branch is checked out
+// elsewhere, and a 502 can come back from a merge GitHub made (#52). A server
+// error or "Merge already in progress" is tried again (retryIf); a refusal
+// GitHub means is not.
+func mergePR(env Env, gh host.GH, name string, pr int, method host.MergeMethod, judged string) error {
+	err := env.retryIf(fmt.Sprintf("merge of #%d", pr), func() error {
+		err := gh.MergePR(pr, method, host.MatchHead(judged))
+		if err == nil || errors.Is(err, host.ErrHeadModified) {
+			return err
+		}
+		if st, verr := gh.PRView(name); verr == nil && st.State == "MERGED" {
+			return nil
+		}
+		return err
+	}, func(err error) bool { return host.Transient(err) || mergeInProgress(err) })
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, host.ErrHeadModified):
+		return &Fixable{Msg: fmt.Sprintf("tree merge: the PR head moved after it was judged (merge bound to %s): run trellis tree merge again to judge the new head", short(judged))}
+	}
+	return fmt.Errorf("tree merge: merge failed: %s", firstLine(err))
+}
+
+// mergeInProgress reports whether GitHub refused a merge because one it
+// started (the try a 502 hid) has not finished.
+func mergeInProgress(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "merge already in progress")
+}
+
+// headWindow bounds the wait for GitHub to show the head trellis pushed.
+const headWindow = 2 * time.Minute
+
+// awaitHead waits until the PR's head is the commit trellis pushed. Right
+// after a push GitHub's git answered the new head and its PR API still the old
+// one, and the merge failed with "head moved" (#52, threadspyp 2026-11-04).
+// cur is the head the last read showed; a head that is still another commit
+// after headWindow is the Fixable it always was: someone else pushed.
+func awaitHead(env Env, gh host.GH, name, pushed, cur string) error {
+	for waited := time.Duration(0); ; waited += checksDelay {
+		if cur == "" || strings.EqualFold(cur, pushed) {
+			return nil
+		}
+		if waited >= headWindow {
+			return &Fixable{Msg: fmt.Sprintf("tree merge: head moved: local %s vs PR %s", short(pushed), short(cur))}
+		}
+		if waited == 0 {
+			env.sayWait("GitHub still shows the PR head at %s, not the pushed %s: waiting", short(cur), short(pushed))
+		}
+		env.wait(checksDelay)
+		var st host.PRState
+		if err := env.retry("PR of "+name, func() (err error) {
+			st, err = gh.PRView(name)
+			return err
+		}); err != nil {
+			return fmt.Errorf("tree merge: %w", err)
+		}
+		cur = st.HeadSHA
+	}
 }
 
 // ghUnusable is the one line for a gh that Ready refused.
@@ -427,8 +488,14 @@ func ghUnusable(err error) error {
 // what to do. Source: aphrollo-tools internal/workspace/judgedhead.go at
 // 12b3724e (laneDriftLine); incident #1174, a merge that took a head other
 // than the one judged.
+// A push GitHub answers with a server error (#52: "remote: Internal Server
+// Error") is tried again; one that ran out of its deadline is not, since five
+// of them would hold the merge for ten minutes.
 func push(env Env, repo objects.Repo, name string) error {
-	_, err := env.runGit(repo.Root, "push", "--force-with-lease", "--force-if-includes", "-u", "origin", name)
+	err := env.retryIf("push of "+name, func() error {
+		_, err := env.runGit(repo.Root, "push", "--force-with-lease", "--force-if-includes", "-u", "origin", name)
+		return err
+	}, func(err error) bool { return !errors.Is(err, run.ErrTimeout) && host.Transient(err) })
 	if err == nil {
 		return nil
 	}
@@ -483,7 +550,10 @@ var remoteGone = []string{"does not exist", "unable to resolve reference"}
 // holds, and stops before it reaches the remote. The merge is done by now, so a
 // refusal is a warning.
 func deleteRemoteBranch(env Env, dir, name string) {
-	_, err := env.runGit(dir, "push", "origin", "--delete", "--", name)
+	err := env.retry("delete of origin/"+name, func() error {
+		_, err := env.runGit(dir, "push", "origin", "--delete", "--", name)
+		return err
+	})
 	if err == nil {
 		env.say("deleted origin/%s", name)
 		return
@@ -493,13 +563,19 @@ func deleteRemoteBranch(env Env, dir, name string) {
 			return // GitHub deleted it with the merge: nothing to say
 		}
 	}
-	env.warn("origin/%s was not deleted: %s", name, firstLine(err))
+	env.warn("origin/%s was not deleted: %s; the merge stands, delete it with git push origin --delete %s", name, firstLine(err), name)
 }
 
 // runCheck runs cmd in dir, records its verdict, and fails on red. Its output
 // goes to the verb's output as the command writes it; the last line of it is
 // what a failure says.
 func runCheck(env Env, dir, name, cmd string) error {
+	head, _ := env.runGit(dir, "rev-parse", "HEAD")
+	if head != "" && checkedHead(env, dir, cmd) == head {
+		env.say("check passed on %s already: not run again", short(head))
+		return nil
+	}
+	forgetCheck(env, dir)
 	prog, args := shellCommand(cmd)
 	tail := &lastLine{out: env.Out}
 	res, err := env.runner().Light(run.Spec{Name: prog, Args: args, Dir: dir, Timeout: checkTimeout, Stdout: tail, Stderr: tail})
@@ -521,7 +597,66 @@ func runCheck(env Env, dir, name, cmd string) error {
 	if dirty != "" {
 		return fmt.Errorf("tree merge: the check left %s in %s; commit, ignore or clean them first", dirty, name)
 	}
+	if head != "" {
+		rememberCheck(env, dir, head, cmd)
+	}
 	return nil
+}
+
+// The verdict of a green check is kept per head, in the tree's own git
+// directory (it goes with the tree), as "<head sha> <sha256 of the command>".
+// A merge that failed after the check, on GitHub's side, ran the whole check
+// again on the next try though nothing had changed (#52, six runs of
+// `make check` for one lane during an outage). The tree is clean whenever the
+// check runs, so the head is what was checked.
+const checkVerdictFile = "trellis-check"
+
+func checkVerdictPath(env Env, dir string) string {
+	p, err := env.runGit(dir, "rev-parse", "--git-path", checkVerdictFile)
+	if err != nil || p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+	return p
+}
+
+func commandDigest(cmd string) string {
+	sum := sha256.Sum256([]byte(cmd))
+	return hex.EncodeToString(sum[:])
+}
+
+// checkedHead is the head a green run of cmd judged in the tree at dir, or "".
+func checkedHead(env Env, dir, cmd string) string {
+	p := checkVerdictPath(env, dir)
+	if p == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	head, digest, ok := strings.Cut(strings.TrimSpace(string(raw)), " ")
+	if !ok || digest != commandDigest(cmd) {
+		return ""
+	}
+	return head
+}
+
+// rememberCheck keeps a green verdict; a write that fails only costs a rerun.
+func rememberCheck(env Env, dir, head, cmd string) {
+	if p := checkVerdictPath(env, dir); p != "" {
+		_ = os.WriteFile(p, []byte(head+" "+commandDigest(cmd)+"\n"), 0o600)
+	}
+}
+
+// forgetCheck drops a kept verdict before a check runs, so a red or cut-off
+// run never leaves an older green behind.
+func forgetCheck(env Env, dir string) {
+	if p := checkVerdictPath(env, dir); p != "" {
+		_ = os.Remove(p)
+	}
 }
 
 // lastLineOf is the line a failed check ends with: the last one it wrote, else
