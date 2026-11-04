@@ -350,7 +350,7 @@ func TestDiscard_MeasuresWhatEachFormWouldDestroy(t *testing.T) {
 	}
 	for _, c := range cases {
 		denies := verdicts(decide(t, bash(t, w.tree, c.cmd, true), r), kernel.VerdictDeny)
-		if len(denies) != 1 || !strings.Contains(denies[0].Line, ": "+c.want+".") && !strings.Contains(denies[0].Line, ": "+c.want+" ") {
+		if len(denies) != 1 || !strings.Contains(denies[0].Line, ": "+c.want+".") && !strings.Contains(denies[0].Line, ": "+c.want+": ") {
 			t.Errorf("%q: denies %+v, want a cause starting %q", c.cmd, denies, c.want)
 		}
 	}
@@ -774,7 +774,7 @@ func TestDiscard_CleanXMeasuresIgnoredFiles(t *testing.T) {
 		{"git clean -fdX", "clean -fdX discards 1 ignored file"},
 		{"git clean -f -x", "clean -f -x discards 1 ignored file"},
 	} {
-		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+". Override: ") {
+		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+": git stash push ") {
 			t.Errorf("%q: deny line %q, want it to say %q", c.cmd, got, c.want)
 		}
 	}
@@ -784,7 +784,7 @@ func TestDiscard_CleanXMeasuresIgnoredFiles(t *testing.T) {
 		{"git clean -fdx", "clean -fdx discards 1 untracked file, 1 ignored file"},
 		{"git clean -fdX", "clean -fdX discards 1 ignored file"},
 	} {
-		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+". Override: ") {
+		if got := denyLine(c.cmd); !strings.Contains(got, ": "+c.want+": git stash push ") {
 			t.Errorf("%q: deny line %q, want it to say %q", c.cmd, got, c.want)
 		}
 	}
