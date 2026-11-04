@@ -158,14 +158,33 @@ func Labels(f Facts) map[string]Label {
 	return out
 }
 
-func defective(f Facts, m Merge) bool {
+func defective(f Facts, m Merge) bool { return defectReason(f, m) != "" }
+
+// The reasons a change is a defect, in the order the report lists them.
+const (
+	ReasonReverted = "reverted"
+	ReasonFix      = "a fix touched its lines"
+	ReasonNamed    = "a later commit or PR named its PR"
+	ReasonEscape   = "an escape issue named its PR"
+)
+
+// reasons are the defect reasons in the order the report lists them.
+func reasons() []string { return []string{ReasonReverted, ReasonFix, ReasonNamed, ReasonEscape} }
+
+// defectReason is the first reason m is a defect, or "" when it is none.
+func defectReason(f Facts, m Merge) string {
 	end := m.At.Add(Window)
 	for _, n := range f.Merges {
 		if n.Sha == m.Sha || n.At.Before(m.At) || n.At.After(end) {
 			continue
 		}
-		if reverts(n, m) || (fixPrefix(n.Subject) && overlaps(m.Added, n.Removed)) || (m.PR > 0 && n.PR != m.PR && names(n.Subject+"\n"+n.Body, m.PR)) {
-			return true
+		switch {
+		case reverts(n, m):
+			return ReasonReverted
+		case fixPrefix(n.Subject) && overlaps(m.Added, n.Removed):
+			return ReasonFix
+		case m.PR > 0 && n.PR != m.PR && names(n.Subject+"\n"+n.Body, m.PR):
+			return ReasonNamed
 		}
 	}
 	for _, is := range f.Issues {
@@ -173,10 +192,31 @@ func defective(f Facts, m Merge) bool {
 			continue
 		}
 		if escapeTitle(is.Title) && m.PR > 0 && names(is.Title+"\n"+is.Body, m.PR) {
-			return true
+			return ReasonEscape
 		}
 	}
-	return false
+	return ""
+}
+
+// DefectReasons counts the defect trees by the reason of their first
+// defective merge (#50, #52: most trees were "defect" and the report did not
+// say why).
+func DefectReasons(f Facts) map[string]int {
+	labels := Labels(f)
+	f.Merges = linked(f)
+	seen := map[string]bool{}
+	out := map[string]int{}
+	for _, m := range f.Merges {
+		k := treeKey(m)
+		if (m.Tree == "" && m.PR == 0) || labels[k] != Defect || seen[k] {
+			continue
+		}
+		if r := defectReason(f, m); r != "" {
+			out[r]++
+			seen[k] = true
+		}
+	}
+	return out
 }
 
 func reverts(n, m Merge) bool {

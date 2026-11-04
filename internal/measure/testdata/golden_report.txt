@@ -1,5 +1,7 @@
 trellis report
 trees merged: 4 (defect 1, clean 2, pending 1)
+  defect: within 14 days of its merge, reverted 1, a fix touched its lines 0, a later commit or PR named its PR 0, an escape issue named its PR 0
+  pending: merged less than 14 days ago with none of these yet; clean: 14 days passed with none of these
 
 speed: tree opened to merged, minutes, per ISO week of the merge
   2026-W40  n=3  p50=300.0  p90=1800.0
@@ -7,9 +9,9 @@ speed: tree opened to merged, minutes, per ISO week of the merge
   mean 600.0 minutes, n=4, no interval
 
 cost: agent dollars at list price
-  trees with usage: 1  total $0.01405
+  trees with usage: 1  total $0.01024
   transcript lines skipped: 1
-  per tree: mean $0.01405, n=1, no interval
+  per tree: mean $0.01024, n=1, no interval
   net_cost inputs per row (injected tokens = bytes / 4; turns from a deny to the next green)
   w.main  denies=2  injected_tokens=103  turns=3  unresolved=1  unresolved_turns=1
   w.secrets  denies=1  injected_tokens=10  turns=0  unresolved=1  unresolved_turns=0

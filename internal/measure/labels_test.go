@@ -2,6 +2,7 @@ package measure
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +228,26 @@ func TestParseHunks(t *testing.T) {
 	wr := map[string][]Span{"a.go": {{Start: 3, End: 4}, {Start: 20, End: 20}}, "gone.go": {{Start: 1, End: 5}}}
 	if !reflect.DeepEqual(added, wa) || !reflect.DeepEqual(removed, wr) {
 		t.Errorf("added %v removed %v, want %v and %v", added, removed, wa, wr)
+	}
+}
+
+// Issues #50 item 4 and #52 item 8: 481 of 726 and 247 of 429 trees were
+// "defect" and the report did not say what made them so.
+func TestReport_SaysWhatMadeTheTreesDefect(t *testing.T) {
+	f := Facts{Now: day(30), Merges: []Merge{
+		{Sha: "aaaaaaa1111", Subject: "add (#1)", PR: 1, Tree: "A", At: day(0)},
+		{Sha: "eeeeeee5555", Subject: "Revert", Body: "This reverts commit aaaaaaa1111.", At: day(1)},
+		{Sha: "bbbbbbb2222", Subject: "more (#2)", PR: 2, Tree: "B", At: day(2)},
+		{Sha: "ccccccc3333", Subject: "later (#3)", Body: "follows #2", PR: 3, Tree: "C", At: day(3)},
+		{Sha: "ddddddd4444", Subject: "new (#4)", PR: 4, Tree: "D", At: day(29)},
+	}}
+
+	out := string(Report(f))
+
+	want := "trees merged: 4 (defect 2, clean 1, pending 1)\n" +
+		"  defect: within 14 days of its merge, reverted 1, a fix touched its lines 0, a later commit or PR named its PR 1, an escape issue named its PR 0\n" +
+		"  pending: merged less than 14 days ago with none of these yet; clean: 14 days passed with none of these\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("report lacks\n%s\n---\n%s", want, out)
 	}
 }

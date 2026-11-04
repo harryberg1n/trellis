@@ -3,6 +3,7 @@ package objects
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -158,12 +160,28 @@ func Snapshot(r run.Runner, repo string, blobs map[string]string) (string, error
 	if headUnborn(common, gitDir) {
 		root = "" // no commit yet: start from the empty tree
 	}
-	return buildTree(r, repo, root, changes)
+	if len(changes) == 0 && root != "" {
+		// A clean tree is HEAD's: nothing to read or build (#50, #51).
+		out, err := Git(r, repo, nil, "rev-parse", "HEAD^{tree}")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	format, err := Format(gitDir)
+	if err != nil {
+		return "", err
+	}
+	hashLen := 20
+	if format == "sha256" {
+		hashLen = 32
+	}
+	return buildTree(r, repo, root, changes, hashLen)
 }
 
 // buildTree applies changes to the tree named by root (a tree id or HEAD) and
 // returns the new root tree's id.
-func buildTree(r run.Runner, repo, root string, changes map[string]change) (string, error) {
+func buildTree(r run.Runner, repo, root string, changes map[string]change, hashLen int) (string, error) {
 	dirs := map[string]map[string]entry{"": nil}
 	for p := range changes {
 		for d := path.Dir(p); d != "."; d = path.Dir(d) {
@@ -180,30 +198,11 @@ func buildTree(r run.Runner, repo, root string, changes map[string]change) (stri
 		}
 		return order[i] < order[j]
 	})
-	// Load top down, so a directory is listed only if its parent has it.
-	for _, d := range order {
-		if root == "" {
-			dirs[d] = map[string]entry{}
-			continue
-		}
-		spec := root
-		if d != "" {
-			parent := dirs[parentOf(d)]
-			if e, ok := parent[path.Base(d)]; !ok || e.typ != "tree" {
-				dirs[d] = map[string]entry{}
-				continue
-			}
-			spec = root + ":" + d
-		}
-		out, err := Git(r, repo, nil, "ls-tree", "-z", spec)
-		if err != nil {
-			return "", err
-		}
-		list, err := parseLsTree(out)
-		if err != nil {
-			return "", err
-		}
-		dirs[d] = list
+	// One cat-file reads every directory the changes touch (#50, #51: one
+	// ls-tree per directory held the Stop hook past its criterion). A
+	// directory HEAD does not have, or has as a file, starts empty.
+	if err := loadTrees(r, repo, root, order, dirs, hashLen); err != nil {
+		return "", err
 	}
 	for p, c := range changes {
 		list := dirs[parentOf(p)]
@@ -296,23 +295,6 @@ func parentOf(p string) string {
 		return d
 	}
 	return ""
-}
-
-// parseLsTree reads `git ls-tree -z` output: "mode type id\tname\0".
-func parseLsTree(out []byte) (map[string]entry, error) {
-	list := map[string]entry{}
-	for _, rec := range bytes.Split(out, []byte{0}) {
-		if len(rec) == 0 {
-			continue
-		}
-		meta, name, ok := strings.Cut(string(rec), "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
-			return nil, fmt.Errorf("objects: unreadable ls-tree record %q", rec)
-		}
-		list[name] = entry{f[0], f[1], f[2]}
-	}
-	return list, nil
 }
 
 // Git runs one git child through r and returns its stdout, for at most thirty
@@ -441,4 +423,81 @@ func resolveRef(r run.Runner, repo, ref string) (string, bool, error) {
 		return "", false, fmt.Errorf("objects: git rev-parse %s: %w", ref, err)
 	}
 	return strings.TrimSpace(string(res.Stdout)), true, nil
+}
+
+// loadTrees fills dirs[d] for every d of order with the entries of root's
+// tree at d, read with one `git cat-file --batch`; root "" is the empty tree.
+func loadTrees(r run.Runner, repo, root string, order []string, dirs map[string]map[string]entry, hashLen int) error {
+	for _, d := range order {
+		dirs[d] = map[string]entry{}
+	}
+	if root == "" {
+		return nil
+	}
+	var in bytes.Buffer
+	for _, d := range order {
+		if d == "" {
+			in.WriteString(root + "^{tree}\n")
+		} else {
+			in.WriteString(root + ":" + d + "\n")
+		}
+	}
+	out, err := Git(r, repo, in.Bytes(), "cat-file", "--batch")
+	if err != nil {
+		return err
+	}
+	for _, d := range order {
+		nl := bytes.IndexByte(out, '\n')
+		if nl < 0 {
+			return fmt.Errorf("objects: cat-file answered no header for %q", d)
+		}
+		header := string(out[:nl])
+		out = out[nl+1:]
+		if strings.HasSuffix(header, " missing") || strings.HasSuffix(header, " ambiguous") {
+			continue
+		}
+		f := strings.Fields(header)
+		if len(f) != 3 {
+			return fmt.Errorf("objects: unreadable cat-file header %q", header)
+		}
+		size, err := strconv.Atoi(f[2])
+		if err != nil || size < 0 || size+1 > len(out) {
+			return fmt.Errorf("objects: unreadable cat-file header %q", header)
+		}
+		body := out[:size]
+		out = out[size+1:]
+		if f[1] != "tree" {
+			continue
+		}
+		list, err := parseRawTree(body, hashLen)
+		if err != nil {
+			return err
+		}
+		dirs[d] = list
+	}
+	return nil
+}
+
+// parseRawTree reads a tree object: records of "<mode> <name>\0<hash>".
+func parseRawTree(body []byte, hashLen int) (map[string]entry, error) {
+	list := map[string]entry{}
+	for len(body) > 0 {
+		sp := bytes.IndexByte(body, ' ')
+		nul := bytes.IndexByte(body, 0)
+		if sp < 0 || nul < sp || nul+1+hashLen > len(body) {
+			return nil, fmt.Errorf("objects: unreadable tree record %q", body[:min(len(body), 64)])
+		}
+		mode, name := string(body[:sp]), string(body[sp+1:nul])
+		id := hex.EncodeToString(body[nul+1 : nul+1+hashLen])
+		body = body[nul+1+hashLen:]
+		typ := "blob"
+		switch mode {
+		case "40000", "040000":
+			mode, typ = "040000", "tree"
+		case "160000":
+			typ = "commit"
+		}
+		list[name] = entry{mode, typ, id}
+	}
+	return list, nil
 }

@@ -20,21 +20,43 @@ import (
 // computed from the tokens when read, never stored.
 type price struct{ Input, Output, CacheRead, CacheWrite float64 }
 
+// tier is a price that changes with the size of the prompt: above longAbove
+// prompt tokens (fresh, cache write and cache read together) a reply costs
+// long.
+type tier struct {
+	longAbove int64
+	long      price
+}
+
 // modelPrices are list prices by model-id prefix, so a dated or [1m] id of a
 // family resolves; the longest matching prefix wins. A notional cost, not an
 // invoice: sessions may ride a flat plan.
+//
+// Issue #52 item 7 (threadspyp, 2026-11-04): claude-haiku-5-5 had no price
+// (352671 tokens unpriced), and claude-opus-5-5, claude-sonnet-5-5 and
+// claude-fable-5-1 took the price of the shorter prefix of their family.
+// Prices from the Claude API reference, cached 2026-10-06; a 5-minute cache
+// write is 1.25 times the input price, and a cache read whose price the
+// reference does not state is a tenth of it.
 var modelPrices = []struct {
 	prefix string
 	price  price
 	family string // the id segment that names the family
 	size   string // the size label a published report shows
+	tier   tier   // a price by prompt size; the zero value is none
 }{
-	{"claude-fable-5", price{10, 50, 1, 12.5}, "fable", "large model"},
-	{"claude-opus-5", price{5, 25, 0.5, 6.25}, "opus", "large model"},
-	{"claude-opus-4-8", price{5, 25, 0.5, 6.25}, "opus", "large model"},
-	{"claude-sonnet-5", price{3, 15, 0.3, 3.75}, "sonnet", "medium model"},
-	{"claude-sonnet-4-6", price{3, 15, 0.3, 3.75}, "sonnet", "medium model"},
-	{"claude-haiku-4-5", price{1, 5, 0.1, 1.25}, "haiku", "small model"},
+	{prefix: "claude-fable-5-1", price: price{10, 50, 0.25, 12.5}, family: "fable", size: "large model"},
+	{prefix: "claude-fable-5", price: price{10, 50, 1, 12.5}, family: "fable", size: "large model"},
+	{prefix: "claude-opus-5-5", price: price{4, 20, 0.2, 5}, family: "opus", size: "large model"},
+	{prefix: "claude-opus-5", price: price{5, 25, 0.5, 6.25}, family: "opus", size: "large model"},
+	{prefix: "claude-opus-4-8", price: price{5, 25, 0.5, 6.25}, family: "opus", size: "large model"},
+	{prefix: "claude-sonnet-5", price: price{2, 10, 0.2, 2.5}, family: "sonnet", size: "medium model"},
+	{prefix: "claude-sonnet-4-6", price: price{3, 15, 0.3, 3.75}, family: "sonnet", size: "medium model"},
+	{
+		prefix: "claude-haiku-5-5", price: price{0.1, 0.5, 0.01, 0.125}, family: "haiku", size: "small model",
+		tier: tier{longAbove: 100_000, long: price{0.5, 2.5, 0.05, 0.625}},
+	},
+	{prefix: "claude-haiku-4-5", price: price{1, 5, 0.1, 1.25}, family: "haiku", size: "small model"},
 }
 
 // otherModel is the label of an id whose family the price table does not know.
@@ -67,14 +89,20 @@ func atFamily(model, prefix string) bool {
 }
 
 func priceFor(model string) (price, bool) {
-	best, ok := price{}, false
+	p, _, ok := pricesFor(model)
+	return p, ok
+}
+
+// pricesFor is the price of model and its tier, by the longest prefix.
+func pricesFor(model string) (price, tier, bool) {
+	best, bt, ok := price{}, tier{}, false
 	n := 0
 	for _, m := range modelPrices {
 		if atFamily(model, m.prefix) && len(m.prefix) > n {
-			best, ok, n = m.price, true, len(m.prefix)
+			best, bt, ok, n = m.price, m.tier, true, len(m.prefix)
 		}
 	}
-	return best, ok
+	return best, bt, ok
 }
 
 // tokens are the counts of one reply.
@@ -82,9 +110,12 @@ type tokens struct{ Fresh, CacheWrite, CacheWrite1h, CacheRead, Output int64 }
 
 // costUSD prices tokens; a model with no price costs 0.
 func costUSD(model string, t tokens) float64 {
-	p, ok := priceFor(model)
+	p, tr, ok := pricesFor(model)
 	if !ok {
 		return 0
+	}
+	if tr.longAbove > 0 && t.Fresh+t.CacheWrite+t.CacheRead > tr.longAbove {
+		p = tr.long
 	}
 	// The 1-hour cache write costs twice the input price, the 5-minute one 1.25 times.
 	w5m, w1h := t.CacheWrite-t.CacheWrite1h, t.CacheWrite1h

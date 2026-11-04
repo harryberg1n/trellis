@@ -159,10 +159,10 @@ func TestAnchorTurn_GitInvocationKinds(t *testing.T) {
 	if _, _, err := AnchorTurn(r, repo, "main", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	// Five kinds, one over the plan's four: ls-tree lists the unchanged
-	// siblings of each changed directory, which mktree needs and git status
-	// does not give.
-	want := map[string]bool{"status": true, "ls-tree": true, "mktree": true, "commit-tree": true, "update-ref": true}
+	// Five kinds, one over the plan's four: cat-file reads the unchanged
+	// siblings of every changed directory in one process, which mktree needs
+	// and git status does not give.
+	want := map[string]bool{"status": true, "cat-file": true, "mktree": true, "commit-tree": true, "update-ref": true}
 	got := map[string]bool{}
 	for _, k := range r.Kinds() {
 		got[k] = true
@@ -518,5 +518,56 @@ func TestAnchorTurn_StatusTakesNoOptionalLocks(t *testing.T) {
 		if run.Kind(s) == "status" && !slices.Contains(s.Args, "--no-optional-locks") {
 			t.Errorf("status argv %v lacks --no-optional-locks", s.Args)
 		}
+	}
+}
+
+// Issues #50 and #51: the Stop hook's p95 was 351 ms against its 300 ms
+// criterion, and the anchor started one ls-tree per changed directory. Every
+// directory is now read by one cat-file, and a clean tree builds nothing.
+func TestAnchorTurn_ProcessesDoNotGrowWithTheChangedDirectories(t *testing.T) {
+	repo := testiso.Repo(t)
+	for _, f := range []string{"x/y/z.txt", "x/w.txt", "q/r.txt"} {
+		testiso.Write(t, filepath.Join(repo, filepath.FromSlash(f)), "old\n")
+	}
+	testiso.Git(t, repo, "add", ".")
+	testiso.Git(t, repo, "commit", "-qm", "dirs")
+	for _, f := range []string{"x/y/z.txt", "x/w.txt", "q/r.txt"} {
+		testiso.Write(t, filepath.Join(repo, filepath.FromSlash(f)), "new\n")
+	}
+	r := testsupport.Recorder()
+
+	_, commit, err := AnchorTurn(r, repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// status, cat-file, mktree for x/y, for x and q, for the root, commit-tree, update-ref
+	if got := r.Count(); got != 7 {
+		t.Errorf("git processes = %d %v, want 7", got, r.Kinds())
+	}
+	for _, f := range []string{"x/y/z.txt", "x/w.txt", "q/r.txt"} {
+		if got := testiso.Git(t, repo, "show", commit+":"+f); got != "new" {
+			t.Errorf("%s in the anchor = %q, want new", f, got)
+		}
+	}
+	if got := testiso.Git(t, repo, "show", commit+":README.md"); got == "" {
+		t.Errorf("README.md is missing from the anchor")
+	}
+}
+
+func TestAnchorTurn_ACleanTreeIsHEADsTree(t *testing.T) {
+	repo := testiso.Repo(t)
+	r := testsupport.Recorder()
+
+	tree, _, err := AnchorTurn(r, repo, "main", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := testiso.Git(t, repo, "rev-parse", "HEAD^{tree}"); tree != want {
+		t.Errorf("tree = %s, want HEAD's %s", tree, want)
+	}
+	if got := strings.Join(r.Kinds(), " "); got != "status rev-parse commit-tree update-ref" {
+		t.Errorf("kinds = %s, want status rev-parse commit-tree update-ref", got)
 	}
 }

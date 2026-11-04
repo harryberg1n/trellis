@@ -132,7 +132,7 @@ func TestReport_GathersLabelsFromTheRepoHistory(t *testing.T) {
 	}
 	for _, want := range []string{
 		"trees merged: 3 (defect 1, clean 0, pending 2)",
-		"trees with usage: 1  total $0.01250",
+		"trees with usage: 1  total $0.00900",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
@@ -250,7 +250,7 @@ func TestReport_OpensTheStoreTheHookWrote_WhateverTheGlobalConfigSays(t *testing
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
-	if want := "trees with usage: 1  total $0.01250"; !strings.Contains(out.String(), want) {
+	if want := "trees with usage: 1  total $0.00900"; !strings.Contains(out.String(), want) {
 		t.Errorf("report lacks %q (an empty log?):\n%s", want, out.String())
 	}
 }
@@ -336,9 +336,9 @@ func TestReport_ChargesUsageToTheTreeCurrentAtEachStop(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 
-	// s1's session.usage (tree A, 0.0125) plus the long session split in two:
+	// s1's session.usage (tree A, 0.009) plus the long session split in two:
 	// A and B each have usage.
-	for _, want := range []string{"trees with usage: 2  total $0.03750"} {
+	for _, want := range []string{"trees with usage: 2  total $0.02700"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
 		}
@@ -455,5 +455,38 @@ func TestReadHistory_TimeoutFollowsTheWindow(t *testing.T) {
 	specs := rec.Specs()
 	if len(specs) != 1 || specs[0].Timeout != 5*time.Minute {
 		t.Errorf("history specs %+v, want one call with a 5 minute timeout (5 s a day over 60 days)", specs)
+	}
+}
+
+// Issue #52 item 7 (threadspyp, 2026-11-04): a session continued after a
+// context compaction writes its turns into the transcript of the session it
+// continues, not into a file named by its own id. The report said "a
+// transcript was not read" for it and charged its turns to the old session's
+// tree.
+func TestReport_AContinuedSessionIsReadFromTheTranscriptItContinues(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	dir := t.TempDir()
+	reply := func(session, id, at string) string {
+		return `{"type":"assistant","sessionId":"` + session + `","timestamp":"` + at + `","requestId":"` + id + `","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":200,"cache_read_input_tokens":5000}}}` + "\n"
+	}
+	old := filepath.Join(dir, "s-old.jsonl")
+	testiso.Write(t, old, reply("s-old", "o1", "2026-10-03T09:00:05Z")+reply("s-new", "n1", "2026-10-03T10:00:05Z"))
+	at := func(h int) time.Time { return time.Date(2026, 10, 3, h, 5, 0, 0, time.UTC) }
+	appendEvents(t, env,
+		kernel.Event{Kind: kernel.EvTurnAnchored, Tree: "C", Session: "s-old", At: at(9), Detail: map[string]string{"transcript": old}},
+		kernel.Event{Kind: kernel.EvTurnAnchored, Tree: "D", Session: "s-new", At: at(10), Detail: map[string]string{"transcript": filepath.Join(dir, "s-new.jsonl")}},
+	)
+	var out, errb bytes.Buffer
+
+	if code := reportCmd(nil, &out, &errb, env); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+
+	// s1 (tree A) as before, s-old's reply on C, s-new's on D.
+	if want := "trees with usage: 3  total $0.02700"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+	if strings.Contains(errb.String(), "not read") || strings.Contains(out.String(), "transcripts missing") {
+		t.Errorf("stderr %q, report:\n%s\nwant every transcript read", errb.String(), out.String())
 	}
 }
