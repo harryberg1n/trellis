@@ -2039,3 +2039,47 @@ func TestMerge_LocalADirectoryAndFileClashIsACollision(t *testing.T) {
 		})
 	}
 }
+
+// Issue #53: fanpyp's workflows run only on a push to main; each merge
+// waited the 90 s window and then said no checks.
+func TestMerge_NoWorkflowThatCanRunOnThePRMergesAtOnce(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	testiso.Write(t, filepath.Join(path, ".github", "workflows", "deploy.yml"), "on:\n  push:\n    branches: [main]\n")
+	testiso.Write(t, filepath.Join(path, ".github", "workflows", "guard.yaml"), "on:\n  push:\n    branches:\n      - main\n  workflow_dispatch:\n")
+	testiso.Git(t, path, "add", ".github")
+	testiso.Git(t, path, "commit", "-qm", "workflows")
+	f.noChecks = true
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 0 {
+		t.Errorf("waits on the clock = %d, want 0", f.clk.afters)
+	}
+	if slices.Contains(f.ghCalls(), "api repos/{owner}/{repo}/actions/workflows") {
+		t.Errorf("gh calls = %v, want no workflow count: the tree's files answered", f.ghCalls())
+	}
+	if !strings.Contains(f.out.String(), "no workflow runs on a pull request into main\n") || !slices.Contains(f.kinds(), "tree.merged") {
+		t.Errorf("output %q, kinds %v; want the no-workflow line and a merge", f.out.String(), f.kinds())
+	}
+}
+
+func TestMerge_AWorkflowThatCanRunOnThePRIsWaitedFor(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	testiso.Write(t, filepath.Join(path, ".github", "workflows", "deploy.yml"), "on:\n  push:\n    branches: [main]\n")
+	testiso.Write(t, filepath.Join(path, ".github", "workflows", "ci.yml"), "on: [pull_request]\n")
+	testiso.Git(t, path, "add", ".github")
+	testiso.Git(t, path, "commit", "-qm", "workflows")
+	f.noChecks = true
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.clk.afters != 18 {
+		t.Errorf("waits on the clock = %d, want 18 (90 s in 5 s steps)", f.clk.afters)
+	}
+}

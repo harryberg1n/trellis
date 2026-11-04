@@ -165,7 +165,9 @@ func TestMerge_DeletesTheBranchOnOriginAfterTheMerge(t *testing.T) {
 	}
 }
 
-func TestMerge_ABranchOriginAlreadyReapedIsSaidNotWarned(t *testing.T) {
+// Issue #53: a repository that deletes head branches on merge printed
+// "origin/<name> is already gone" on every merge, which reads like a warning.
+func TestMerge_ABranchOriginAlreadyReapedIsNeitherSaidNorWarned(t *testing.T) {
 	f := newFixture(t)
 	path := f.openTree(t)
 	f.mergeSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -176,8 +178,8 @@ func TestMerge_ABranchOriginAlreadyReapedIsSaidNotWarned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(f.out.String(), "origin/feat is already gone\n") {
-		t.Errorf("output = %q, want the line origin/feat is already gone", f.out.String())
+	if strings.Contains(f.out.String(), "origin/feat") {
+		t.Errorf("output = %q, want no line about origin/feat: GitHub deleted it with the merge", f.out.String())
 	}
 	if f.errb.Len() != 0 {
 		t.Errorf("warnings = %q, want none", f.errb.String())
