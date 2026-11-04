@@ -77,6 +77,9 @@ type fixture struct {
 	runSeq     []string            // successive JSON reads of `run list`; the last repeats; empty is no runs
 	flaky      map[string][]string // failures to answer first, per call: "pr checks --json", "pr checks --watch"
 	onMerge    func()              // called when pr merge is answered
+	landed     bool                // pr merge lands the PR even when it answers mergeErr (a 502 after the merge)
+	merged     bool                // the PR is merged: pr list says MERGED
+	headSeq    []string            // successive PR heads pr list reports before head; a stale GitHub after a push
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -131,6 +134,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 			}
 		}
 		head := f.head
+		if len(f.headSeq) > 0 {
+			head, f.headSeq = f.headSeq[0], f.headSeq[1:]
+		}
 		if head == "" {
 			head = testiso.Git(f.t, spec.Dir, "rev-parse", "HEAD")
 		}
@@ -145,7 +151,11 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		case "BEHIND":
 			state, status = "MERGEABLE", "BEHIND"
 		}
-		body := fmt.Sprintf(`[{"number":7,"state":"OPEN","mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}]`, state, status, head, f.review)
+		prState := "OPEN"
+		if f.merged {
+			prState = "MERGED"
+		}
+		body := fmt.Sprintf(`[{"number":7,"state":%q,"mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}]`, prState, state, status, head, f.review)
 		return run.Result{Stdout: []byte(body)}, nil
 	case "pr create":
 		f.prSeen = true
@@ -183,6 +193,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 	case "pr merge":
 		if f.onMerge != nil {
 			f.onMerge()
+		}
+		if f.landed || f.mergeErr == "" {
+			f.merged = true
 		}
 		if f.mergeErr != "" {
 			return run.Result{ExitCode: 1}, errors.New(f.mergeErr)

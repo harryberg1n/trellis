@@ -200,7 +200,7 @@ func TestMerge_ARefusedDeleteOfTheOriginBranchWarnsAndStillRemovesTheTree(t *tes
 		t.Fatal(err)
 	}
 
-	if want := "trellis: origin/feat was not deleted: remote: Permission to o/r denied\n"; f.errb.String() != want {
+	if want := "trellis: origin/feat was not deleted: remote: Permission to o/r denied; the merge stands, delete it with git push origin --delete feat\n"; f.errb.String() != want {
 		t.Errorf("warnings = %q, want %q", f.errb.String(), want)
 	}
 	if exists(path) || !slices.Contains(f.kinds(), "tree.merged") {

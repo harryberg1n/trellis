@@ -50,6 +50,19 @@ var transientMarks = []string{
 	"unexpected end of json input",
 	"secondary rate limit",
 	"api rate limit exceeded",
+	// GitHub's partial outage of 2026-11-04 (#52): a git push answered
+	// "remote: Internal Server Error", a GraphQL merge "Something went wrong
+	// while executing your query", and git over HTTPS names the status as
+	// "The requested URL returned error: 502".
+	"internal server error",
+	"bad gateway",
+	"service unavailable",
+	"gateway timeout",
+	"something went wrong while executing your query",
+	"returned error: 500",
+	"returned error: 502",
+	"returned error: 503",
+	"returned error: 504",
 }
 
 // maxRetryAfter bounds how long a rate limit's own Retry-After may park a wait.
