@@ -13,7 +13,9 @@ import (
 // The default branch moves by merging a tree, not by a commit made where it is
 // checked out. A command that only reads or undoes (--dry-run, merge --abort)
 // is let through, and so is a merge that names nothing but the branch's own
-// upstream: moving main to origin/main lands nothing unjudged.
+// upstream: moving main to origin/main lands nothing unjudged. A push whose
+// command line names every ref it writes on the remote, none of them the
+// default branch, is let through too (pushSparesDefault).
 func mainCommit(a *analysis) string {
 	for _, c := range a.gitCalls() {
 		if !slices.Contains([]string{"commit", "push", "merge"}, c.Verb) || harmless(c) {
@@ -24,6 +26,9 @@ func mainCommit(a *analysis) string {
 			continue
 		}
 		if c.Verb == "merge" && onlyNamesUpstream(f, c.Args) {
+			continue
+		}
+		if c.Verb == "push" && pushSparesDefault(f, c.Args) {
 			continue
 		}
 		return fmt.Sprintf("git %s in the primary checkout, which is on %s", c.Verb, f.Branch)
