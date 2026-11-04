@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -193,7 +192,7 @@ func readUsage(facts *measure.Facts, stderr io.Writer) {
 				// A continued session writes into this file too: only this
 				// session's lines are its usage (#52).
 				raw = sessionLines(raw, s.id, false)
-			} else if errors.Is(err, fs.ErrNotExist) {
+			} else if errors.Is(err, os.ErrNotExist) {
 				// A session continued after a compaction has no file of its
 				// own: its lines are in the transcript it continues (#52).
 				if found := continuedLines(filepath.Dir(p), s.id); len(found) > 0 {
@@ -375,7 +374,10 @@ func sessionLines(raw []byte, id string, strict bool) []byte {
 	var out bytes.Buffer
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		m := sessionIDField.FindSubmatch(line)
-		if m == nil && strict || m != nil && string(m[1]) != id {
+		switch {
+		case len(m) < 2 && strict:
+			continue
+		case len(m) >= 2 && string(m[1]) != id:
 			continue
 		}
 		out.Write(line)

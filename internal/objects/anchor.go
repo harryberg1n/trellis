@@ -297,23 +297,6 @@ func parentOf(p string) string {
 	return ""
 }
 
-// parseLsTree reads `git ls-tree -z` output: "mode type id\tname\0".
-func parseLsTree(out []byte) (map[string]entry, error) {
-	list := map[string]entry{}
-	for _, rec := range bytes.Split(out, []byte{0}) {
-		if len(rec) == 0 {
-			continue
-		}
-		meta, name, ok := strings.Cut(string(rec), "\t")
-		f := strings.Fields(meta)
-		if !ok || len(f) != 3 {
-			return nil, fmt.Errorf("objects: unreadable ls-tree record %q", rec)
-		}
-		list[name] = entry{f[0], f[1], f[2]}
-	}
-	return list, nil
-}
-
 // Git runs one git child through r and returns its stdout, for at most thirty
 // seconds: the reads of a hook. A child that fails still returns what it
 // printed: git writes a conflict list to stdout. A verb that moves objects or
