@@ -355,7 +355,7 @@ func TestNew_RefusesABranchThatIsOnOriginAndSaysHowToTrackIt(t *testing.T) {
 
 	err := New(f.env(f.primary), "shared", "")
 
-	want := `tree new: branch "shared" exists on origin: git worktree add --track -b shared ` + f.primary + `--shared origin/shared`
+	want := `tree new: branch "shared" exists on origin: trellis tree adopt shared makes a tree of it`
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
 	}

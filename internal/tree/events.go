@@ -35,3 +35,8 @@ func checkEvent(name, result string) kernel.Event {
 		Detail: map[string]string{"result": result, "source": "local"},
 	}
 }
+
+// droppedEvent is `tree drop`: the work is kept at ref, for reason.
+func droppedEvent(name, reason, ref string) kernel.Event {
+	return kernel.Event{Kind: kernel.EvTreeDropped, Tree: name, Detail: map[string]string{"reason": reason, "ref": ref}}
+}

@@ -49,3 +49,23 @@ func TestTree_MergedAfterAbandonedBecomesMerged(t *testing.T) {
 		t.Errorf("tree.merged was flagged: %v", ev.Detail)
 	}
 }
+
+// `tree drop` (owner 2026-11-04) abandons a tree on purpose: tree.dropped
+// sets abandoned, and a later merge of the same name still wins.
+func TestTree_DroppedIsAbandoned(t *testing.T) {
+	if EvTreeDropped != "tree.dropped" {
+		t.Errorf("EvTreeDropped = %q, want tree.dropped", EvTreeDropped)
+	}
+	s, _ := Advance(TreeOpen, Event{Kind: EvTreeDropped, Tree: "tree/x"})
+	if s != TreeAbandoned {
+		t.Errorf("state = %v, want abandoned", s)
+	}
+	s, _ = Advance(TreeNone, Event{Kind: EvTreeDropped, Tree: "tree/x"})
+	if s != TreeAbandoned {
+		t.Errorf("state from none = %v, want abandoned", s)
+	}
+	s, _ = Advance(TreeMerged, Event{Kind: EvTreeDropped, Tree: "tree/x"})
+	if s != TreeMerged {
+		t.Errorf("state after merged = %v, want merged: a merge is not undone", s)
+	}
+}

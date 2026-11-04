@@ -220,7 +220,7 @@ func newTree(env Env, name, path string) error {
 			return fmt.Errorf("tree new: %w", err)
 		}
 		if _, err := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name); err == nil {
-			return fmt.Errorf("tree new: branch %q exists on origin: git worktree add --track -b %s %s origin/%s", name, name, path, name)
+			return fmt.Errorf("tree new: branch %q exists on origin: trellis tree adopt %s makes a tree of it", name, name)
 		}
 	}
 	if _, err := env.runGit(w.Primary, "worktree", "add", "-b", name, path, baseOf(w.Repo)); err != nil {
@@ -779,7 +779,7 @@ func rmTree(env Env, name string, force bool) error {
 			return fmt.Errorf("tree rm: %w", err)
 		}
 		if dirty != "" {
-			return fmt.Errorf("tree rm: %s has %s; --force removes it anyway", name, dirty)
+			return fmt.Errorf("tree rm: %s has %s; trellis tree drop %s --reason <why> keeps it recoverable, --force discards it", name, dirty, name)
 		}
 		if err := refuseUnmerged(env, w, name); err != nil {
 			return err
@@ -819,11 +819,11 @@ func refuseUnmerged(env Env, w where, name string) error {
 	if landed(env, w, name, base) {
 		return nil // a squash or rebase merge: the commits are not ancestors, the change is in
 	}
-	noun := "commits"
+	noun, pronoun := "commits", "them"
 	if n == 1 {
-		noun = "commit"
+		noun, pronoun = "commit", "it"
 	}
-	return fmt.Errorf("tree rm: %s has %d %s not merged into %s; --force removes it anyway", name, n, noun, base)
+	return fmt.Errorf("tree rm: %s has %d %s not merged into %s; trellis tree drop %s --reason <why> keeps %s recoverable, --force discards %s", name, n, noun, base, name, pronoun, pronoun)
 }
 
 // landed reports whether the branch was merged in a way that leaves its

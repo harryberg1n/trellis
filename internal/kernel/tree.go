@@ -9,8 +9,9 @@ const (
 	TreeOpen
 	TreeMerged
 	// TreeAbandoned is set by the report's history fold (step 7: a branch
-	// deleted without a merge), never by a hook and never by Advance, as with
-	// tree.merged. Advance turns an abandoned tree into merged on tree.merged.
+	// deleted without a merge), never by a hook, and by Advance on
+	// tree.dropped, which `tree drop` records. Advance turns an abandoned tree
+	// into merged on tree.merged.
 	TreeAbandoned
 )
 
@@ -36,6 +37,8 @@ func Advance(s TreeState, ev Event) (TreeState, Event) {
 	switch {
 	case ev.Kind == EvTreeMerged:
 		return TreeMerged, ev
+	case ev.Kind == EvTreeDropped && s != TreeMerged:
+		return TreeAbandoned, ev
 	case s == TreeNone:
 		return TreeOpen, ev
 	case s == TreeMerged:

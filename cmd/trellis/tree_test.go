@@ -82,6 +82,8 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 		{[]string{"tree", "sync", "--help"}, "usage: trellis tree sync\n"},
 		{[]string{"tree", "merge", "--help"}, "usage: trellis tree merge [<name>] [--check CMD] [--rebase]\n"},
 		{[]string{"tree", "rm", "--help"}, "usage: trellis tree rm [<name>] [--force]\n"},
+		{[]string{"tree", "drop", "--help"}, "usage: trellis tree drop [<name>] --reason R\n"},
+		{[]string{"tree", "adopt", "--help"}, "usage: trellis tree adopt <branch> [--path P]\n"},
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer
@@ -96,7 +98,7 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 func TestTree_MainUsageNamesTheFourVerbs(t *testing.T) {
 	var out, errb bytes.Buffer
 	run([]string{"help"}, &out, &errb)
-	if !strings.Contains(out.String(), "trellis tree new|sync|merge|rm") {
+	if !strings.Contains(out.String(), "trellis tree new|adopt|sync|merge|rm|drop") {
 		t.Errorf("main usage lacks the tree line:\n%s", out.String())
 	}
 }
@@ -135,5 +137,13 @@ func TestTree_ErrorIsOneLineOnStderrAndExitOne(t *testing.T) {
 	code := treeCmd([]string{"merge"}, treeEnv{Dir: repo, Runner: runner.Exec{Clock: clock.Real()}}, &out, &errb)
 	if code != 1 || out.Len() != 0 || strings.Count(errb.String(), "\n") != 1 {
 		t.Errorf("exit %d, stdout %q, stderr %q; want 1, empty, one line", code, out.String(), errb.String())
+	}
+}
+
+func TestTree_DropWithoutAReasonExitsTwo(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := treeCmd([]string{"drop", "feat"}, treeEnv{Dir: testiso.Repo(t), Runner: runner.Exec{Clock: clock.Real()}}, &out, &errb)
+	if code != 2 || errb.String() != "trellis tree drop: --reason is needed: say why the work is dropped\n" {
+		t.Errorf("exit %d, stderr %q; want 2 and the reason line", code, errb.String())
 	}
 }
