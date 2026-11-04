@@ -27,6 +27,25 @@ Install: download the binary for your platform from the latest GitHub release, c
 
 A repository is on once `trellis.toml` is committed at its root, found by walking up from the working directory to the first `.git`; a linked worktree is on once the file is in it, by merging it or by running `trellis install` there. Anywhere else, and under `TRELLIS_OFF=1`, the hook exits 0 with no output and writes nothing. Everything a tree writes goes to the store of the primary checkout.
 
+## Settings
+
+`trellis.toml` turns a repository on, and may set what the tree verbs do. Every key is optional; an unknown table or key, or a value of the wrong kind, stops the verb with the file's line (`trellis.toml:2: unknown key tree.new.lnk`).
+
+```toml
+[tree]
+remote = "github"            # the remote trees push to and are cut from; default origin
+
+[tree.new]
+link = ["node_modules"]      # paths of the primary checkout linked into a new tree, first
+run = ["make warm"]          # then run in the new tree, shown as they run
+
+[tree.merge]
+checks = "none"              # never wait for CI: the gate is the local --check; default "auto"
+# require = ["test-linux"]   # or: check names that must appear before the merge (at most 30 minutes)
+```
+
+`tree new` reads the new tree's own `trellis.toml` (what it was cut from). A link whose target is missing in the primary is a warning, and a link git would list as untracked is added to the repository's exclude file, so the tree stays clean; on Windows a directory gets a junction when a symbolic link is not allowed. A command that fails stops `tree new` with its last line and the tree's path (the tree stays). `tree merge` reads the tree's `trellis.toml`: `checks = "none"` says `trellis.toml says checks = "none": not waiting for checks`, and `require` waits until every named check is on the pull request, naming the ones still missing, and exits 2 after 30 minutes with `required checks did not appear in 1800s: <names>`. `checks = "none"` and `require` exclude each other.
+
 ## Walls
 
 A deny is `trellis: <row>: <cause>. Override: <command>.`, one line except the secrets deny, which lists its findings under it; the command is `trellis allow <row>` or `none`. What the walls read, where it is not obvious:

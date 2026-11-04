@@ -3,9 +3,11 @@ package tree
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/harryberg1n/trellis/internal/config"
 	"github.com/harryberg1n/trellis/internal/host"
 	"github.com/harryberg1n/trellis/internal/objects"
 )
@@ -28,7 +30,19 @@ const (
 // the pull request CLEAN and no workflow run of head (the commit the checks are
 // judged on) is queued or in progress; any other merge state is a Fixable,
 // since checks may still be on their way.
-func awaitChecks(env Env, gh host.GH, pr int, root, branch, base, head string) (bool, error) {
+//
+// trellis.toml decides first ([tree.merge]): checks = "none" waits for
+// nothing (#53, a repository whose gate is the local --check), and require
+// waits for the named checks to appear (#52, an Actions outage that started
+// no run).
+func awaitChecks(env Env, gh host.GH, pr int, root, branch, base, head string, m config.Merge) (bool, error) {
+	if m.Checks == "none" {
+		env.sayWait(`trellis.toml says checks = "none": not waiting for checks`)
+		return false, nil
+	}
+	if len(m.Require) > 0 {
+		return true, awaitRequired(env, gh, pr, m.Require)
+	}
 	if files, canRun := workflowsCanRun(root, branch, base); files && !canRun {
 		env.sayWait("no workflow runs on a pull request into %s", base)
 		return false, nil
@@ -151,4 +165,38 @@ func anyPending(gh host.GH, pr int) bool {
 		}
 	}
 	return false
+}
+
+// awaitRequired polls the checks of pull request pr until every name in
+// require is among them, for at most queuedWindow.
+func awaitRequired(env Env, gh host.GH, pr int, require []string) error {
+	said := ""
+	for waited := time.Duration(0); ; waited += checksDelay {
+		var checks []host.Check
+		err := env.retry(fmt.Sprintf("checks of #%d", pr), func() (err error) {
+			checks, err = gh.Checks(pr)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("tree merge: checks could not be read: %s", firstLine(err))
+		}
+		var missing []string
+		for _, name := range require {
+			if !slices.ContainsFunc(checks, func(c host.Check) bool { return c.Name == name }) {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) == 0 {
+			return nil
+		}
+		if waited >= queuedWindow {
+			return &Fixable{Msg: fmt.Sprintf("tree merge: required checks did not appear in %ds: %s: run again",
+				int(queuedWindow.Seconds()), strings.Join(missing, ", "))}
+		}
+		if line := strings.Join(missing, ", "); line != said {
+			env.sayWait("waiting for the required checks: %s", line)
+			said = line
+		}
+		env.wait(checksDelay)
+	}
 }

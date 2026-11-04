@@ -143,15 +143,15 @@ func adoptTree(env Env, name, path string) error {
 	}
 	args := []string{"worktree", "add", path, name}
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "fetch", "--prune", "origin"); err != nil {
+		if _, err := env.runGit(w.Primary, "fetch", "--prune", remoteOf(w.Repo)); err != nil {
 			return fmt.Errorf("tree adopt: %w", err)
 		}
-		_, rerr := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/origin/"+name)
+		_, rerr := env.runGit(w.Primary, "rev-parse", "--verify", "-q", "refs/remotes/"+remoteOf(w.Repo)+"/"+name)
 		switch {
 		case rerr != nil && !local:
-			return fmt.Errorf("tree adopt: no branch %q on origin", name)
+			return fmt.Errorf("tree adopt: no branch %q on %s", name, remoteOf(w.Repo))
 		case rerr == nil && !local:
-			args = []string{"worktree", "add", "--track", "-b", name, path, "origin/" + name}
+			args = []string{"worktree", "add", "--track", "-b", name, path, remoteOf(w.Repo) + "/" + name}
 		}
 	} else if !local {
 		return fmt.Errorf("tree adopt: no branch %q", name)
