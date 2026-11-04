@@ -55,13 +55,22 @@ type reportEnv struct {
 	Clock  clock.Clock
 }
 
-// reportCmd runs `trellis report [--issue]`. All facts are gathered here and
-// handed to measure.
+// reportCmd runs `trellis report [--since DATE] [--issue]`. All facts are
+// gathered here and handed to measure.
 func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
-	fs := newFlagSet("report", "report [--issue]", stderr)
+	fs := newFlagSet("report", "report [--since DATE] [--issue]", stderr)
 	issue := fs.Bool("issue", false, "file the aggregate report as an issue on "+reportRepo)
+	sinceFlag := fs.String("since", "", "hook latency over the events from this local date on, YYYY-MM-DD (the rest of the report is unchanged)")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
+	}
+	var since time.Time
+	if *sinceFlag != "" {
+		var err error
+		if since, err = time.ParseInLocation(time.DateOnly, *sinceFlag, time.Local); err != nil {
+			_, _ = fmt.Fprintf(stderr, "trellis report: --since %q: want a date, YYYY-MM-DD\n", *sinceFlag)
+			return 2
+		}
 	}
 	repo, err := objects.Open(env.Repo)
 	if err != nil {
@@ -74,6 +83,7 @@ func reportCmd(args []string, stdout, stderr io.Writer, env reportEnv) int {
 		_, _ = fmt.Fprintf(stderr, "trellis report: %v\n", err)
 		return 1
 	}
+	facts.LatencySince = since
 	if !*issue {
 		_, _ = stdout.Write(measure.Report(facts))
 		return 0

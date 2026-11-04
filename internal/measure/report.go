@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/harryberg1n/trellis/internal/kernel"
 )
 
 // Report is the plain-text report: aggregates only. It names no path, diff,
@@ -103,7 +105,7 @@ func render(f Facts, mask bool) []byte {
 		p("  %s  denies=%d  injected_tokens=%d  turns=%d  unresolved=%d  unresolved_turns=%d", r.Row, r.Denies, r.InjectedTokens, r.Turns, r.Unresolved, r.UnresolvedTurns)
 	}
 	p("")
-	latencyBlock(p, Latency(f.Events))
+	latencyBlock(p, Latency(eventsSince(f.Events, f.LatencySince)), f.LatencySince)
 	p("")
 	p("as of %s", f.Now.UTC().Format(time.RFC3339))
 	return b.Bytes()
@@ -123,16 +125,20 @@ func mean(xs []float64) float64 {
 // latencyBlock prints the hook latency lines. The times are the hooks' own,
 // from the start of the hook command to just before its event was appended,
 // so lock wait and the turn anchor are inside and process start is not.
-func latencyBlock(p func(string, ...any), lat []HookLatency) {
+func latencyBlock(p func(string, ...any), lat []HookLatency, since time.Time) {
+	head := "hook latency"
+	if !since.IsZero() {
+		head += " since " + since.Format(time.DateOnly)
+	}
 	if len(lat) == 0 {
-		p("hook latency: none")
+		p("%s: none", head)
 		return
 	}
 	var n int
 	for _, l := range lat {
 		n += l.N
 	}
-	p("hook latency: p50 / p95 ms over %d timed events (lock wait and anchor included; append, checkpoint, fsync and process start excluded)", n)
+	p("%s: p50 / p95 ms over %d timed events (lock wait and anchor included; append, checkpoint, fsync and process start excluded)", head, n)
 	for _, l := range lat {
 		verdict := "(no criterion)"
 		if l.Criterion > 0 {
@@ -157,4 +163,19 @@ func modelNames(ids []string, mask bool) []string {
 		set[SizeLabel(id)] = true
 	}
 	return sortedKeys(set)
+}
+
+// eventsSince is the events at or after since, or all of them when since is
+// the zero time.
+func eventsSince(evs []kernel.Event, since time.Time) []kernel.Event {
+	if since.IsZero() {
+		return evs
+	}
+	var out []kernel.Event
+	for _, e := range evs {
+		if !e.At.Before(since) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

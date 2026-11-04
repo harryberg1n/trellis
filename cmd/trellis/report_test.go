@@ -490,3 +490,31 @@ func TestReport_AContinuedSessionIsReadFromTheTranscriptItContinues(t *testing.T
 		t.Errorf("stderr %q, report:\n%s\nwant every transcript read", errb.String(), out.String())
 	}
 }
+
+func TestReport_SinceNarrowsTheHookLatency(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	var out, errb bytes.Buffer
+
+	code := reportCmd([]string{"--since", "2026-10-05"}, &out, &errb, env)
+
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if want := "hook latency since 2026-10-05: none"; !strings.Contains(out.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, out.String())
+	}
+}
+
+func TestReport_SinceRefusesWhatIsNotADate(t *testing.T) {
+	env, _, _ := reportFixture(t)
+	var out, errb bytes.Buffer
+
+	code := reportCmd([]string{"--since", "last week"}, &out, &errb, env)
+
+	if code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, errb.String())
+	}
+	if want := `trellis report: --since "last week": want a date, YYYY-MM-DD`; !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr lacks %q:\n%s", want, errb.String())
+	}
+}

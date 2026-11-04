@@ -88,7 +88,10 @@ type Facts struct {
 	// NotRead names the facts the caller could not gather, each in a few words,
 	// so the report says what it lacks.
 	NotRead []string
-	Now     time.Time
+	// LatencySince, when set, narrows the hook latency to the events at or
+	// after it, so a fix is measured on the samples taken since it shipped.
+	LatencySince time.Time
+	Now          time.Time
 }
 
 // linked is the merges with a tree filled in for each squash or rebase merge

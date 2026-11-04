@@ -2,7 +2,9 @@ package measure
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/harryberg1n/trellis/internal/kernel"
 )
@@ -68,5 +70,32 @@ func TestLatency_DoesNotReorderItsInput(t *testing.T) {
 	Latency(evs)
 	if evs[0].TookMS != 9 || evs[1].TookMS != 1 || evs[2].TookMS != 5 {
 		t.Fatalf("input reordered: %+v", evs)
+	}
+}
+
+func TestReport_LatencySinceCountsOnlyTheEventsFromThatTimeOn(t *testing.T) {
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 12, 0, 0, 0, time.UTC) }
+	evs := []kernel.Event{
+		{Kind: kernel.EvTurnAnchored, TookMS: 450, At: day(1)},
+		{Kind: kernel.EvTurnAnchored, TookMS: 460, At: day(3)},
+		{Kind: kernel.EvTurnAnchored, TookMS: 40, At: day(4)},
+		{Kind: kernel.EvTurnAnchored, TookMS: 60, At: day(5)},
+	}
+	out := string(Report(Facts{Events: evs, LatencySince: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC), Now: day(6)}))
+
+	want := "hook latency since 2026-11-04: p50 / p95 ms over 2 timed events"
+	if !strings.Contains(out, want) {
+		t.Errorf("report lacks %q:\n%s", want, out)
+	}
+	if want := "  Stop                     p50 40   p95 60   n 2     (criterion 300: ok)"; !strings.Contains(out, want) {
+		t.Errorf("report lacks %q:\n%s", want, out)
+	}
+}
+
+func TestReport_LatencySinceWithNoEventsSaysSo(t *testing.T) {
+	evs := []kernel.Event{{Kind: kernel.EvTurnAnchored, TookMS: 450, At: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)}}
+	out := string(Report(Facts{Events: evs, LatencySince: time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC), Now: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}))
+	if want := "hook latency since 2026-11-04: none"; !strings.Contains(out, want) {
+		t.Errorf("report lacks %q:\n%s", want, out)
 	}
 }
