@@ -20,14 +20,21 @@ verbs:
   new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory;
                           refuses a name git cannot use as a branch, and one that is already a branch on origin
   sync                    fetch origin and rebase this tree onto its default branch; refuses uncommitted changes
-  merge [--check CMD] [--rebase]
+  merge [<name>] [--check CMD] [--rebase]
                           push, open or find the pull request, wait for its checks, squash-merge it (one commit
                           per PR, its number in the subject, the usual norm) bound to the head the checks judged,
                           delete the branch on origin, remove the tree; --rebase keeps the tree's commits instead;
-                          the output of --check is shown as it is written
+                          the output of --check is shown as it is written; with <name> it merges that tree from
+                          anywhere, the primary checkout included, so your shell is not left in the removed tree;
+                          no wait for checks when no workflow of the tree can run on a pull request
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
+
+the loop (merge pushes and opens the PR itself; --check binds the merge to the head your gate judged):
+  trellis tree new fix/login                          # from the primary checkout
+  git -C ../repo--fix--login commit -m 'fix: ...'    # work and commit in the tree it printed
+  trellis tree merge fix/login --check 'make check'  # from the primary: check, push, PR, merge, clean up
 
 exit codes of merge and sync: 0 done; 130 interrupted; 2 when you can fix it and run it again (red or cancelled
 checks, a conflict, a branch that is behind or blocked, a head that moved after the checks judged it, a run of
@@ -41,7 +48,7 @@ func treeUsageLine(verb string) string {
 	case "new":
 		return "tree new <name> [--path P]"
 	case "merge":
-		return "tree merge [--check CMD] [--rebase]"
+		return "tree merge [<name>] [--check CMD] [--rebase]"
 	case "rm":
 		return "tree rm [<name>] [--force]"
 	}
@@ -110,7 +117,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	if err != nil {
 		return parseExit(err)
 	}
-	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 0}, "rm": {0, 1}}[verb]
+	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 1}, "rm": {0, 1}}[verb]
 	if len(positional) < want[0] || len(positional) > want[1] {
 		_, _ = fmt.Fprintf(stderr, "trellis tree %s: wrong number of arguments\n", verb)
 		fs.Usage()
@@ -139,6 +146,9 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		var opts []tree.MergeOption
 		if rebase {
 			opts = append(opts, tree.Rebase())
+		}
+		if name != "" {
+			opts = append(opts, tree.Named(name))
 		}
 		err = tree.Merge(e, check, opts...)
 	case "rm":

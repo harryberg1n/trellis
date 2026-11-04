@@ -276,13 +276,21 @@ func syncTree(env Env) error {
 // MergeOption changes how Merge lands a tree.
 type MergeOption func(*mergeOpts)
 
-type mergeOpts struct{ rebase bool }
+type mergeOpts struct {
+	rebase bool
+	name   string
+}
 
 // Rebase lands the tree's commits one by one (a rebase merge, or in a
 // repository with no remote a --no-ff merge) instead of as one squash commit.
 func Rebase() MergeOption { return func(o *mergeOpts) { o.rebase = true } }
 
-// Merge ships the current tree: the optional local check, a push, a pull
+// Named merges the tree on branch name instead of the one the caller stands
+// in, so it can be run from the primary checkout: the caller's shell is then
+// not in the directory the merge removes (#53).
+func Named(name string) MergeOption { return func(o *mergeOpts) { o.name = name } }
+
+// Merge ships the current tree (or the one Named names): the optional local check, a push, a pull
 // request (found or opened), its checks, a squash merge (a rebase merge with
 // Rebase), then the tree and branch are removed. Any step that fails stops
 // the rest.
@@ -299,12 +307,27 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	if err != nil {
 		return err
 	}
+	if o.name != "" {
+		path, err := pathOf(env, w, o.name)
+		if err != nil {
+			return fmt.Errorf("tree merge: %w", err)
+		}
+		at := env
+		at.Dir = path
+		if w, err = at.locate("merge"); err != nil {
+			return err
+		}
+	}
 	repo := w.Repo
 	switch {
+	case repo.Primary && o.name == "" && repo.Branch == repo.Default:
+		return fmt.Errorf("tree merge: %s is the default branch and the primary checkout is not a tree: name one, trellis tree merge <name>", repo.Branch)
+	case repo.Primary && o.name == "":
+		return errors.New("tree merge: the primary checkout is not a tree: name one, trellis tree merge <name>")
 	case repo.Branch == repo.Default:
 		return fmt.Errorf("tree merge: %s is the default branch", repo.Branch)
 	case repo.Primary:
-		return errors.New("tree merge: the primary checkout is not a tree")
+		return fmt.Errorf("tree merge: %s is checked out in the primary checkout, not in a tree", repo.Branch)
 	case repo.Detached:
 		return errors.New("tree merge: HEAD is detached")
 	}
@@ -349,7 +372,7 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	case st.MergeUnknown():
 		return &Fixable{Msg: "tree merge: mergeability not computed yet by GitHub: run again"}
 	}
-	seen, err := awaitChecks(env, gh, pr, name, head)
+	seen, err := awaitChecks(env, gh, pr, repo.Root, name, repo.Default, head)
 	if err != nil {
 		return err
 	}
@@ -467,8 +490,7 @@ func deleteRemoteBranch(env Env, dir, name string) {
 	}
 	for _, text := range remoteGone {
 		if strings.Contains(err.Error(), text) {
-			env.say("origin/%s is already gone", name)
-			return
+			return // GitHub deleted it with the merge: nothing to say
 		}
 	}
 	env.warn("origin/%s was not deleted: %s", name, firstLine(err))

@@ -20,7 +20,7 @@ func TestTree_NoVerbPrintsUsage(t *testing.T) {
 	if code := run([]string{"tree"}, &out, &errb); code != 2 {
 		t.Errorf("exit %d, want 2", code)
 	}
-	for _, want := range []string{"usage: trellis tree <verb>", "new <name>", "sync", "merge [--check CMD] [--rebase]", "rm [<name>]"} {
+	for _, want := range []string{"usage: trellis tree <verb>", "new <name>", "sync", "merge [<name>] [--check CMD] [--rebase]", "rm [<name>]"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("usage lacks %q:\n%s", want, errb.String())
 		}
@@ -80,7 +80,7 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 		{[]string{"allow", "--help"}, "usage: trellis allow <row-id>\n"},
 		{[]string{"tree", "new", "--help"}, "usage: trellis tree new <name> [--path P]\n"},
 		{[]string{"tree", "sync", "--help"}, "usage: trellis tree sync\n"},
-		{[]string{"tree", "merge", "--help"}, "usage: trellis tree merge [--check CMD] [--rebase]\n"},
+		{[]string{"tree", "merge", "--help"}, "usage: trellis tree merge [<name>] [--check CMD] [--rebase]\n"},
 		{[]string{"tree", "rm", "--help"}, "usage: trellis tree rm [<name>] [--force]\n"},
 	}
 	for _, c := range cases {
@@ -98,6 +98,22 @@ func TestTree_MainUsageNamesTheFourVerbs(t *testing.T) {
 	run([]string{"help"}, &out, &errb)
 	if !strings.Contains(out.String(), "trellis tree new|sync|merge|rm") {
 		t.Errorf("main usage lacks the tree line:\n%s", out.String())
+	}
+}
+
+// Issue #53: agents pushed and opened the PR themselves, and ran the check as
+// a step of its own, so the merge was not bound to the head the gate judged.
+func TestTree_UsageShowsTheLoopWithMergeAsTheOnlyStepAfterTheCommit(t *testing.T) {
+	var out, errb bytes.Buffer
+	treeCmd([]string{"--help"}, treeEnv{}, &out, &errb)
+	for _, line := range []string{
+		"  trellis tree new fix/login                          # from the primary checkout\n",
+		"  git -C ../repo--fix--login commit -m 'fix: ...'    # work and commit in the tree it printed\n",
+		"  trellis tree merge fix/login --check 'make check'  # from the primary: check, push, PR, merge, clean up\n",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Errorf("tree usage lacks %q:\n%s", line, out.String())
+		}
 	}
 }
 

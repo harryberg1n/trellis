@@ -23,11 +23,16 @@ const (
 
 // awaitChecks polls the checks of pull request pr until one exists, and
 // reports whether one did. None within checksWindow is accepted only when the
-// repository defines no workflows or GitHub calls the pull request CLEAN and no
-// workflow run of head (the commit the checks are judged on) is queued or in
-// progress; any other merge state is a Fixable, since checks may still be on
-// their way.
-func awaitChecks(env Env, gh host.GH, pr int, branch, head string) (bool, error) {
+// repository defines no workflows, the workflow files of the tree at root show
+// that none can run on a pull request from branch into base, or GitHub calls
+// the pull request CLEAN and no workflow run of head (the commit the checks are
+// judged on) is queued or in progress; any other merge state is a Fixable,
+// since checks may still be on their way.
+func awaitChecks(env Env, gh host.GH, pr int, root, branch, base, head string) (bool, error) {
+	if files, canRun := workflowsCanRun(root, branch, base); files && !canRun {
+		env.sayWait("no workflow runs on a pull request into %s", base)
+		return false, nil
+	}
 	noWorkflows := false
 	for waited := time.Duration(0); ; waited += checksDelay {
 		var checks []host.Check
