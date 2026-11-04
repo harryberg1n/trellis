@@ -176,10 +176,10 @@ func backUpAndRemove(env Env, w where, r treeRow) error {
 	}
 	where := ref
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "push", "origin", "+"+tip+":refs/heads/backup/"+r.name); err != nil {
-			env.warn("%s was not pushed to origin backup/%s: %s; it is kept at %s", r.name, r.name, firstLine(err), ref)
+		if _, err := env.runGit(w.Primary, "push", remoteOf(w.Repo), "+"+tip+":refs/heads/backup/"+r.name); err != nil {
+			env.warn("%s was not pushed to %s backup/%s: %s; it is kept at %s", r.name, remoteOf(w.Repo), r.name, firstLine(err), ref)
 		} else {
-			where += " and origin backup/" + r.name
+			where += " and " + remoteOf(w.Repo) + " backup/" + r.name
 		}
 	}
 	env.record(droppedEvent(r.name, "tree prune --backup", ref))
@@ -191,7 +191,7 @@ func backUpAndRemove(env Env, w where, r treeRow) error {
 // orphan directories beside the primary.
 func survey(env Env, w where, verb string) ([]treeRow, []string, error) {
 	if w.Repo.Remote != "" {
-		if _, err := env.runGit(w.Primary, "fetch", "--prune", "origin"); err != nil {
+		if _, err := env.runGit(w.Primary, "fetch", "--prune", remoteOf(w.Repo)); err != nil {
 			return nil, nil, fmt.Errorf("tree %s: %w", verb, err)
 		}
 	}
