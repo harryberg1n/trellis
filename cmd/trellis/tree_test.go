@@ -84,6 +84,8 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 		{[]string{"tree", "rm", "--help"}, "usage: trellis tree rm [<name>] [--force]\n"},
 		{[]string{"tree", "drop", "--help"}, "usage: trellis tree drop [<name>] --reason R\n"},
 		{[]string{"tree", "adopt", "--help"}, "usage: trellis tree adopt <branch> [--path P]\n"},
+		{[]string{"tree", "list", "--help"}, "usage: trellis tree list [--size]\n"},
+		{[]string{"tree", "prune", "--help"}, "usage: trellis tree prune [--dry] [--backup]\n"},
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer
@@ -98,7 +100,7 @@ func TestHelp_EveryVerbPrintsUsageInOneVoice(t *testing.T) {
 func TestTree_MainUsageNamesTheFourVerbs(t *testing.T) {
 	var out, errb bytes.Buffer
 	run([]string{"help"}, &out, &errb)
-	if !strings.Contains(out.String(), "trellis tree new|adopt|sync|merge|rm|drop") {
+	if !strings.Contains(out.String(), "trellis tree new|adopt|sync|merge|rm|drop|list|prune") {
 		t.Errorf("main usage lacks the tree line:\n%s", out.String())
 	}
 }
