@@ -24,7 +24,7 @@ verbs:
   install   pin this binary, wire its hooks once per user, turn the repo on: trellis install [--config-dir D] [--repo R] [--dry] [--allow-dev]
   doctor    check the user-level hooks against this binary, the state root and the repo: trellis doctor [--config-dir D] [--repo R]
   eject     remove the hooks install added: trellis eject [--config-dir D] [--repo R]
-  tree      worktrees over plain git and gh: trellis tree new|adopt|sync|merge|rm|drop
+  tree      worktrees over plain git and gh: trellis tree new|adopt|sync|merge|rm|drop|list|prune
   update    fetch the newest release, verify and pin it, rewire the user-level hooks: trellis update [--config-dir D] [--to VERSION] [--dry] [--allow-dev] [--forget-missing]
   help      print this text (also --help, -h)
 

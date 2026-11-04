@@ -38,6 +38,14 @@ verbs:
                           remove a tree and its branch, and keep all it held (commits, and uncommitted work as one
                           commit on top) at refs/trellis/dropped/<name>-<time>; prints the line that restores it; the
                           reason is recorded; nothing is lost, so it needs no --force and no override
+  list [--size]           every worktree of the repository (trellis-made or not): commits ahead, uncommitted files,
+                          pull request, age of the last commit, what prune would do; and orphan directories beside
+                          the primary that are no worktree; --size adds the size on disk
+  prune [--dry] [--backup]
+                          remove the trees whose pull request merged with their tip and that are clean, and forget
+                          the ones whose directory is gone; --backup also removes every other tree after keeping its
+                          work as drop does and pushing it to origin as backup/<name>; never the tree you are in;
+                          orphan directories are named, never deleted; --dry prints the plan
 
 the loop (merge pushes and opens the PR itself; --check binds the merge to the head your gate judged):
   trellis tree new fix/login                          # from the primary checkout
@@ -63,6 +71,10 @@ func treeUsageLine(verb string) string {
 		return "tree drop [<name>] --reason R"
 	case "adopt":
 		return "tree adopt <branch> [--path P]"
+	case "list":
+		return "tree list [--size]"
+	case "prune":
+		return "tree prune [--dry] [--backup]"
 	}
 	return "tree " + verb
 }
@@ -111,7 +123,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	}
 	fs := newFlagSet("tree "+verb, treeUsageLine(verb), stderr)
 	var path, check, reason string
-	var force, rebase bool
+	var force, rebase, size, dry, backup bool
 	switch verb {
 	case "new":
 		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of this checkout)")
@@ -124,6 +136,11 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		fs.StringVar(&reason, "reason", "", "why the work is dropped; recorded with it")
 	case "adopt":
 		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of the primary checkout)")
+	case "list":
+		fs.BoolVar(&size, "size", false, "add each tree's size on disk")
+	case "prune":
+		fs.BoolVar(&dry, "dry", false, "print the plan and change nothing")
+		fs.BoolVar(&backup, "backup", false, "also remove every other tree, after keeping its work and pushing it to origin as backup/<name>")
 	case "sync":
 	default:
 		_, _ = fmt.Fprintf(stderr, "trellis tree: unknown verb %q\n\n%s", verb, treeUsage)
@@ -133,7 +150,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	if err != nil {
 		return parseExit(err)
 	}
-	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 1}, "rm": {0, 1}, "drop": {0, 1}, "adopt": {1, 1}}[verb]
+	want := map[string][2]int{"new": {1, 1}, "sync": {0, 0}, "merge": {0, 1}, "rm": {0, 1}, "drop": {0, 1}, "adopt": {1, 1}, "list": {0, 0}, "prune": {0, 0}}[verb]
 	if len(positional) < want[0] || len(positional) > want[1] {
 		_, _ = fmt.Fprintf(stderr, "trellis tree %s: wrong number of arguments\n", verb)
 		fs.Usage()
@@ -177,6 +194,10 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 		err = tree.Drop(e, name, reason)
 	case "adopt":
 		err = tree.Adopt(e, name, path)
+	case "list":
+		err = tree.List(e, size)
+	case "prune":
+		err = tree.Prune(e, dry, backup)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "trellis %v\n", err)

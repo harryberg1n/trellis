@@ -80,6 +80,8 @@ type fixture struct {
 	landed     bool                // pr merge lands the PR even when it answers mergeErr (a 502 after the merge)
 	merged     bool                // the PR is merged: pr list says MERGED
 	headSeq    []string            // successive PR heads pr list reports before head; a stale GitHub after a push
+	prStates   map[string]string   // per --head: the state of its one PR (OPEN, MERGED, CLOSED); a head in it answers alone
+	mergedTips map[string]string   // per --head: the headRefOid of its merged PR
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -109,6 +111,20 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 			return run.Result{Stdout: []byte(`{"mergeCommit":{"oid":"` + f.mergeSHA + `"}}`)}, nil
 		}
 	case "pr list":
+		head := argAfter(spec.Args, "--head")
+		if tip, ok := f.mergedTips[head]; ok && argAfter(spec.Args, "--state") == "merged" {
+			return run.Result{Stdout: []byte(fmt.Sprintf(`[{"number":5,"headRefOid":%q,"baseRefName":"main","mergeCommit":null}]`, tip))}, nil
+		}
+		if f.prStates != nil && argAfter(spec.Args, "--state") != "merged" {
+			st, ok := f.prStates[head]
+			if !ok {
+				return run.Result{Stdout: []byte("[]")}, nil
+			}
+			return run.Result{Stdout: []byte(fmt.Sprintf(`[{"number":9,"state":%q,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"","reviewDecision":""}]`, st))}, nil
+		}
+		if f.prStates != nil {
+			return run.Result{Stdout: []byte("[]")}, nil
+		}
 		if slices.Contains(spec.Args, "merged") {
 			if f.mergedOID != "" {
 				base, merge := f.mergedBase, "null"
@@ -133,7 +149,7 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 				f.mergeable = f.mergeable[1:]
 			}
 		}
-		head := f.head
+		head = f.head
 		if len(f.headSeq) > 0 {
 			head, f.headSeq = f.headSeq[0], f.headSeq[1:]
 		}
@@ -2095,4 +2111,14 @@ func TestMerge_AWorkflowThatCanRunOnThePRIsWaitedFor(t *testing.T) {
 	if f.clk.afters != 18 {
 		t.Errorf("waits on the clock = %d, want 18 (90 s in 5 s steps)", f.clk.afters)
 	}
+}
+
+// argAfter is the argument after flag in args, or "".
+func argAfter(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
