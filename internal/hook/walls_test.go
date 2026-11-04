@@ -106,7 +106,7 @@ func TestOverride_OneShot(t *testing.T) {
 			t.Fatalf("run %d: exit %d (stderr %q), want %d: allow, then deny", i+1, code, stderr, want)
 		}
 	}
-	line := "trellis: discard-uncommitted: reset --hard discards 1 unstaged file. Override: trellis allow discard-uncommitted."
+	line := "trellis: discard-uncommitted: reset --hard discards 1 unstaged file: git stash push sets it aside instead. Override: trellis allow discard-uncommitted."
 	want := []map[string]string{
 		{"kind": "wall.overridden", "row": "discard-uncommitted"},
 		{"kind": "wall.denied", "row": "discard-uncommitted", "line": line, "bytes": strconv.Itoa(len(line))},

@@ -54,5 +54,8 @@ func primaryCause(r run.Runner, what, target string) string {
 	if strings.HasPrefix(filepath.ToSlash(rel), ".git/info/") || isIgnored(r, f.Root, rel) {
 		return ""
 	}
-	return fmt.Sprintf("%s %s is in the primary checkout, which is on %s", what, filepath.ToSlash(rel), f.Branch)
+	// The next step, so the deny resolves in one call (#50: 30 denies, all
+	// unresolved). The path is tree.Path's, which walls cannot import.
+	return fmt.Sprintf("%s %s is in the primary checkout, which is on %s: work in a tree, trellis tree new <name> makes %s--<name>",
+		what, filepath.ToSlash(rel), f.Branch, filepath.ToSlash(f.Root))
 }

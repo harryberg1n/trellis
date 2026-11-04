@@ -90,7 +90,7 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	case strings.HasPrefix(form, "branch -D "):
 		return measureBranch(a, c, form), ""
 	}
-	dir, where := c.Dir, ""
+	dir, where, given := c.Dir, "", paths
 	if form == "worktree remove --force" {
 		if len(paths) == 0 {
 			return "", ""
@@ -129,7 +129,33 @@ func measureDiscard(a *analysis, c gitCall, form string, paths []string) (cause,
 	if want.zero() {
 		return "", ""
 	}
-	return fmt.Sprintf("%s discards %s%s", form, want, where), ""
+	return fmt.Sprintf("%s discards %s%s: %s instead", form, want, where, keepStep(form, want, given, dir)), ""
+}
+
+// keepStep is the command that does what a discarding form does to the files
+// and keeps the work (#50, #52: every deny of these was unresolved, and the way
+// around one, `git show HEAD:<path> > <path>`, discards the same work unseen).
+func keepStep(form string, c cost, paths []string, dir string) string {
+	them := "it"
+	if c.Unstaged+c.Staged+c.Untracked+c.Ignored > 1 {
+		them = "them"
+	}
+	switch {
+	case form == "checkout -- <paths>" || form == "restore <paths>":
+		return "git stash push -- " + strings.Join(paths, " ") + " sets " + them + " aside"
+	case strings.HasPrefix(form, "clean "):
+		if c.Ignored > 0 {
+			return "git stash push --all sets " + them + " aside"
+		}
+		return "git stash push --include-untracked sets " + them + " aside"
+	case form == "worktree remove --force":
+		name := "<name>"
+		if r, ok := repoAt(dir); ok && !r.Detached {
+			name = r.Branch
+		}
+		return "trellis tree drop " + name + " --reason <why> keeps " + them
+	}
+	return "git stash push sets " + them + " aside" // reset --hard, reset --merge, checkout -f
 }
 
 // statusCost counts the files git status lists in dir, for paths or for the
@@ -196,7 +222,15 @@ func measureBranch(a *analysis, c gitCall, form string) string {
 	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &n); err != nil || n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%s discards %s", form, cost{Commits: n})
+	it := "it"
+	if n > 1 || len(names) > 1 {
+		it = "them"
+	}
+	keep := make([]string, 0, len(names))
+	for _, name := range names {
+		keep = append(keep, "git branch -m "+name+" dropped/"+name)
+	}
+	return fmt.Sprintf("%s discards %s: %s keeps %s instead", form, cost{Commits: n}, strings.Join(keep, " && "), it)
 }
 
 // parseStatus counts the files `git status --porcelain=v1 -z` lists: a staged
