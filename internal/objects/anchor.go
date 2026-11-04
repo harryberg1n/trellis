@@ -159,7 +159,6 @@ func Snapshot(r run.Runner, repo string, blobs map[string]string) (string, error
 		root = "" // no commit yet: start from the empty tree
 	}
 	return buildTree(r, repo, root, changes)
-
 }
 
 // buildTree applies changes to the tree named by root (a tree id or HEAD) and
