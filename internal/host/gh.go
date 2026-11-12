@@ -232,12 +232,16 @@ func (g GH) PRView(branch string) (PRState, error) {
 	return prs[0], nil
 }
 
-// CreatePR opens a pull request from the current branch of Dir into base,
-// titled and described from its first commit, and returns the URL gh prints.
-// --fill alone would make a title of the branch name for a branch of several
-// commits, and a squash merge takes the title as its subject.
-func (g GH) CreatePR(base string) (string, error) {
-	out, err := g.gh(nil, "pr", "create", "--fill-first", "--base", base)
+// CreatePR opens a pull request from head into base, titled and described
+// from its first commit, and returns the URL gh prints. --fill alone would make
+// a title of the branch name for a branch of several commits, and a squash
+// merge takes the title as its subject.
+//
+// The head is always named. Incident #66: left to find it from the checkout,
+// gh gave up in a repository with two remotes for one URL ("you must first
+// push the current branch to a remote, or use the --head flag").
+func (g GH) CreatePR(base, head string) (string, error) {
+	out, err := g.gh(nil, "pr", "create", "--fill-first", "--base", base, "--head", head)
 	return string(trimNL(out)), err
 }
 

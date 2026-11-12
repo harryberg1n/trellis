@@ -124,7 +124,7 @@ func TestGH_ChecksReadsTheListThoughGhExitsNonZero(t *testing.T) {
 func TestGH_CreateWatchAndMergeArgv(t *testing.T) {
 	r := &testsupport.FakeRunner{Answer: testsupport.Stdout("out\n")}
 	g := GH{Runner: r, Dir: "d"}
-	if url, err := g.CreatePR("main"); err != nil || url != "out" {
+	if url, err := g.CreatePR("main", "feat/x"); err != nil || url != "out" {
 		t.Fatalf("CreatePR = %q, %v", url, err)
 	}
 	if _, err := g.WatchChecks(7); err != nil {
@@ -134,7 +134,7 @@ func TestGH_CreateWatchAndMergeArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"pr", "create", "--fill-first", "--base", "main"},
+		{"pr", "create", "--fill-first", "--base", "main", "--head", "feat/x"},
 		{"pr", "checks", "7", "--watch"},
 		{"pr", "merge", "7", "--rebase"},
 	}
