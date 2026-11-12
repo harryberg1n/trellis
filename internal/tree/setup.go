@@ -57,18 +57,23 @@ func linkInto(env Env, primary, tree, p string) error {
 	}
 	env.say("linked %s", p)
 	rel := filepath.ToSlash(p)
-	if _, err := env.runGit(tree, "check-ignore", "-q", "--", rel); err == nil {
+	return exclude(env, tree, rel, "/"+strings.TrimPrefix(rel, "/"))
+}
+
+// exclude adds line to the exclude file of the repository checkout belongs
+// to, unless git ignores rel there already or the file holds the line.
+func exclude(env Env, checkout, rel, line string) error {
+	if _, err := env.runGit(checkout, "check-ignore", "-q", "--", rel); err == nil {
 		return nil // ignored already
 	}
-	exclude, err := env.runGit(tree, "rev-parse", "--git-path", "info/exclude")
+	exclude, err := env.runGit(checkout, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
 		return err
 	}
 	if !filepath.IsAbs(exclude) {
-		exclude = filepath.Join(tree, exclude)
+		exclude = filepath.Join(checkout, exclude)
 	}
 	raw, _ := os.ReadFile(exclude)
-	line := "/" + strings.TrimPrefix(rel, "/")
 	for _, l := range strings.Split(string(raw), "\n") {
 		if strings.TrimSpace(l) == line {
 			return nil

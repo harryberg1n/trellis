@@ -327,10 +327,14 @@ func statusCount(out string) int {
 	return n
 }
 
-// orphansOf are the directories beside primary named as trees are
-// (<primary>--*) that git does not list as worktrees.
+// orphansOf are the directories named as trees are, beside primary
+// (<primary>--*) and under it (<primary>/.trellis/trees/*), that git does not
+// list as worktrees. Both places are read whatever trellis.toml says of place:
+// a repository that changed it has trees in both.
 func orphansOf(primary string, known []string) []string {
 	matches, _ := filepath.Glob(primary + "--*")
+	inside, _ := filepath.Glob(filepath.Join(primary, insideDir, "trees", "*"))
+	matches = append(matches, inside...)
 	var out []string
 	for _, m := range matches {
 		if info, err := os.Stat(m); err != nil || !info.IsDir() {

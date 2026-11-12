@@ -18,7 +18,8 @@ import (
 const treeUsage = `usage: trellis tree <verb>
 
 verbs:
-  new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory;
+  new <name> [--path P]   open a tree: a branch of that name from origin's default, in a sibling directory
+                          (trellis.toml [tree.new] place = "inside": under the primary, .trellis/trees/<name>);
                           refuses a name git cannot use as a branch, and one that is already a branch on origin
   sync                    fetch origin and rebase this tree onto its default branch; refuses uncommitted changes
   merge [<name>] [--check CMD] [--rebase]
@@ -31,8 +32,8 @@ verbs:
                           (a repository with no remote: one squash commit "Merge tree <name>" on the default
                           branch, no gh; --rebase makes it a --no-ff merge)
   adopt <branch> [--path P]
-                          make a tree of a branch that exists already (on origin, tracked; or a local one), in the
-                          usual sibling directory, for sync, merge and the report
+                          make a tree of a branch that exists already (on origin, tracked; or a local one), where
+                          tree new would put it, for sync, merge and the report
   rm [<name>] [--force]   remove a tree and its branch; refuses uncommitted work or commits not merged or pushed without --force
   drop [<name>] --reason R
                           remove a tree and its branch, and keep all it held (commits, and uncommitted work as one
@@ -40,7 +41,7 @@ verbs:
                           reason is recorded; nothing is lost, so it needs no --force and no override
   list [--size]           every worktree of the repository (trellis-made or not): commits ahead, uncommitted files,
                           pull request, age of the last commit, what prune would do; and orphan directories beside
-                          the primary that are no worktree; --size adds the size on disk
+                          the primary or under its .trellis/trees that are no worktree; --size adds the size on disk
   prune [--dry] [--backup]
                           remove the trees whose pull request merged with their tip and that are clean, and forget
                           the ones whose directory is gone; --backup also removes every other tree after keeping its
@@ -126,7 +127,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	var force, rebase, size, dry, backup bool
 	switch verb {
 	case "new":
-		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of this checkout)")
+		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of the primary checkout, or under it with [tree.new] place = \"inside\")")
 	case "merge":
 		fs.StringVar(&check, "check", "", "a command to run in the tree first; red stops the merge")
 		fs.BoolVar(&rebase, "rebase", false, "keep the tree's commits (a rebase merge) instead of squashing them into one")
@@ -135,7 +136,7 @@ func treeCmd(args []string, env treeEnv, stdout, stderr io.Writer) int {
 	case "drop":
 		fs.StringVar(&reason, "reason", "", "why the work is dropped; recorded with it")
 	case "adopt":
-		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of the primary checkout)")
+		fs.StringVar(&path, "path", "", "where to put the tree (default: a sibling of the primary checkout, or under it with [tree.new] place = \"inside\")")
 	case "list":
 		fs.BoolVar(&size, "size", false, "add each tree's size on disk")
 	case "prune":

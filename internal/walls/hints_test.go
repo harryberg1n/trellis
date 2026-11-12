@@ -73,3 +73,33 @@ func TestPrimaryWrite_TheDenyNamesTreeNew(t *testing.T) {
 		t.Errorf("\n got  %q\n want %q", got, want)
 	}
 }
+
+// Feedback #65: with trees placed inside the primary the deny names where the
+// tree will be, so the next call is the right one.
+func TestPrimaryWrite_TheDenyNamesTheInsidePathWhenTreesArePlacedInside(t *testing.T) {
+	w := newWorld(t)
+	testiso.Write(t, filepath.Join(w.primary, "trellis.toml"), "[tree.new]\nplace = \"inside\"\n")
+	file := filepath.Join(w.primary, "README.md")
+
+	got := denyLineOf(t, testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolEdit, w.primary, map[string]string{"file_path": file}, testiso.WithSession("s")))
+
+	want := "trellis: primary-write: Edit of README.md is in the primary checkout, which is on main: " +
+		"work in a tree, trellis tree new <name> makes " + filepath.ToSlash(w.primary) + "/.trellis/trees/<name>. Override: trellis allow primary-write."
+	if got != want {
+		t.Errorf("\n got  %q\n want %q", got, want)
+	}
+}
+
+// Feedback #65: an edit in a tree that lives under the primary is an edit of
+// the tree, on the tree's branch, never a write to the primary.
+func TestPrimaryWrite_ATreeInsideThePrimaryIsNotThePrimary(t *testing.T) {
+	w := newWorld(t)
+	inside := filepath.Join(w.primary, ".trellis", "trees", "in")
+	testiso.Git(t, w.primary, "worktree", "add", "-q", "-b", "in", inside)
+	for _, file := range []string{filepath.Join(inside, "README.md"), filepath.Join(inside, "new", "deep.txt")} {
+		payload := testiso.HookPayload(t, kernel.HookPreToolUse, kernel.ToolEdit, w.primary, map[string]string{"file_path": file}, testiso.WithSession("s"))
+		if d := verdicts(decide(t, payload, quiet(t)), kernel.VerdictDeny); len(d) != 0 {
+			t.Errorf("Edit of %s denied: %+v", file, d)
+		}
+	}
+}

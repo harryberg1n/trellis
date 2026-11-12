@@ -17,7 +17,7 @@ func write(t *testing.T, text string) string {
 }
 
 func TestLoad_NoFileAndAnEmptyFileAreTheDefaults(t *testing.T) {
-	want := Config{Tree: Tree{Remote: "origin", Merge: Merge{Checks: "auto"}}}
+	want := Config{Tree: Tree{Remote: "origin", New: New{Place: "sibling"}, Merge: Merge{Checks: "auto"}}}
 	for _, dir := range []string{t.TempDir(), write(t, ""), write(t, "# trellis is on\n")} {
 		got, err := Load(dir)
 		if err != nil {
@@ -50,7 +50,7 @@ require = ["test-linux", "test-windows"]
 	}
 	want := Config{Tree: Tree{
 		Remote: "github",
-		New:    New{Link: []string{"node_modules", "frontend/node_modules"}, Run: []string{"npm ci", "make warm"}},
+		New:    New{Link: []string{"node_modules", "frontend/node_modules"}, Run: []string{"npm ci", "make warm"}, Place: "sibling"},
 		Merge:  Merge{Checks: "auto", Require: []string{"test-linux", "test-windows"}},
 	}}
 	if !reflect.DeepEqual(got, want) {
@@ -68,8 +68,27 @@ func TestLoad_ChecksNone(t *testing.T) {
 	}
 }
 
+// Feedback #65: a tree inside the primary checkout loads the repository's
+// nested instruction files; beside it (the default) it loads none.
+func TestLoad_PlaceIsSiblingUnlessItSaysInside(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"", "sibling"},
+		{"[tree.new]\nplace = \"sibling\"\n", "sibling"},
+		{"[tree.new]\nplace = \"inside\"\n", "inside"},
+	} {
+		got, err := Load(write(t, c.text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Tree.New.Place != c.want {
+			t.Errorf("%q: place = %q, want %q", c.text, got.Tree.New.Place, c.want)
+		}
+	}
+}
+
 func TestLoad_RefusesWhatItDoesNotKnow(t *testing.T) {
 	for _, c := range []struct{ text, want string }{
+		{"[tree.new]\nplace = \"beside\"\n", `trellis.toml:2: tree.new.place: "sibling" or "inside"`},
 		{"[tree.new]\nlnk = [\"x\"]\n", `trellis.toml:2: unknown key tree.new.lnk`},
 		{"[tree.nwe]\n", `trellis.toml:1: unknown table [tree.nwe]`},
 		{"remote = \"x\"\n", `trellis.toml:1: unknown key remote`},
