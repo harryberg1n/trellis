@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/harryberg1n/trellis/internal/clock"
@@ -129,9 +130,17 @@ func record(deps Deps, p *parsed) error {
 		// blobs are passed in: their objects are already stored and WriteBlob
 		// finds them, while a blob for a file the turn later reverted or that
 		// is ignored would put a stale entry in the tree.
-		tree, commit, err := objects.AnchorTurn(deps.Runner, p.repo.Root, ev.Tree, "", nil)
+		timed := &gitTimes{inner: deps.Runner, now: func() time.Time { return now(deps) }}
+		began := now(deps)
+		tree, commit, err := objects.AnchorTurn(timed, p.repo.Root, ev.Tree, "", nil)
 		if err != nil {
 			return fmt.Errorf("hook: anchoring the turn: %w", err)
+		}
+		if !deps.Start.IsZero() {
+			// A measured hook says where its anchor's time went: the M0 exit
+			// check found Stop over its criterion with one number for it all.
+			ev.Detail[kernel.DetailAnchorMS] = strconv.FormatInt(kernel.Millis(now(deps).Sub(began)), 10)
+			ev.Detail[kernel.DetailGitMS] = timed.String()
 		}
 		ev.Detail[kernel.DetailTree], ev.Detail[kernel.DetailCommit], ev.Detail[kernel.DetailRef] = tree, commit, objects.RefFor(ev.Tree)
 	}

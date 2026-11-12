@@ -105,7 +105,9 @@ func render(f Facts, mask bool) []byte {
 		p("  %s  denies=%d  injected_tokens=%d  turns=%d  unresolved=%d  unresolved_turns=%d", r.Row, r.Denies, r.InjectedTokens, r.Turns, r.Unresolved, r.UnresolvedTurns)
 	}
 	p("")
-	latencyBlock(p, Latency(eventsSince(f.Events, f.LatencySince)), f.LatencySince)
+	timed := eventsSince(f.Events, f.LatencySince)
+	latencyBlock(p, Latency(timed), f.LatencySince)
+	splitBlock(p, StopSplit(timed))
 	p("")
 	p("as of %s", f.Now.UTC().Format(time.RFC3339))
 	return b.Bytes()
@@ -149,6 +151,22 @@ func latencyBlock(p func(string, ...any), lat []HookLatency, since time.Time) {
 			verdict = fmt.Sprintf("(criterion %d: %s)", l.Criterion, ok)
 		}
 		p("  %-24s p50 %-4d p95 %-4d n %-5d %s", l.Hook, l.P50, l.P95, l.N, verdict)
+	}
+}
+
+// splitBlock prints where the Stop hook's anchor spent its time, under the
+// latency lines, when any turn carries a split.
+func splitBlock(p func(string, ...any), parts []SplitPart) {
+	if len(parts) == 0 {
+		return
+	}
+	p("  Stop anchor over %d turns, p50 / p95 ms (a git child by kind, with how many ran per turn; rest is hashing and reading files)", parts[0].N)
+	for _, s := range parts {
+		line := fmt.Sprintf("    %-22s p50 %-4d p95 %d", s.Name, s.P50, s.P95)
+		if s.Name != splitAnchor && s.Name != splitRest {
+			line = fmt.Sprintf("    %-22s p50 %-4d p95 %-4d runs %d / %d", s.Name, s.P50, s.P95, s.Runs50, s.Runs95)
+		}
+		p("%s", line)
 	}
 }
 

@@ -65,7 +65,7 @@ A deny is `trellis: <row>: <cause>. Override: <command>.`, one line except the s
 
 ## Tests
 
-`go test -race -shuffle=on ./...` is the CI run. Hook latency is not a test: every event the hook writes carries `took_ms`, and `trellis report` prints p50 and p95 per hook against the criteria over the live log. A nightly flake hunt runs `go test -race -shuffle=on -count=5 -json` on Linux and Windows and keeps the JSON stream and a plain log as an artifact; a non-zero exit with an empty stream is named an infrastructure failure.
+`go test -race -shuffle=on ./...` is the CI run. Hook latency is not a test: every event the hook writes carries `took_ms`, and `trellis report` prints p50 and p95 per hook against the criteria over the live log. A measured Stop also records where its anchor's time went: `anchor_ms` for the whole anchor and `git_ms` for its git children by kind (`status=120/1 mktree=30/3`: milliseconds, then how many ran), and the report prints the parts under the Stop line, largest git child first; `rest` is the hook's own hashing and reading of files. A nightly flake hunt runs `go test -race -shuffle=on -count=5 -json` on Linux and Windows and keeps the JSON stream and a plain log as an artifact; a non-zero exit with an empty stream is named an infrastructure failure.
 
 ## Versions and releases
 

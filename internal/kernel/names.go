@@ -45,6 +45,12 @@ const (
 	DetailRecording  = "recording"
 	DetailStoreError = "store_error"
 	DetailAfter      = "after"
+	// DetailAnchorMS and DetailGitMS split a measured turn.anchored: the whole
+	// anchor in milliseconds, and its git children as "kind=ms/runs" joined by
+	// spaces, kinds in name order. What is left of the anchor is the hook's own
+	// hashing and reading of files.
+	DetailAnchorMS = "anchor_ms"
+	DetailGitMS    = "git_ms"
 )
 
 // Keys of a harness payload's tool_input.
