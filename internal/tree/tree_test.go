@@ -82,6 +82,7 @@ type fixture struct {
 	headSeq    []string            // successive PR heads pr list reports before head; a stale GitHub after a push
 	prStates   map[string]string   // per --head: the state of its one PR (OPEN, MERGED, CLOSED); a head in it answers alone
 	mergedTips map[string]string   // per --head: the headRefOid of its merged PR
+	createErr  string              // the failure of pr create; "" opens the PR
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -174,6 +175,9 @@ func (f *fixture) answer(spec run.Spec) (run.Result, error) {
 		body := fmt.Sprintf(`[{"number":7,"state":%q,"mergeable":%q,"mergeStateStatus":%q,"headRefOid":%q,"reviewDecision":%q}]`, prState, state, status, head, f.review)
 		return run.Result{Stdout: []byte(body)}, nil
 	case "pr create":
+		if f.createErr != "" {
+			return run.Result{ExitCode: 1}, errors.New(f.createErr)
+		}
 		f.prSeen = true
 		return run.Result{Stdout: []byte("https://github.com/o/r/pull/7\n")}, nil
 	case "pr checks":
@@ -928,6 +932,48 @@ func TestMerge_PushFailureIsOneLine(t *testing.T) {
 	}
 	if slices.Contains(f.ghCalls(), "pr create") {
 		t.Errorf("opened a PR after a failed push")
+	}
+}
+
+// Incident #66: with two remotes naming one repository, gh pr create could not
+// tell the head from the checkout and gave up; the merge then ended as a plain
+// error, though the operator can fix it and run again.
+func TestMerge_PRCreateFailureIsFixableAndStopsBeforeMerging(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+	f.createErr = "gh: exit status 1: aborted: you must first push the current branch to a remote, or use the --head flag\nsecond line"
+
+	err := Merge(f.env(path), "")
+
+	want := "tree merge: could not open the PR: aborted: you must first push the current branch to a remote, or use the --head flag"
+	if err == nil || fixable(err) == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q as a Fixable (exit 2)", err, want)
+	}
+	if slices.Contains(f.ghCalls(), "pr merge") {
+		t.Errorf("merged after the PR could not be opened")
+	}
+	if !exists(path) {
+		t.Errorf("tree removed though no PR was opened")
+	}
+}
+
+// Incident #66: the branch is known, so gh is never left to work out the head.
+func TestMerge_OpensThePullRequestWithItsHeadAndBase(t *testing.T) {
+	f := newFixture(t)
+	path := f.openTree(t)
+
+	if err := Merge(f.env(path), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, s := range f.gh.Specs() {
+		if s.Name == "gh" && len(s.Args) >= 2 && s.Args[0] == "pr" && s.Args[1] == "create" {
+			got = s.Args
+		}
+	}
+	if want := []string{"pr", "create", "--fill-first", "--base", "main", "--head", "feat"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("pr create argv = %v, want %v", got, want)
 	}
 }
 

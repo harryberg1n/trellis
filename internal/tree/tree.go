@@ -371,6 +371,10 @@ func mergeTree(env Env, check string, opts ...MergeOption) error {
 	env.say("pushed %s", name)
 	gh := host.GH{Runner: env.runner(), Dir: repo.Root}
 	if err := ensurePullRequest(gh, name, repo.Default); err != nil {
+		var fx *Fixable
+		if errors.As(err, &fx) {
+			return fx
+		}
 		return fmt.Errorf("tree merge: could not open the PR: %s", firstLine(err))
 	}
 	st, err := gh.ViewMergeable(name, env.wait)
@@ -698,8 +702,12 @@ func ensurePullRequest(gh host.GH, branch, base string) error {
 	if err != nil && !errors.Is(err, host.ErrNoPR) {
 		return err
 	}
-	_, err = gh.CreatePR(base)
-	return err
+	if _, err = gh.CreatePR(base, branch); err != nil {
+		// The branch is pushed and nothing is merged: the operator fixes what
+		// gh names and runs the merge again (#66).
+		return &Fixable{Msg: "tree merge: could not open the PR: " + firstLine(err), Err: err}
+	}
+	return nil
 }
 
 // readyToMerge reads the pull request once more after the checks and is a
