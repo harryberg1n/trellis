@@ -166,7 +166,42 @@ func locate(dir string) (where, error) {
 // Path is where a tree called name lives by default: a sibling of the
 // primary checkout, "<checkout>--<name>", slashes in the name becoming "--".
 func Path(primary, name string) string {
-	return primary + "--" + strings.ReplaceAll(name, "/", "--")
+	return PathAt(primary, name, config.PlaceSibling)
+}
+
+// insideDir is where the trees placed inside the primary live, under it.
+const insideDir = ".trellis"
+
+// PathAt is where a tree called name lives for a [tree.new] place: beside the
+// primary as Path says, or under it at "<checkout>/.trellis/trees/<name>".
+func PathAt(primary, name, place string) string {
+	flat := strings.ReplaceAll(name, "/", "--")
+	if place == config.PlaceInside {
+		return filepath.Join(primary, insideDir, "trees", flat)
+	}
+	return primary + "--" + flat
+}
+
+// defaultPath is where a tree called name goes when the caller gave no path,
+// by the place the primary's trellis.toml names. The primary's file decides,
+// whichever checkout the caller stands in, so every tree of a repository
+// lands in one place and the primary-write wall can name it. inside says the
+// tree is under the primary, which then has to exclude it.
+func defaultPath(w where, name string) (path string, inside bool, err error) {
+	cfg, err := config.Load(w.Primary)
+	if err != nil {
+		return "", false, err
+	}
+	place := cfg.Tree.New.Place
+	return PathAt(w.Primary, name, place), place == config.PlaceInside, nil
+}
+
+// excludeInside keeps the trees under the primary out of its status: one
+// /.trellis/ line in the repository's exclude file, unless git ignores the
+// directory already. Without it the primary is never clean while a tree
+// exists, and a local merge refuses a primary that is not.
+func excludeInside(env Env, primary string) error {
+	return exclude(env, primary, insideDir, "/"+insideDir+"/")
 }
 
 func (e Env) branchExists(dir, name string) (bool, error) {
@@ -207,9 +242,12 @@ func newTree(env Env, name, path string) error {
 	if out, err := env.runGit(w.Primary, "check-ref-format", "--branch", name); err != nil || out != name {
 		return invalidName(name)
 	}
+	inside := false
 	switch {
 	case path == "":
-		path = Path(w.Primary, name)
+		if path, inside, err = defaultPath(w, name); err != nil {
+			return fmt.Errorf("tree new: %w", err)
+		}
 	case !filepath.IsAbs(path):
 		path = filepath.Join(env.Dir, path)
 	}
@@ -233,6 +271,11 @@ func newTree(env Env, name, path string) error {
 		return fmt.Errorf("tree new: %w", err)
 	}
 	env.record(openedEvent(name))
+	if inside {
+		if err := excludeInside(env, w.Primary); err != nil {
+			return fmt.Errorf("tree new: %w; the tree is at %s", err, path)
+		}
+	}
 	cfg, err := config.Load(path) // the tree's own trellis.toml: what it was cut from
 	if err != nil {
 		return fmt.Errorf("tree new: %w; the tree is at %s", err, path)

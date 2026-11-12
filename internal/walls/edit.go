@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harryberg1n/trellis/internal/config"
 	"github.com/harryberg1n/trellis/internal/run"
 )
 
@@ -55,7 +56,17 @@ func primaryCause(r run.Runner, what, target string) string {
 		return ""
 	}
 	// The next step, so the deny resolves in one call (#50: 30 denies, all
-	// unresolved). The path is tree.Path's, which walls cannot import.
-	return fmt.Sprintf("%s %s is in the primary checkout, which is on %s: work in a tree, trellis tree new <name> makes %s--<name>",
-		what, filepath.ToSlash(rel), f.Branch, filepath.ToSlash(f.Root))
+	// unresolved). The path is tree.PathAt's, which walls cannot import.
+	return fmt.Sprintf("%s %s is in the primary checkout, which is on %s: work in a tree, trellis tree new <name> makes %s",
+		what, filepath.ToSlash(rel), f.Branch, treePathHint(f.Root))
+}
+
+// treePathHint is where `tree new <name>` puts a tree of the primary at root,
+// by the place its trellis.toml names (#65). A file that cannot be read gives
+// the default, beside the primary: a hint must not fail the wall.
+func treePathHint(root string) string {
+	if cfg, err := config.Load(root); err == nil && cfg.Tree.New.Place == config.PlaceInside {
+		return filepath.ToSlash(root) + "/.trellis/trees/<name>"
+	}
+	return filepath.ToSlash(root) + "--<name>"
 }

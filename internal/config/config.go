@@ -40,7 +40,18 @@ type New struct {
 	// Run are commands run in the new tree after the links, shown as they
 	// run (#50: the first check of every lane paid for setup).
 	Run []string
+	// Place is where a tree is put when no path is given: PlaceSibling, beside
+	// the primary checkout, or PlaceInside, under it (#65: a session started
+	// in the primary loads the nested CLAUDE.md files and path-scoped rules
+	// only for files under its working directory).
+	Place string
 }
+
+// The values of [tree.new] place.
+const (
+	PlaceSibling = "sibling"
+	PlaceInside  = "inside"
+)
 
 // Merge is [tree.merge]: what `tree merge` waits for.
 type Merge struct {
@@ -55,7 +66,7 @@ type Merge struct {
 
 // Load reads the trellis.toml at dir. A missing file is the defaults.
 func Load(dir string) (Config, error) {
-	c := Config{Tree: Tree{Remote: "origin", Merge: Merge{Checks: "auto"}}}
+	c := Config{Tree: Tree{Remote: "origin", New: New{Place: PlaceSibling}, Merge: Merge{Checks: "auto"}}}
 	raw, err := os.ReadFile(filepath.Join(dir, File))
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
@@ -140,6 +151,13 @@ func (p *parser) set(c *Config, key, value string) error {
 			}
 		}
 		c.Tree.New.Link = l
+		return err
+	case "tree.new.place":
+		s, err := p.str(key, value)
+		if err == nil && s != PlaceSibling && s != PlaceInside {
+			return p.errf(`%s: "sibling" or "inside"`, key)
+		}
+		c.Tree.New.Place = s
 		return err
 	case "tree.new.run":
 		l, err := p.list(key, value)

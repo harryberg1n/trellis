@@ -128,9 +128,12 @@ func adoptTree(env Env, name, path string) error {
 	if at, err := pathOf(env, w, name); err == nil {
 		return fmt.Errorf("tree adopt: %s is already a tree at %s", name, at)
 	}
+	inside := false
 	switch {
 	case path == "":
-		path = Path(w.Primary, name)
+		if path, inside, err = defaultPath(w, name); err != nil {
+			return fmt.Errorf("tree adopt: %w", err)
+		}
 	case !filepath.IsAbs(path):
 		path = filepath.Join(env.Dir, path)
 	}
@@ -160,6 +163,11 @@ func adoptTree(env Env, name, path string) error {
 		return fmt.Errorf("tree adopt: %w", err)
 	}
 	env.record(openedEvent(name))
+	if inside {
+		if err := excludeInside(env, w.Primary); err != nil {
+			return fmt.Errorf("tree adopt: %w; the tree is at %s", err, path)
+		}
+	}
 	env.say("%s", path)
 	return nil
 }
